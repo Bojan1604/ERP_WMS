@@ -1,0 +1,998 @@
+// =============================================================================
+//  ERP/WMS — podatkovni model
+//
+//  Načela:
+//   * svaka poslovna tablica nosi companyId (više firmi u istoj bazi) i indeks
+//     koji počinje njime — upiti su uvijek suženi na firmu
+//   * iznosi su Decimal; zbrojevi dokumenata se spremaju na zaglavlje pri
+//     svakoj promjeni, pa izvještaji rade agregacijom u bazi, bez učitavanja
+//     svih zapisa u memoriju
+//   * brojevi dokumenata dodjeljuju se u transakciji iz tablice brojača
+//   * povijest uređaja (ItemEvent) i dnevnik promjena (AuditLog) su odvojeni:
+//     prvo je poslovna kronologija, drugo tehnički trag tko je što promijenio
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------- enumeracije
+
+enum Role {
+  ADMIN
+  MANAGER
+  SALES
+  WAREHOUSE
+  ACCOUNTANT
+}
+
+/// Uloga statusa u logici programa. Naziv i boju statusa firma bira sama,
+/// ali svaki status pripada jednoj od ovih vrsta.
+enum StatusKind {
+  IN_STOCK    // na skladištu, raspoloživ
+  RESERVED    // izašao iz skladišta, čeka potvrdu prodaje (račun/ugovor)
+  SOLD        // prodan
+  RENTED      // u najmu (vezan uz ugovor)
+  SERVICE     // pokvaren / na servisu — automatski otvara servisni nalog
+  RETURNING   // najavljen povrat s terena
+  WRITTEN_OFF // otpisan
+  OTHER       // demo, gratis, kod klijenta, zamjenski…
+}
+
+enum InvoiceKind {
+  INVOICE     // račun
+  ADVANCE     // račun za predujam
+  STORNO      // poništava cijeli račun
+  CREDIT_NOTE // knjižno odobrenje — umanjuje dio iznosa
+}
+
+enum InvoiceType {
+  SALE
+  RENT
+  SERVICE
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+}
+
+enum LineKind {
+  DEVICE  // konkretan uređaj po serijskom broju
+  MODEL   // model i količina, bez serijskih (ponude)
+  SERVICE // usluga iz šifrarnika
+  MANUAL  // slobodna stavka
+}
+
+enum Billing {
+  MONTHLY
+  QUARTERLY
+  SEMIANNUAL
+  ANNUAL
+  ONCE
+}
+
+enum BillingMode {
+  IN_ADVANCE // račun na početku razdoblja (1.6. za lipanj)
+  IN_ARREARS // račun po isteku razdoblja (1.6. za svibanj)
+}
+
+enum ContractStatus {
+  ACTIVE
+  PAUSED
+  EXPIRED
+  TERMINATED
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  REJECTED
+}
+
+enum OrderStatus {
+  DRAFT
+  ORDERED
+  PARTIAL
+  RECEIVED
+  CANCELLED
+}
+
+enum ReceiptStatus {
+  POSTED
+  CANCELLED
+}
+
+enum ServiceStatus {
+  REPORTED
+  RECEIVED
+  DIAGNOSIS
+  AT_SUPPLIER
+  REPAIRED
+  REPLACED
+  WRITTEN_OFF
+}
+
+enum Frequency {
+  MONTHLY
+  QUARTERLY
+  SEMIANNUAL
+  ANNUAL
+}
+
+enum ExpenseSource {
+  MANUAL
+  RECEIPT
+  WRITE_OFF
+  SUPPLIER_INVOICE
+}
+
+enum RequestKind {
+  STATUS_CHANGE
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum Series {
+  INVOICE
+  QUOTE
+  CONTRACT
+  ORDER
+  RECEIPT
+  TRANSFER
+  SERVICE
+  SUPPLIER_INVOICE
+}
+
+// ---------------------------------------------------------------- firma i korisnici
+
+model Company {
+  id        String   @id @default(cuid())
+  name      String
+  oib       String?
+  vatId     String?
+  address   String?
+  zip       String?
+  city      String?
+  country   String   @default("HR")
+  iban      String?
+  bank      String?
+  email     String?
+  phone     String?
+  web       String?
+  logo      String?  // data URL, mali PNG/SVG za ispis dokumenata
+  currency  String   @default("EUR")
+
+  vatRegistered       Boolean @default(true)
+  vatRate             Decimal @default(25) @db.Decimal(5, 2)
+  overdueDays         Int     @default(30)
+  paymentTermDays     Int     @default(15)
+  quoteValidDays      Int     @default(15)
+  defaultMarginPct    Decimal @default(35) @db.Decimal(5, 2)
+  defaultWarrantyMonths Int   @default(24)
+  rentFallbackPct     Decimal @default(5.5) @db.Decimal(5, 2) // prijedlog najma kao % nabavne
+  invoicePremises     String  @default("PP1")
+  invoiceDevice       String  @default("1")
+  invoiceSeparator    String  @default("/")
+  invoiceFooter       String?
+  statusChangeNeedsApproval Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users             User[]
+  warehouses        Warehouse[]
+  categories        Category[]
+  models            DeviceModel[]
+  statuses          ItemStatus[]
+  services          Service[]
+  partners          Partner[]
+  items             Item[]
+  invoices          Invoice[]
+  quotes            Quote[]
+  contracts         Contract[]
+  purchaseOrders    PurchaseOrder[]
+  receipts          GoodsReceipt[]
+  supplierInvoices  SupplierInvoice[]
+  serviceOrders     ServiceOrder[]
+  expenses          Expense[]
+  expenseCategories ExpenseCategory[]
+  transfers         Transfer[]
+  requests          ApprovalRequest[]
+  auditLogs         AuditLog[]
+  counters          DocumentCounter[]
+  itemEvents        ItemEvent[]
+  priceAgreements   PriceAgreement[]
+  attachments       Attachment[]
+  rentOverrides     RentOverride[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  companyId    String
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         Role
+  /// Iznimke od prava uloge: { "warehouse": "edit", "purchasing": "view" }
+  permissions  Json     @default("{}")
+  active       Boolean  @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sessions Session[]
+
+  @@index([companyId])
+}
+
+model Session {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  ip        String?
+  userAgent String?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model DocumentCounter {
+  companyId String
+  series    Series
+  year      Int
+  last      Int     @default(0)
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@id([companyId, series, year])
+}
+
+// ---------------------------------------------------------------- šifrarnici
+
+model Warehouse {
+  id        String  @id @default(cuid())
+  companyId String
+  name      String
+  address   String?
+  active    Boolean @default(true)
+  sort      Int     @default(0)
+
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  items         Item[]
+  receipts      GoodsReceipt[]
+  transfersFrom Transfer[]     @relation("TransferFrom")
+  transfersTo   Transfer[]     @relation("TransferTo")
+
+  @@unique([companyId, name])
+}
+
+model Category {
+  id        String @id @default(cuid())
+  companyId String
+  name      String
+  sort      Int    @default(0)
+
+  company Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  models  DeviceModel[]
+
+  @@unique([companyId, name])
+}
+
+model DeviceModel {
+  id             String   @id @default(cuid())
+  companyId      String
+  categoryId     String?
+  brand          String?
+  name           String
+  code           String?  // šifra artikla
+  kpd            String?  // KPD 2025 klasifikacija za eRačun
+  salePrice      Decimal? @db.Decimal(14, 2) // cijena bez PDV-a; prednost pred izračunom iz marže
+  rentPrice      Decimal? @db.Decimal(14, 2) // mjesečni najam
+  marginPct      Decimal? @db.Decimal(5, 2)
+  warrantyMonths Int?
+  minStock       Int      @default(0)
+  specs          String?  // procesor, ekran, OS…
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  category        Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  items           Item[]
+  priceAgreements PriceAgreement[]
+  orderLines      PurchaseOrderLine[]
+  invoiceLines    InvoiceLine[]
+  quoteLines      QuoteLine[]
+
+  @@unique([companyId, brand, name])
+  @@index([companyId, categoryId])
+}
+
+model ItemStatus {
+  id        String     @id @default(cuid())
+  companyId String
+  name      String
+  kind      StatusKind
+  color     String     @default("gray")
+  /// Sistemski status — program ga koristi za svoju vrstu, ne može se obrisati.
+  system    Boolean    @default(false)
+  sort      Int        @default(0)
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  items   Item[]
+
+  @@unique([companyId, name])
+  @@index([companyId, kind])
+}
+
+model Service {
+  id        String   @id @default(cuid())
+  companyId String
+  name      String
+  unit      String   @default("kom")
+  price     Decimal  @default(0) @db.Decimal(14, 2)
+  kpd       String?
+  active    Boolean  @default(true)
+
+  company Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  lines   InvoiceLine[]
+  quoteLines QuoteLine[]
+
+  @@unique([companyId, name])
+}
+
+model ExpenseCategory {
+  id        String @id @default(cuid())
+  companyId String
+  name      String
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  expenses Expense[]
+
+  @@unique([companyId, name])
+}
+
+// ---------------------------------------------------------------- partneri
+
+model Partner {
+  id              String   @id @default(cuid())
+  companyId       String
+  name            String
+  oib             String?
+  vatId           String?
+  address         String?
+  zip             String?
+  city            String?
+  country         String   @default("HR") // ISO 3166-1 alfa-2
+  email           String?
+  phone           String?
+  iban            String?
+  contactPerson   String?
+  isCustomer      Boolean  @default(true)
+  isSupplier      Boolean  @default(false)
+  /// Isključen iz obračuna: podaci ostaju, ali ne ulaze u izvještaje ni nadzornu ploču.
+  excluded        Boolean  @default(false)
+  paymentTermDays Int?
+  /// Napomena koja se ističe pri izdavanju računa.
+  note            String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company          Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  heldItems        Item[]            @relation("ItemHolder")
+  suppliedItems    Item[]            @relation("ItemSupplier")
+  invoices         Invoice[]
+  quotes           Quote[]
+  contracts        Contract[]
+  orders           PurchaseOrder[]
+  receipts         GoodsReceipt[]
+  supplierInvoices SupplierInvoice[]
+  serviceOrders    ServiceOrder[]
+  expenses         Expense[]
+  priceAgreements  PriceAgreement[]
+
+  @@index([companyId, name])
+  @@index([companyId, oib])
+}
+
+model PriceAgreement {
+  id        String   @id @default(cuid())
+  companyId String
+  partnerId String
+  modelId   String
+  salePrice Decimal? @db.Decimal(14, 2)
+  rentPrice Decimal? @db.Decimal(14, 2)
+
+  company Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  partner Partner     @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  model   DeviceModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  @@unique([partnerId, modelId])
+  @@index([companyId])
+}
+
+// ---------------------------------------------------------------- uređaji
+
+model Item {
+  id             String     @id @default(cuid())
+  companyId      String
+  serial         String
+  /// Razlikovna napomena — obavezna kad isti serijski broj već postoji.
+  dupNote        String?
+  modelId        String
+  statusId       String
+  /// Preslika vrste statusa radi brzih upita (sinkronizira servisni sloj).
+  state          StatusKind
+  warehouseId    String?
+  supplierId     String?
+  partnerId      String?    // kupac / najmoprimac / kod koga je uređaj
+  invoiceId      String?    // zadnji račun na kojem je uređaj (prodaja ili rata)
+  receiptId      String?    // primka kojom je zaprimljen
+  cost           Decimal    @default(0) @db.Decimal(14, 2)
+  salePrice      Decimal?   @db.Decimal(14, 2) // stvarno ostvarena prodajna cijena (neto)
+  rentPrice      Decimal?   @db.Decimal(14, 2)
+  marginPct      Decimal?   @db.Decimal(5, 2)
+  importDate     DateTime?  @db.Date
+  issueDate      DateTime?  @db.Date
+  warrantyStart  DateTime?  @db.Date
+  warrantyMonths Int?
+  // izlaz iz skladišta (RESERVED)
+  outAt          DateTime?
+  outById        String?
+  outPartnerId   String?
+  outNote        String?
+  // otpis
+  writeOffDate   DateTime?  @db.Date
+  writeOffReason String?
+  note           String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  company      Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  model        DeviceModel    @relation(fields: [modelId], references: [id])
+  status       ItemStatus     @relation(fields: [statusId], references: [id])
+  warehouse    Warehouse?     @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  supplier     Partner?       @relation("ItemSupplier", fields: [supplierId], references: [id], onDelete: SetNull)
+  partner      Partner?       @relation("ItemHolder", fields: [partnerId], references: [id], onDelete: SetNull)
+  invoice      Invoice?       @relation("ItemLastInvoice", fields: [invoiceId], references: [id], onDelete: SetNull)
+  receipt      GoodsReceipt?  @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+  contractItem ContractItem?
+  events       ItemEvent[]
+  invoiceLines InvoiceLine[]
+  quoteLines   QuoteLine[]
+  serviceOrders ServiceOrder[] @relation("ServiceItem")
+  replacements  ServiceOrder[] @relation("ServiceReplacement")
+  transferItems TransferItem[]
+  rentOverrides RentOverride[]
+
+  @@index([companyId, serial])
+  @@index([companyId, state])
+  @@index([companyId, modelId])
+  @@index([companyId, partnerId])
+  @@index([companyId, warehouseId, state])
+  @@index([companyId, createdAt])
+}
+
+model ItemEvent {
+  id        String   @id @default(cuid())
+  companyId String
+  itemId    String
+  at        DateTime @default(now())
+  type      String   // RECEIVED, SOLD, RENTED, RETURNED, STATUS, TRANSFER, WRITE_OFF, SERVICE, OUT, EDIT…
+  message   String
+  refType   String?  // invoice, contract, receipt, transfer, service
+  refId     String?
+  userName  String?
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  item    Item    @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([itemId, at])
+  @@index([companyId, at])
+}
+
+model Transfer {
+  id              String   @id @default(cuid())
+  companyId       String
+  number          String
+  date            DateTime @db.Date
+  fromWarehouseId String?
+  toWarehouseId   String
+  note            String?
+  createdBy       String?
+  createdAt       DateTime @default(now())
+
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  fromWarehouse Warehouse?     @relation("TransferFrom", fields: [fromWarehouseId], references: [id], onDelete: SetNull)
+  toWarehouse   Warehouse      @relation("TransferTo", fields: [toWarehouseId], references: [id])
+  items         TransferItem[]
+
+  @@unique([companyId, number])
+  @@index([companyId, date])
+}
+
+model TransferItem {
+  transferId String
+  itemId     String
+
+  transfer Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  item     Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@id([transferId, itemId])
+  @@index([itemId])
+}
+
+model ApprovalRequest {
+  id            String        @id @default(cuid())
+  companyId     String
+  kind          RequestKind
+  status        RequestStatus @default(PENDING)
+  /// STATUS_CHANGE: { itemIds: string[], statusId: string, note?: string }
+  payload       Json
+  requestedBy   String
+  resolvedBy    String?
+  resolveNote   String?
+  createdAt     DateTime      @default(now())
+  resolvedAt    DateTime?
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+}
+
+// ---------------------------------------------------------------- prodaja
+
+model Quote {
+  id            String      @id @default(cuid())
+  companyId     String
+  number        String
+  date          DateTime    @db.Date
+  validUntil    DateTime?   @db.Date
+  partnerId     String
+  status        QuoteStatus @default(DRAFT)
+  vatRate       Decimal     @db.Decimal(5, 2)
+  discountPct   Decimal     @default(0) @db.Decimal(6, 2)
+  discountAmount Decimal    @default(0) @db.Decimal(14, 2)
+  netTotal      Decimal     @default(0) @db.Decimal(14, 2)
+  vatTotal      Decimal     @default(0) @db.Decimal(14, 2)
+  grandTotal    Decimal     @default(0) @db.Decimal(14, 2)
+  hideSerials   Boolean     @default(false)
+  note          String?
+  invoiceId     String?     @unique
+  createdBy     String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  company Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  partner Partner     @relation(fields: [partnerId], references: [id])
+  invoice Invoice?    @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  lines   QuoteLine[]
+
+  @@unique([companyId, number])
+  @@index([companyId, date])
+  @@index([companyId, status])
+}
+
+model QuoteLine {
+  id          String   @id @default(cuid())
+  quoteId     String
+  sort        Int      @default(0)
+  kind        LineKind
+  itemId      String?
+  modelId     String?
+  serviceId   String?
+  description String
+  unit        String   @default("kom")
+  qty         Decimal  @default(1) @db.Decimal(12, 3)
+  unitPrice   Decimal  @default(0) @db.Decimal(14, 2)
+  discountPct Decimal  @default(0) @db.Decimal(6, 2)
+  netAmount   Decimal  @default(0) @db.Decimal(14, 2)
+
+  quote   Quote        @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  item    Item?        @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  model   DeviceModel? @relation(fields: [modelId], references: [id], onDelete: SetNull)
+  service Service?     @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+
+  @@index([quoteId])
+}
+
+model Invoice {
+  id             String        @id @default(cuid())
+  companyId      String
+  status         InvoiceStatus @default(DRAFT)
+  kind           InvoiceKind   @default(INVOICE)
+  type           InvoiceType   @default(SALE)
+  /// Redni broj u godini — dodjeljuje se pri izdavanju, nikad se ne ponavlja.
+  seq            Int?
+  year           Int
+  number         String?
+  partnerId      String
+  date           DateTime      @db.Date
+  dueDate        DateTime?     @db.Date
+  deliveryDate   DateTime?     @db.Date
+  vatRate        Decimal       @db.Decimal(5, 2)
+  /// Porezna kategorija (S, AE, K, G, E, O) i razlog oslobođenja za eRačun.
+  taxCategory    String        @default("S")
+  taxExemptReason String?
+  discountPct    Decimal       @default(0) @db.Decimal(6, 2)
+  discountAmount Decimal       @default(0) @db.Decimal(14, 2)
+  /// Neoporezive naknade: [{ kind, label, amount }]
+  charges        Json          @default("[]")
+  advanceAmount  Decimal       @default(0) @db.Decimal(14, 2)
+  /// Izvorni račun je storniran (poništen stornom) — nema potraživanja.
+  stornoed       Boolean       @default(false)
+  // zbrojevi — preračunavaju se pri svakoj izmjeni stavki ili uplata
+  netTotal       Decimal       @default(0) @db.Decimal(14, 2)
+  vatTotal       Decimal       @default(0) @db.Decimal(14, 2)
+  chargesTotal   Decimal       @default(0) @db.Decimal(14, 2)
+  grandTotal     Decimal       @default(0) @db.Decimal(14, 2)
+  paidTotal      Decimal       @default(0) @db.Decimal(14, 2)
+  /// Zbroj izdanih knjižnih odobrenja na ovaj račun (pozitivan iznos).
+  creditedTotal  Decimal       @default(0) @db.Decimal(14, 2)
+  openAmount     Decimal       @default(0) @db.Decimal(14, 2)
+  costTotal      Decimal       @default(0) @db.Decimal(14, 2)
+  paidDate       DateTime?     @db.Date
+  refInvoiceId   String?       // storno/odobrenje → izvorni
+  contractId     String?
+  period         String?       // YYYY-MM — razdoblje najma koje rata pokriva
+  description    String?
+  note           String?
+  paymentRef     String?       // poziv na broj
+  /// Stanje slanja eRačuna: { status, sentAt, id, error }
+  eInvoice       Json          @default("{}")
+  createdBy      String?
+  issuedBy       String?
+  issuedAt       DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  company     Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  partner     Partner       @relation(fields: [partnerId], references: [id])
+  contract    Contract?     @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  refInvoice  Invoice?      @relation("InvoiceCorrections", fields: [refInvoiceId], references: [id], onDelete: SetNull)
+  corrections Invoice[]     @relation("InvoiceCorrections")
+  lines       InvoiceLine[]
+  payments    Payment[]
+  items       Item[]        @relation("ItemLastInvoice")
+  quote       Quote?
+  serviceOrders ServiceOrder[]
+
+  @@unique([companyId, year, seq])
+  @@index([companyId, date])
+  @@index([companyId, partnerId])
+  @@index([companyId, status, kind])
+  @@index([companyId, openAmount])
+  @@index([contractId, period])
+}
+
+model InvoiceLine {
+  id             String   @id @default(cuid())
+  invoiceId      String
+  sort           Int      @default(0)
+  kind           LineKind
+  itemId         String?
+  modelId        String?
+  serviceId      String?
+  description    String
+  unit           String   @default("kom")
+  kpd            String?
+  qty            Decimal  @default(1) @db.Decimal(12, 3)
+  /// Kod najma: mjesečna cijena; unitPrice = monthly × mjeseci naplate.
+  monthly        Decimal? @db.Decimal(14, 2)
+  months         Int?
+  unitPrice      Decimal  @default(0) @db.Decimal(14, 2)
+  discountPct    Decimal  @default(0) @db.Decimal(6, 2)
+  netAmount      Decimal  @default(0) @db.Decimal(14, 2)
+  /// Nabavna vrijednost u trenutku prodaje (za maržu).
+  cost           Decimal  @default(0) @db.Decimal(14, 2)
+  warrantyMonths Int?
+  agreedPrice    Boolean  @default(false)
+
+  invoice Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  item    Item?        @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  model   DeviceModel? @relation(fields: [modelId], references: [id], onDelete: SetNull)
+  service Service?     @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+
+  @@index([invoiceId])
+  @@index([itemId])
+}
+
+model Payment {
+  id        String   @id @default(cuid())
+  invoiceId String
+  date      DateTime @db.Date
+  amount    Decimal  @db.Decimal(14, 2)
+  method    String?
+  note      String?
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+}
+
+// ---------------------------------------------------------------- najam
+
+model Contract {
+  id               String         @id @default(cuid())
+  companyId        String
+  number           String
+  partnerId        String
+  status           ContractStatus @default(ACTIVE)
+  startDate        DateTime       @db.Date
+  endDate          DateTime?      @db.Date
+  firstBillingDate DateTime?      @db.Date
+  billingDay       Int?
+  billing          Billing        @default(MONTHLY)
+  billingMode      BillingMode    @default(IN_ADVANCE)
+  seasonFrom       Int?           // 1–12
+  seasonTo         Int?
+  terminatedAt     DateTime?      @db.Date
+  note             String?
+  createdBy        String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  company  Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  partner  Partner        @relation(fields: [partnerId], references: [id])
+  items    ContractItem[]
+  invoices Invoice[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+  @@index([companyId, partnerId])
+}
+
+/// Uređaj na ugovoru s vlastitom mjesečnom cijenom i planom naplate.
+model ContractItem {
+  id         String          @id @default(cuid())
+  contractId String
+  itemId     String          @unique // uređaj može biti na samo jednom ugovoru
+  monthly    Decimal         @db.Decimal(14, 2)
+  /// Plan naplate: [{ from, to?, billing, price?, seasonFrom?, seasonTo? }] — prazno = uvjeti ugovora
+  plan       Json            @default("[]")
+  /// Pauza ili raskid za pojedini uređaj (null = prati ugovor).
+  status     ContractStatus?
+  /// Razdoblja (YYYY-MM) koja se ne fakturiraju — izdana izvan programa.
+  skipped    String[]        @default([])
+  addedAt    DateTime        @default(now())
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  item     Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([contractId])
+}
+
+/// Ručni upis u mrežu najma (prednost pred izračunom).
+model RentOverride {
+  companyId String
+  itemId    String
+  year      Int
+  month     Int      // 1–12
+  amount    Decimal  @db.Decimal(14, 2)
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  item    Item    @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@id([itemId, year, month])
+  @@index([companyId, year])
+}
+
+// ---------------------------------------------------------------- nabava
+
+model PurchaseOrder {
+  id           String      @id @default(cuid())
+  companyId    String
+  number       String
+  supplierId   String
+  date         DateTime    @db.Date
+  expectedDate DateTime?   @db.Date
+  status       OrderStatus @default(DRAFT)
+  total        Decimal     @default(0) @db.Decimal(14, 2)
+  note         String?
+  createdBy    String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  company  Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  supplier Partner             @relation(fields: [supplierId], references: [id])
+  lines    PurchaseOrderLine[]
+  receipts GoodsReceipt[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+}
+
+model PurchaseOrderLine {
+  id       String  @id @default(cuid())
+  orderId  String
+  modelId  String
+  qty      Int
+  unitCost Decimal @default(0) @db.Decimal(14, 2)
+  received Int     @default(0)
+
+  order PurchaseOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  model DeviceModel   @relation(fields: [modelId], references: [id])
+
+  @@index([orderId])
+}
+
+model GoodsReceipt {
+  id                String        @id @default(cuid())
+  companyId         String
+  number            String
+  date              DateTime      @db.Date
+  supplierId        String?
+  orderId           String?
+  warehouseId       String
+  supplierDocNumber String?
+  status            ReceiptStatus @default(POSTED)
+  total             Decimal       @default(0) @db.Decimal(14, 2)
+  note              String?
+  createdBy         String?
+  createdAt         DateTime      @default(now())
+
+  company  Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  supplier Partner?       @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  order    PurchaseOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  warehouse Warehouse     @relation(fields: [warehouseId], references: [id])
+  items    Item[]
+  expense  Expense?
+
+  @@unique([companyId, number])
+  @@index([companyId, date])
+}
+
+/// Ulazni račun dobavljača (knjiga URA).
+model SupplierInvoice {
+  id          String    @id @default(cuid())
+  companyId   String
+  internalNo  String
+  number      String    // broj računa dobavljača
+  supplierId  String
+  issueDate   DateTime  @db.Date
+  dueDate     DateTime? @db.Date
+  netAmount   Decimal   @default(0) @db.Decimal(14, 2)
+  vatAmount   Decimal   @default(0) @db.Decimal(14, 2)
+  total       Decimal   @default(0) @db.Decimal(14, 2)
+  paidDate    DateTime? @db.Date
+  category    String?
+  note        String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  supplier Partner  @relation(fields: [supplierId], references: [id])
+  expense  Expense?
+
+  @@unique([companyId, internalNo])
+  @@index([companyId, issueDate])
+}
+
+// ---------------------------------------------------------------- servis
+
+model ServiceOrder {
+  id                String        @id @default(cuid())
+  companyId         String
+  number            String
+  itemId            String?
+  serial            String?
+  partnerId         String?
+  invoiceId         String?
+  status            ServiceStatus @default(RECEIVED)
+  reportedAt        DateTime      @db.Date
+  receivedAt        DateTime?     @db.Date
+  closedAt          DateTime?     @db.Date
+  issue             String
+  diagnosis         String?
+  action            String?
+  solution          String?
+  replacementItemId String?
+  cost              Decimal       @default(0) @db.Decimal(14, 2)
+  underWarranty     Boolean       @default(true)
+  publicNote        String?
+  note              String?
+  /// Tijek: [{ at, status, by, note }]
+  timeline          Json          @default("[]")
+  createdBy         String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  item        Item?    @relation("ServiceItem", fields: [itemId], references: [id], onDelete: SetNull)
+  replacement Item?    @relation("ServiceReplacement", fields: [replacementItemId], references: [id], onDelete: SetNull)
+  partner     Partner? @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  invoice     Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+  @@index([itemId])
+}
+
+// ---------------------------------------------------------------- troškovi
+
+model Expense {
+  id                String         @id @default(cuid())
+  companyId         String
+  date              DateTime       @db.Date
+  categoryId        String?
+  description       String
+  partnerId         String?
+  netAmount         Decimal        @default(0) @db.Decimal(14, 2)
+  vatAmount         Decimal        @default(0) @db.Decimal(14, 2)
+  paid              Boolean        @default(false)
+  paidDate          DateTime?      @db.Date
+  frequency         Frequency?
+  recurringUntil    DateTime?      @db.Date
+  /// Izmjene pojedinih rata ponavljajućeg troška: { "2026-03": { amount?: n, skipped?: true } }
+  overrides         Json           @default("{}")
+  source            ExpenseSource  @default(MANUAL)
+  receiptId         String?        @unique
+  supplierInvoiceId String?        @unique
+  note              String?
+  createdBy         String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  category        ExpenseCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  partner         Partner?         @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  receipt         GoodsReceipt?    @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+  supplierInvoice SupplierInvoice? @relation(fields: [supplierInvoiceId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, date])
+  @@index([companyId, categoryId])
+}
+
+// ---------------------------------------------------------------- prilozi i dnevnik
+
+model Attachment {
+  id        String   @id @default(cuid())
+  companyId String
+  entity    String   // item, invoice, contract, service, expense, supplierInvoice
+  entityId  String
+  fileName  String
+  mime      String
+  size      Int
+  data      Bytes
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, entity, entityId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  companyId String
+  at        DateTime @default(now())
+  userId    String?
+  userName  String?
+  entity    String
+  entityId  String?
+  action    String   // create, update, delete, issue, storno, …
+  summary   String
+  diff      Json?
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, at])
+  @@index([companyId, entity, entityId])
+}

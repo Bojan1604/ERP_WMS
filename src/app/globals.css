@@ -1,0 +1,142 @@
+@import 'tailwindcss';
+
+/* ==========================================================================
+   ERP/WMS — dizajn sustav
+   Mirna, gusta radna površina: tamni bočni izbornik, svijetlo platno,
+   tirkizni naglasak. Osnovna veličina 13.5px, tablični brojevi.
+   ========================================================================== */
+
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+@theme {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --text-xs: 0.6875rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.78125rem;
+  --text-sm--line-height: 1.125rem;
+  --text-base: 0.84375rem;
+  --text-base--line-height: 1.25rem;
+  --text-md: 0.9375rem;
+  --text-md--line-height: 1.375rem;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.5rem;
+  --text-xl: 1.375rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl: 1.75rem;
+  --text-2xl--line-height: 2.125rem;
+
+  --color-brand: #0e7c7b;
+  --color-brand-strong: #0a6463;
+  --color-brand-soft: #e0f2f1;
+
+  --color-ok: #15803d;
+  --color-ok-soft: #dcfce7;
+  --color-warn: #b45309;
+  --color-warn-soft: #fef3c7;
+  --color-bad: #c2410c;
+  --color-bad-strong: #b91c1c;
+  --color-bad-soft: #fee2e2;
+  --color-info: #4338ca;
+  --color-info-soft: #e0e7ff;
+
+  --color-canvas: #f4f5f2;
+  --color-panel: #ffffff;
+  --color-panel-2: #f9faf8;
+  --color-muted: #eef0ec;
+  --color-line: #e2e5df;
+  --color-line-strong: #cfd4cc;
+
+  --color-fg: #1b2420;
+  --color-fg-2: #4a5550;
+  --color-fg-3: #7a847f;
+  --color-fg-4: #a5ada9;
+
+  --color-nav: #15201d;
+  --color-nav-2: #1f2c28;
+  --color-nav-fg: #c9d4cf;
+  --color-nav-fg-2: #7f8f89;
+
+  --shadow-panel: 0 1px 2px rgb(20 30 25 / 0.05), 0 0 0 1px rgb(20 30 25 / 0.04);
+  --shadow-pop: 0 12px 32px rgb(20 30 25 / 0.16), 0 0 0 1px rgb(20 30 25 / 0.06);
+}
+
+[data-theme='dark'] {
+  --color-brand: #2bb3a8;
+  --color-brand-strong: #4cc9be;
+  --color-brand-soft: #123331;
+  --color-ok: #4ade80;
+  --color-ok-soft: #12291b;
+  --color-warn: #fbbf24;
+  --color-warn-soft: #2e2410;
+  --color-bad: #fb923c;
+  --color-bad-strong: #f87171;
+  --color-bad-soft: #321716;
+  --color-info: #a5b4fc;
+  --color-info-soft: #1e1f3d;
+  --color-canvas: #0f1413;
+  --color-panel: #161d1b;
+  --color-panel-2: #1a2220;
+  --color-muted: #212a27;
+  --color-line: #27312e;
+  --color-line-strong: #36423e;
+  --color-fg: #e8eeeb;
+  --color-fg-2: #b3bfba;
+  --color-fg-3: #83908b;
+  --color-fg-4: #5d6965;
+  --color-nav: #0b100f;
+  --color-nav-2: #151d1b;
+  --shadow-panel: 0 0 0 1px rgb(255 255 255 / 0.05);
+  --shadow-pop: 0 16px 40px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(255 255 255 / 0.07);
+}
+
+@layer base {
+  * { border-color: var(--color-line); }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    background: var(--color-canvas);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: var(--text-base--line-height);
+    -webkit-font-smoothing: antialiased;
+  }
+  table, .tnum { font-variant-numeric: tabular-nums; }
+  h1, h2, h3 { font-weight: 600; letter-spacing: -0.01em; }
+  a { color: inherit; text-decoration: none; }
+  ::selection { background: color-mix(in srgb, var(--color-brand) 25%, transparent); }
+  input[type='number']::-webkit-inner-spin-button { opacity: 0.4; }
+  :focus-visible { outline: 2px solid var(--color-brand); outline-offset: 1px; }
+}
+
+@layer components {
+  .link { color: var(--color-brand); }
+  .link:hover { text-decoration: underline; text-underline-offset: 2px; }
+  .scroll-slim { scrollbar-width: thin; scrollbar-color: var(--color-line-strong) transparent; }
+
+  /* Tablice podataka */
+  .data-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+  .data-table th {
+    position: sticky; top: 0; z-index: 1;
+    background: var(--color-panel-2);
+    font-size: var(--text-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--color-fg-3); text-align: left; white-space: nowrap;
+    padding: 7px 10px; border-bottom: 1px solid var(--color-line);
+  }
+  .data-table td { padding: 6px 10px; border-bottom: 1px solid var(--color-line); vertical-align: middle; }
+  .data-table tbody tr:hover td { background: var(--color-panel-2); }
+  .data-table tbody tr[data-selected='true'] td { background: var(--color-brand-soft); }
+  .data-table tbody tr:last-child td { border-bottom: 0; }
+  .data-table tfoot td { padding: 7px 10px; border-top: 1px solid var(--color-line-strong); font-weight: 600; background: var(--color-panel-2); }
+  .data-table .num { text-align: right; white-space: nowrap; }
+  .data-table.compact td { padding: 4px 8px; }
+}
+
+/* Ispis dokumenata: samo sadržaj s klasom .print-area */
+@media print {
+  @page { size: A4; margin: 14mm 12mm; }
+  body { background: #fff !important; }
+  .no-print { display: none !important; }
+  .print-area { box-shadow: none !important; border: 0 !important; margin: 0 !important; padding: 0 !important; max-width: none !important; }
+}

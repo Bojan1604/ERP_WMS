@@ -1,0 +1,16 @@
+# Lokalna baza za razvoj:  docker compose up -d
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: erp-wms-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: wms
+    ports:
+      - '5432:5432'
+    volumes:
+      - erp-wms-pgdata:/var/lib/postgresql/data
+volumes:
+  erp-wms-pgdata:
