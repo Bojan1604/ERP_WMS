@@ -59,6 +59,13 @@ Demo prijave (lozinka za sve: `admin123`):
    ```
 5. Otvorite <http://localhost:3000>. Bazu `wms` ne treba ručno stvarati.
 
+> **`Error: P3005 The database schema is not empty`** — baza `wms` već ima tablice (npr. od ranijeg
+> pokretanja s `db:push`). Ako u njoj nema podataka koje trebate, obrišite je i napravite ispočetka:
+> `npm run db:reset` (briše sve tablice, primjenjuje migracije i puni demo podatke).
+
+> Poruka `npm install` o „vulnerabilities" odnosi se na alate za izgradnju (postcss, deepmerge-ts), ne na
+> sam program. **Ne pokrećite `npm audit fix --force`** — ono spušta verzije paketa i kvari program.
+
 Program ima vlastitu bazu (`wms`) i ne dijeli ništa s drugim programima na istom PostgreSQL-u.
 
 ### Produkcija
