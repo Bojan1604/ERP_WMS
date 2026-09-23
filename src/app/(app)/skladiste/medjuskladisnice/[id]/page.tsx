@@ -6,6 +6,7 @@ import { getTransfer } from '@/server/queries/warehouse';
 import { DocTable, DocumentShell, docDate } from '@/components/doc/document';
 import { PageHeader } from '@/components/ui/misc';
 import { PrintButton } from '@/components/ui/print-button';
+import { PrintUnclip } from '@/components/warehouse/print-unclip';
 
 export default async function TransferDocPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await pageAccess('warehouse', 'view');
@@ -15,6 +16,7 @@ export default async function TransferDocPage({ params }: { params: Promise<{ id
   const where = (w: { name: string; address: string | null } | null) => (w ? [w.name, w.address].filter(Boolean).join(', ') : '—');
   return (
     <>
+      <PrintUnclip />
       <div className="no-print">
         <PageHeader
           back={

@@ -14,8 +14,8 @@ const VARIANT: Record<ButtonVariant, string> = {
   subtle: 'bg-brand-soft text-brand hover:brightness-95',
 };
 const SIZE: Record<ButtonSize, string> = {
-  sm: 'h-7 px-2.5 text-sm gap-1.5 rounded-md',
-  md: 'h-8 px-3 text-base gap-1.5 rounded-md',
+  sm: 'h-7 px-2.5 text-sm gap-1.5 rounded-md max-sm:h-8',
+  md: 'h-8 px-3 text-base gap-1.5 rounded-md max-sm:h-10 max-sm:px-3.5',
   lg: 'h-10 px-4 text-md gap-2 rounded-lg',
 };
 

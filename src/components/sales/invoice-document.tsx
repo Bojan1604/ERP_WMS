@@ -3,6 +3,7 @@ import { CHARGE_KINDS, INVOICE_KIND_LABEL, type ChargeInput } from '@/domain/inv
 import { formatDate } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import { amount, decimal, eur } from '@/lib/format';
+import { PAYMENT_METHOD_LABEL, type PaymentMethodCode } from '@/domain/fiscal';
 
 /** Podaci računa za ispis — obični objekti (poslužitelj ih priprema iz baze). */
 export interface InvoiceDocData {
@@ -30,6 +31,11 @@ export interface InvoiceDocData {
   description: string | null;
   note: string | null;
   refInvoice: { number: string | null; date: string } | null;
+  paymentMethod: PaymentMethodCode;
+  /** Operater (ime i OIB) — obavezan na fiskaliziranom računu. */
+  operator: { name: string; oib: string | null } | null;
+  zki: string | null;
+  jir: string | null;
   lines: Array<{ description: string; serial: string | null; code: string | null; kpd: string | null; unit: string; qty: number; unitPrice: number; discountPct: number; netAmount: number }>;
 }
 
@@ -45,6 +51,9 @@ const CATEGORY_LABEL: Record<string, string> = {
 
 const time = (iso: string | null) =>
   iso ? new Intl.DateTimeFormat('hr-HR', { timeZone: 'Europe/Zagreb', hour: '2-digit', minute: '2-digit' }).format(new Date(iso)) : null;
+
+const fullTime = (iso: string) =>
+  new Intl.DateTimeFormat('hr-HR', { timeZone: 'Europe/Zagreb', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(iso));
 
 export function InvoiceDocument({ inv, company, party, currency = '€' }: { inv: InvoiceDocData; company: DocCompany; party: DocParty; currency?: string }) {
   const receivable = inv.kind === 'INVOICE' || inv.kind === 'ADVANCE';
@@ -91,7 +100,7 @@ export function InvoiceDocument({ inv, company, party, currency = '€' }: { inv
     ['Datum isporuke', formatDate(inv.deliveryDate || inv.date)],
     ...(receivable && inv.dueDate ? ([['Dospijeće', formatDate(inv.dueDate)]] as Array<[string, React.ReactNode]>) : []),
     ...(inv.period ? ([['Razdoblje', inv.period]] as Array<[string, React.ReactNode]>) : []),
-    ...(receivable ? ([['Način plaćanja', 'Transakcijski račun']] as Array<[string, React.ReactNode]>) : []),
+    ...(receivable || inv.paymentMethod !== 'TRANSFER' ? ([['Način plaćanja', PAYMENT_METHOD_LABEL[inv.paymentMethod]]] as Array<[string, React.ReactNode]>) : []),
   ];
 
   return (
@@ -103,7 +112,12 @@ export function InvoiceDocument({ inv, company, party, currency = '€' }: { inv
       party={party}
       footer={
         <>
-          {inv.issuedBy && <p>Račun izdao: {inv.issuedBy}</p>}
+          {inv.issuedBy && (
+            <p>
+              Račun izdao: {inv.operator?.name ?? inv.issuedBy}
+              {inv.operator?.oib && ` (OIB operatera ${inv.operator.oib})`}
+            </p>
+          )}
           <p>Dokument je izrađen elektronički i valjan je bez potpisa i pečata.</p>
         </>
       }
@@ -115,7 +129,7 @@ export function InvoiceDocument({ inv, company, party, currency = '€' }: { inv
       )}
       {inv.description && <p className="mb-3 font-medium">{inv.description}</p>}
       <DocTable head={head} rows={rows} align={align} />
-      <div className="mt-3 flex items-start justify-between gap-6">
+      <div className="mt-3 flex items-start justify-between gap-6 max-sm:flex-col-reverse max-sm:items-stretch max-sm:gap-3">
         <table className="text-[11px]">
           <thead>
             <tr className="border-b border-black/30 text-left">
@@ -138,8 +152,24 @@ export function InvoiceDocument({ inv, company, party, currency = '€' }: { inv
       </div>
       {inv.taxCategory !== 'S' && inv.taxExemptReason && <p className="mt-3 text-[11px]">{inv.taxExemptReason}</p>}
       {inv.note && <p className="mt-3 whitespace-pre-line">{inv.note}</p>}
-      {receivable && inv.status === 'ISSUED' && (
-        <section className="mt-5 flex items-end justify-between gap-6 rounded border border-black/15 p-3">
+      {inv.status === 'ISSUED' && inv.zki && (
+        <section className="mt-5 flex items-center justify-between gap-6 rounded border border-black/15 p-3">
+          <div className="min-w-0 break-all text-[11px]">
+            <p className="mb-1 text-[10px] uppercase tracking-wider text-black/50">Fiskalizacija</p>
+            <p>
+              ZKI: <span className="font-mono">{inv.zki}</span>
+            </p>
+            <p>
+              JIR: <span className="font-mono">{inv.jir ?? 'naknadna dostava'}</span>
+            </p>
+            {inv.issuedAt && <p>Vrijeme izdavanja: {fullTime(inv.issuedAt)}</p>}
+          </div>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={`/api/prodaja/racuni/${inv.id}/fiskal-qr?v=${inv.jir ?? inv.zki}`} alt="QR kod za provjeru računa" className="size-[24mm] shrink-0" />
+        </section>
+      )}
+      {receivable && inv.status === 'ISSUED' && inv.paymentMethod === 'TRANSFER' && (
+        <section className="mt-5 flex items-end justify-between gap-6 rounded border border-black/15 p-3 max-sm:flex-col max-sm:items-start">
           <div className="text-[11.5px]">
             <p className="mb-1 text-[10px] uppercase tracking-wider text-black/50">Podaci za plaćanje</p>
             <p>
@@ -189,6 +219,10 @@ export function toDocData(inv: {
   description: string | null;
   note: string | null;
   refInvoice: { number: string | null; date: Date } | null;
+  paymentMethod: PaymentMethodCode;
+  zki: string | null;
+  jir: string | null;
+  eInvoice: unknown;
   lines: Array<{
     description: string;
     unit: string;
@@ -229,6 +263,10 @@ export function toDocData(inv: {
     description: inv.description,
     note: inv.note,
     refInvoice: inv.refInvoice ? { number: inv.refInvoice.number, date: d(inv.refInvoice.date)! } : null,
+    paymentMethod: inv.paymentMethod,
+    operator: operatorOf(inv.eInvoice, inv.issuedBy),
+    zki: inv.zki,
+    jir: inv.jir,
     lines: inv.lines.map((l) => ({
       description: l.description,
       serial: l.item?.serial ?? null,
@@ -241,4 +279,11 @@ export function toDocData(inv: {
       netAmount: n(l.netAmount),
     })),
   };
+}
+
+/** Operater iz podataka spremljenih pri izdavanju (`Invoice.eInvoice.operator`). */
+function operatorOf(meta: unknown, issuedBy: string | null): InvoiceDocData['operator'] {
+  const op = meta && typeof meta === 'object' ? (meta as { operator?: { name?: string; oib?: string | null } }).operator : undefined;
+  if (op?.name) return { name: op.name, oib: op.oib ?? null };
+  return issuedBy ? { name: issuedBy, oib: null } : null;
 }

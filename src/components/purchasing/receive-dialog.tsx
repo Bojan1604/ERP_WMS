@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { PackagePlus } from 'lucide-react';
+import { PackagePlus, ScanLine } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { Field, FormGrid, Input, Select, Textarea } from '@/components/ui/field';
@@ -9,6 +9,7 @@ import { FormError, useAction, type ServerAction } from '@/components/ui/action'
 import { eur } from '@/lib/format';
 import { r2 } from '@/domain/money';
 import { parseSerials } from './labels';
+import { ScanDialog } from '@/components/scan/scan-input';
 
 interface ReceiveInput {
   orderId: string;
@@ -40,6 +41,7 @@ export function ReceiveDialog({
   const [date, setDate] = useState(today);
   const [unitCost, setUnitCost] = useState(line.unitCost);
   const [doc, setDoc] = useState('');
+  const [scanOpen, setScanOpen] = useState(false);
   const { run, pending, error } = useAction(action, {
     onSuccess: () => {
       setOpen(false);
@@ -94,10 +96,15 @@ export function ReceiveDialog({
             label={`Serijski brojevi (${serials.length} / preostalo ${line.remaining})`}
             className="sm:col-span-4"
             error={over ? `Upisano je više serijskih brojeva nego što je preostalo na stavci (${line.remaining}).` : dups.length ? `Ponovljeni: ${dups.join(', ')}` : null}
-            hint="Zalijepite iz Excela ili skenirajte — jedan serijski broj po retku."
+            hint="Zalijepite iz Excela ili skenirajte (ručni čitač ili kamera) — jedan serijski broj po retku."
           >
             <Textarea rows={10} className="font-mono text-sm" value={text} onChange={(e) => setText(e.target.value)} autoFocus />
           </Field>
+          <div className="sm:col-span-4">
+            <Button size="sm" variant="subtle" icon={<ScanLine className="size-3.5" />} onClick={() => setScanOpen(true)}>
+              Skeniraj kamerom
+            </Button>
+          </div>
         </FormGrid>
         <p className="mt-3 text-sm text-fg-3">
           Vrijednost primke: <b className="text-fg">{eur(r2(serials.length * (unitCost || 0)))}</b> — knjiži se kao trošak „Nabava robe".
@@ -106,6 +113,13 @@ export function ReceiveDialog({
           <FormError error={error} />
         </div>
       </Dialog>
+      <ScanDialog
+        open={scanOpen}
+        onClose={() => setScanOpen(false)}
+        onCode={(code) => setText((t) => (t && !t.endsWith('\n') ? `${t}\n${code}` : `${t}${code}`))}
+        title="Skeniranje serijskih brojeva"
+        hint="Svaki očitani kod dodaje se u popis serijskih brojeva primke."
+      />
     </>
   );
 }

@@ -54,8 +54,11 @@ export function LinesTable({
             const margin = l.cost ? grossMargin(net, l.cost * l.qty) : null;
             return (
               <tr key={l.key} className="align-top">
-                <td className="pt-2.5 text-fg-3">{i + 1}</td>
-                <td>
+                <td className="pt-2.5 text-fg-3">
+                  <span className="sm:hidden">Stavka </span>
+                  {i + 1}
+                </td>
+                <td className="max-sm:col-span-2">
                   <Input value={l.description} onChange={(e) => set(l.key, { description: e.target.value })} aria-label="Opis" />
                   <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-fg-3">
                     <Badge tone={l.kind === 'DEVICE' ? 'brand' : l.kind === 'MODEL' ? 'info' : 'neutral'}>{KIND_LABEL[l.kind]}</Badge>
@@ -94,7 +97,7 @@ export function LinesTable({
                   </td>
                 )}
                 <td className="num pt-2.5 font-medium">{amount(net)}</td>
-                <td className="pt-1.5">
+                <td className="pt-1.5 max-sm:absolute max-sm:right-2 max-sm:top-1.5">
                   <button type="button" onClick={() => remove(l.key)} className="grid size-7 place-items-center rounded-md text-fg-3 hover:bg-bad-soft hover:text-bad-strong" aria-label="Ukloni stavku">
                     <X className="size-4" />
                   </button>

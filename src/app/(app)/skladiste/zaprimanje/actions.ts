@@ -6,6 +6,7 @@ import { db, transaction } from '@/server/db';
 import { audit } from '@/server/audit';
 import { zBool, zDate, zId, zMoney, zOptId, zOptText } from '@/server/zod';
 import { existingSerials, receiveItems } from '@/server/services/warehouse';
+import { approveReceiveRequest } from '@/server/services/receive-requests';
 import { MAX_RECEIVE } from '@/domain/warehouse';
 
 const zSerials = z.array(z.string().max(120, 'Serijski broj je predug')).max(MAX_RECEIVE, `Najviše ${MAX_RECEIVE} uređaja odjednom`);
@@ -30,10 +31,21 @@ export const receiveAction = action(
     serials: zSerials,
     skipExisting: zBool,
     dupNote: zOptText,
+    /** Zaprimanje po zahtjevu skladištara — zahtjev se odobrava u istoj transakciji. */
+    requestId: zOptId,
   }),
-  async (input, user) =>
+  async ({ requestId, ...input }, user) =>
     transaction(async (tx) => {
       const r = await receiveItems(tx, user, input);
+      const req = requestId ? await approveReceiveRequest(tx, user, requestId, { warehouseId: input.warehouseId, receiptId: r.receiptId, receiptNumber: r.number }) : null;
+      if (req) {
+        await audit(tx, user, {
+          entity: 'approvalRequest',
+          entityId: requestId,
+          action: 'approve',
+          summary: `Odobreno zaprimanje — primka ${r.number}, novih ${req.created}, vraćeno ${req.returned} — ${req.requestedBy}`,
+        });
+      }
       await audit(tx, user, {
         entity: 'receipt',
         entityId: r.receiptId,
@@ -41,6 +53,12 @@ export const receiveAction = action(
         summary: `Primka ${r.number} — ${r.count} kom, ${r.total.toFixed(2)} €`,
       });
       const skipped = r.skipped ? ` Preskočeno postojećih: ${r.skipped}.` : '';
-      return { message: `Zaprimljeno ${r.count} kom — primka ${r.number}.${skipped}`, redirect: `/nabava/primke/${r.receiptId}` };
+      // ostaje na zaprimanju: obrazac nudi naljepnice i poveznicu na primku, pa se može nastaviti sa sljedećom robom
+      const back = req?.returned ? ` Vraćeno na skladište: ${req.returned} kom.` : '';
+      const approved = req ? ' Zahtjev je odobren.' : '';
+      return {
+        message: `Zaprimljeno ${r.count} kom — primka ${r.number}.${skipped}${back}${approved}`,
+        data: { receiptId: r.receiptId, number: r.number, count: r.count, returned: req?.returned ?? 0, requestApproved: !!req },
+      };
     }),
 );

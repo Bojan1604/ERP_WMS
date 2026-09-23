@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Download, PackagePlus, Boxes } from 'lucide-react';
+import { Download, PackagePlus, Boxes, ScanLine, ClipboardCheck } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import { getLookups, modelLabel } from '@/server/queries/lookups';
@@ -13,6 +13,7 @@ import { SelectionProvider, SelectAll, SelectRow, SelectableTr } from '@/compone
 import { LinkButton, buttonClass } from '@/components/ui/button';
 import { ComboFilter } from '@/components/warehouse/pickers';
 import { ItemBulkBar, type RowMeta } from '@/components/warehouse/item-bulk-bar';
+import { ItemCards, ScanFab } from '@/components/warehouse/item-cards';
 import { STATE_LABEL, STATE_ORDER } from '@/domain/warehouse';
 import { cn } from '@/lib/cn';
 import { date, eur, integer } from '@/lib/format';
@@ -66,6 +67,12 @@ export default async function WarehousePage({ searchParams }: { searchParams: Pr
         subtitle="Uređaji po serijskim brojevima"
         actions={
           <>
+            <LinkButton href="/skladiste/skeniranje" icon={<ScanLine className="size-4" />} className="max-sm:hidden">
+              Skeniranje
+            </LinkButton>
+            <LinkButton href="/skladiste/inventura" icon={<ClipboardCheck className="size-4" />} className="max-sm:hidden">
+              Inventura
+            </LinkButton>
             <a href={`/api/skladiste/izvoz?${exportQs}`} className={buttonClass('secondary')}>
               <Download className="size-4" />
               Izvoz CSV
@@ -111,9 +118,28 @@ export default async function WarehousePage({ searchParams }: { searchParams: Pr
 
       <SelectionProvider ids={list.rows.map((r) => r.id)}>
         {perms.canOps && <ItemBulkBar rows={rowMeta} options={options} perms={perms} />}
-        <TableWrap>
+        {/* mobitel: kartice s velikim kvačicama; tablica ostaje za veće zaslone */}
+        <ItemCards
+          selectable={perms.canOps}
+          rows={list.rows.map((r) => ({
+            id: r.id,
+            serial: r.serial,
+            dupNote: r.dupNote,
+            model: modelLabel(r.model),
+            status: r.status,
+            warehouse: r.warehouse?.name ?? null,
+            partner: r.partner?.name ?? null,
+          }))}
+        />
+        {list.rows.length > 0 && (
+          <p className="mt-2 text-sm text-fg-3 sm:hidden">
+            Ukupno filtrirano: {integer(list.total)} kom · {eur(list.costSum)}
+          </p>
+        )}
+        <ScanFab />
+        <TableWrap className={list.rows.length ? 'max-sm:hidden' : undefined}>
           {list.rows.length ? (
-            <table className="data-table min-w-[1100px]">
+            <table className="data-table no-stack min-w-[1100px]">
               <thead>
                 <tr>
                   <th className="w-8">{perms.canOps && <SelectAll />}</th>

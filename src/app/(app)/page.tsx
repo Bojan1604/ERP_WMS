@@ -174,6 +174,20 @@ export default async function Dashboard() {
               ]}
               height={250}
               ariaLabel="Prihod po mjesecima, prodaja i najam"
+              className="max-sm:hidden"
+            />
+            {/* mobitel: uži koordinatni sustav, da oznake osi ostanu čitljive */}
+            <BarChart
+              data={chartData}
+              series={[
+                { key: 'sale', label: 'Prodaja' },
+                { key: 'rent', label: 'Najam' },
+                ...(hasService ? [{ key: 'service', label: 'Usluge' }] : []),
+              ]}
+              height={280}
+              width={440}
+              ariaLabel="Prihod po mjesecima, prodaja i najam"
+              className="sm:hidden"
             />
           </Card>
         )}

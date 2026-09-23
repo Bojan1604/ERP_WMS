@@ -10,6 +10,7 @@ const securityHeaders = [
 const config: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  devIndicators: false,
   serverExternalPackages: ['@prisma/client', 'bcryptjs', 'bwip-js', 'node-forge', 'xml-crypto', '@xmldom/xmldom'],
   experimental: {
     optimizePackageImports: ['lucide-react'],

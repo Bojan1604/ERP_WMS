@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import { action } from '@/server/action';
 import { transaction } from '@/server/db';
-import { zBool, zId, zOptId, zReq } from '@/server/zod';
+import { zBool, zId, zOptId, zOptText, zReq } from '@/server/zod';
 import { revokeUserSessions, saveUser } from '@/server/services/users';
 
 const schema = z.object({
@@ -12,6 +12,7 @@ const schema = z.object({
   email: zReq('E-adresa'),
   role: z.enum(['ADMIN', 'MANAGER', 'SALES', 'WAREHOUSE', 'ACCOUNTANT']),
   active: zBool,
+  oib: zOptText.refine((v) => v === null || /^\d{11}$/.test(v), 'OIB mora imati 11 znamenki'),
   password: z.preprocess((v) => (v === '' || v === undefined ? null : v), z.string().nullable()),
   permissions: z.record(z.string()).default({}),
 });

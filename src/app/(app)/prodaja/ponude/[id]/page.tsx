@@ -8,6 +8,7 @@ import { getQuote, getSalesLookups, stockByModel, type QuoteDetail } from '@/ser
 import { toISO } from '@/domain/dates';
 import { num } from '@/domain/money';
 import { PageHeader, Notice } from '@/components/ui/misc';
+import { MoreMenu } from '@/components/ui/more-menu';
 import { LinkButton } from '@/components/ui/button';
 import { ActionButton } from '@/components/ui/action';
 import { QuoteEditor, type QuoteEditorValue } from '@/components/sales/quote-editor';
@@ -57,21 +58,24 @@ export default async function QuotePage({ params }: { params: Promise<{ id: stri
               </LinkButton>
               {edit && !locked && (
                 <>
-                  {q.status === 'DRAFT' && status('SENT', 'Označi poslanom', <Send className="size-4" />)}
-                  {(q.status === 'DRAFT' || q.status === 'SENT') && status('REJECTED', 'Odbijena', <XCircle className="size-4" />)}
-                  {(q.status === 'DRAFT' || q.status === 'SENT') && status('ACCEPTED', 'Prihvaćena', <CheckCircle2 className="size-4" />)}
-                  {(q.status === 'ACCEPTED' || q.status === 'REJECTED') && status('DRAFT', 'Vrati u nacrt', <Undo2 className="size-4" />)}
-                  <ActionButton
-                    action={deleteQuoteAction}
-                    input={{ id: q.id }}
-                    variant="danger"
-                    icon={<Trash2 className="size-4" />}
-                    confirmTitle="Brisanje ponude"
-                    confirm={`Ponuda ${q.number} bit će trajno obrisana.`}
-                    confirmLabel="Obriši"
-                  >
-                    Obriši
-                  </ActionButton>
+                  {/* na mobitelu promjene statusa i brisanje su iza gumba „Više" */}
+                  <MoreMenu>
+                    {q.status === 'DRAFT' && status('SENT', 'Označi poslanom', <Send className="size-4" />)}
+                    {(q.status === 'DRAFT' || q.status === 'SENT') && status('REJECTED', 'Odbijena', <XCircle className="size-4" />)}
+                    {(q.status === 'DRAFT' || q.status === 'SENT') && status('ACCEPTED', 'Prihvaćena', <CheckCircle2 className="size-4" />)}
+                    {(q.status === 'ACCEPTED' || q.status === 'REJECTED') && status('DRAFT', 'Vrati u nacrt', <Undo2 className="size-4" />)}
+                    <ActionButton
+                      action={deleteQuoteAction}
+                      input={{ id: q.id }}
+                      variant="danger"
+                      icon={<Trash2 className="size-4" />}
+                      confirmTitle="Brisanje ponude"
+                      confirm={`Ponuda ${q.number} bit će trajno obrisana.`}
+                      confirmLabel="Obriši"
+                    >
+                      Obriši
+                    </ActionButton>
+                  </MoreMenu>
                   {q.status !== 'REJECTED' && lookups && (
                     <QuoteConvert
                       quoteId={q.id}

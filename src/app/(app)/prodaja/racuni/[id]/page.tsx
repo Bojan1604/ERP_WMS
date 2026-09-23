@@ -17,6 +17,9 @@ import { InvoiceDocument, toDocData } from '@/components/sales/invoice-document'
 import { CorrectionButtons, PaymentsCard, type PanelInvoice } from '@/components/sales/invoice-panel';
 import { KIND_SHORT, PayBadge, TYPE_LABEL } from '@/components/sales/list-bits';
 import { date, eur } from '@/lib/format';
+import { FiscalCard, type FiscalCardData } from '@/components/sales/fiscal-card';
+import { isDomesticBusiness } from '@/domain/fiscal';
+import { readMeta } from '@/server/fiscal/issue';
 import { deleteInvoiceDraft } from '../actions';
 
 export const metadata = { title: 'Račun' };
@@ -89,6 +92,21 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
     vatRate: num(inv.vatRate),
     payments: inv.payments.map((p) => ({ id: p.id, date: toISO(p.date), amount: num(p.amount), method: p.method, note: p.note, createdBy: p.createdBy })),
   };
+  const meta = readMeta(inv.eInvoice);
+  const fiscal: FiscalCardData = {
+    id: inv.id,
+    route: meta.route ?? (inv.zki ? 'CIS' : 'NONE'),
+    paymentMethod: inv.paymentMethod,
+    status: inv.fiscalStatus,
+    zki: inv.zki,
+    jir: inv.jir,
+    fiscalizedAt: inv.fiscalizedAt ? inv.fiscalizedAt.toISOString() : null,
+    error: inv.fiscalError,
+    attempts: inv.fiscalAttempts,
+    demo: !!meta.cis?.demo || meta.provider === 'demo',
+    eInvoice: { id: meta.id ?? null, status: meta.status ?? null, provider: meta.provider ?? null, sentAt: meta.sentAt ?? null },
+    canSendEInvoice: !inv.zki && isDomesticBusiness(inv.partner),
+  };
   const devices = inv.lines.filter((l) => l.item);
   const receivable = inv.kind === 'INVOICE' || inv.kind === 'ADVANCE';
 
@@ -139,6 +157,7 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
             </Card>
           )}
           {receivable && <PaymentsCard inv={panel} canEdit={edit} />}
+          <FiscalCard f={fiscal} canEdit={edit} canSeeLog={can(user.perms, 'settings', 'view')} />
           <LinksCard inv={inv} />
           {devices.length > 0 && (
             <Card title={`Uređaji (${devices.length})`} padded={false}>
@@ -250,6 +269,7 @@ function editorValue(inv: InvoiceDetail): InvoiceEditorValue {
       amount: c.amount ?? null,
       pct: c.pct ?? null,
     })),
+    paymentMethod: inv.paymentMethod,
     description: inv.description ?? '',
     note: inv.note ?? '',
     lines: inv.lines.map((l) => ({

@@ -13,6 +13,8 @@ import { CONTRACT_STATUS_LABEL } from '@/domain/billing';
 import { Badge, Card, COLOR_TONE, Detail, Notice, PageHeader } from '@/components/ui/misc';
 import { ItemForm } from '@/components/warehouse/item-form';
 import { ItemActions } from '@/components/warehouse/item-actions';
+import { Attachments } from '@/components/warehouse/attachments';
+import { listAttachments } from '@/server/services/attachments';
 import { returnOnCost, SERVICE_STATUS_LABEL } from '@/domain/warehouse';
 import { date, dateTime, eur, pct } from '@/lib/format';
 import { cn } from '@/lib/cn';
@@ -22,10 +24,11 @@ type CardData = NonNullable<Awaited<ReturnType<typeof getItemCard>>>;
 export default async function ItemCardPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await pageAccess('warehouse', 'view');
   const { id } = await params;
-  const [card, lookups, company] = await Promise.all([
+  const [card, lookups, company, files] = await Promise.all([
     getItemCard(user.companyId, id),
     getLookups(user.companyId),
     db.company.findUniqueOrThrow({ where: { id: user.companyId }, select: { statusChangeNeedsApproval: true } }),
+    listAttachments(db, user.companyId, 'item', [id]),
   ]);
   if (!card) notFound();
   const { item, contract } = card;
@@ -116,6 +119,17 @@ export default async function ItemCardPage({ params }: { params: Promise<{ id: s
                 </Detail>
               </dl>
             )}
+          </Card>
+
+          <Card title="Prilozi">
+            <Attachments
+              entity="item"
+              entityId={item.id}
+              initial={files.map((f) => ({ id: f.id, fileName: f.fileName, mime: f.mime, size: f.size }))}
+              canAdd={perms.canOps}
+              canDelete={perms.canEdit}
+              empty="Nema priloga — slike naljepnica dodaju se i pri izlazu iz skladišta."
+            />
           </Card>
 
           <History events={card.events} />
@@ -238,6 +252,7 @@ const EVENT_TONE: Record<string, string> = {
   WRITE_OFF: 'bg-bad-strong',
   SERVICE: 'bg-bad',
   OUT: 'bg-warn',
+  ATTACHMENT: 'bg-warn',
   TRANSFER: 'bg-fg-3',
 };
 

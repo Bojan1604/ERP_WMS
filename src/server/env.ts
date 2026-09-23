@@ -5,6 +5,8 @@ const schema = z.object({
   DATABASE_URL: z.string().min(1),
   AUTH_SECRET: z.string().min(32, 'AUTH_SECRET mora imati barem 32 znaka'),
   SESSION_TTL_HOURS: z.coerce.number().int().positive().default(12),
+  /** Javna adresa aplikacije (npr. https://erp.firma.hr) — za poveznice u QR kodovima naljepnica. */
+  APP_URL: z.preprocess((v) => (v === '' ? undefined : v), z.string().url().optional()),
 });
 
 let cached: z.infer<typeof schema> | null = null;

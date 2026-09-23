@@ -12,6 +12,7 @@ import { eur } from '@/lib/format';
 import { documentTotals } from '@/domain/invoice';
 import { customerVat } from '@/domain/tax';
 import { addDays } from '@/domain/dates';
+import { PAYMENT_METHOD_LABEL, PAYMENT_METHODS, type PaymentMethodCode } from '@/domain/fiscal';
 import { saveInvoice } from '@/app/(app)/prodaja/racuni/actions';
 import { DevicePicker } from './device-picker';
 import { CatalogPicker } from './catalog-picker';
@@ -36,6 +37,7 @@ export interface InvoiceEditorValue {
   discountAmount: number;
   advanceAmount: number;
   charges: EditorCharge[];
+  paymentMethod: PaymentMethodCode;
   description: string;
   note: string;
   lines: EditorLine[];
@@ -207,7 +209,14 @@ export function InvoiceEditor({ initial, lookups }: { initial: InvoiceEditorValu
           <Field label="Datum isporuke" className="md:col-span-2">
             <Input type="date" value={v.deliveryDate} onChange={(e) => set({ deliveryDate: e.target.value })} />
           </Field>
-          <Field label="Opis računa" className="md:col-span-6">
+          <Field label="Način plaćanja" hint={v.paymentMethod === 'TRANSFER' ? undefined : 'Fiskalizira se: ZKI i JIR na računu'} className="md:col-span-2">
+            <Select
+              value={v.paymentMethod}
+              onChange={(e) => set({ paymentMethod: e.target.value as PaymentMethodCode })}
+              options={PAYMENT_METHODS.map((m) => ({ value: m, label: PAYMENT_METHOD_LABEL[m] }))}
+            />
+          </Field>
+          <Field label="Opis računa" className="md:col-span-4">
             <Input value={v.description} onChange={(e) => set({ description: e.target.value })} placeholder="npr. Oprema za blagajnu — lokacija Split" />
           </Field>
         </div>
@@ -254,15 +263,15 @@ export function InvoiceEditor({ initial, lookups }: { initial: InvoiceEditorValu
         </Card>
       </div>
 
-      <div className="no-print sticky bottom-0 z-30 -mx-4 -mb-4 mt-4 border-t border-line bg-panel/95 px-4 py-2.5 backdrop-blur sm:-mx-5 sm:-mb-5 sm:px-5">
+      <div className="no-print sticky bottom-[calc(3.75rem+env(safe-area-inset-bottom))] z-30 -mx-3 mt-4 border-t border-line bg-panel/95 px-3 py-2.5 backdrop-blur sm:-mx-5 sm:px-5 lg:bottom-0 lg:-mb-5">
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <span className="mr-auto text-sm text-fg-3">
+          <span className="mr-auto text-sm text-fg-3 max-sm:w-full">
             {v.lines.length} stavki · ukupno <b className="text-fg tnum">{eur(totals.total)}</b>
           </span>
-          <Button icon={<Save className="size-4" />} loading={pending} disabled={!v.partnerId} onClick={() => save(false)}>
+          <Button icon={<Save className="size-4" />} loading={pending} disabled={!v.partnerId} onClick={() => save(false)} className="max-sm:flex-1">
             Spremi nacrt
           </Button>
-          <Button variant="primary" icon={<Send className="size-4" />} disabled={!v.partnerId || !v.lines.length || pending} onClick={() => setConfirmIssue(true)}>
+          <Button variant="primary" icon={<Send className="size-4" />} disabled={!v.partnerId || !v.lines.length || pending} onClick={() => setConfirmIssue(true)} className="max-sm:flex-1">
             Izdaj račun
           </Button>
         </div>
@@ -296,6 +305,10 @@ export function InvoiceEditor({ initial, lookups }: { initial: InvoiceEditorValu
             ispravak je moguć samo stornom ili odobrenjem.
           </p>
           {v.type === 'SALE' && v.lines.some((l) => l.kind === 'DEVICE') && <p>Uređaji s računa bit će skinuti sa stanja (status „Prodan").</p>}
+          <p>
+            Način plaćanja: <b className="text-fg">{PAYMENT_METHOD_LABEL[v.paymentMethod]}</b>
+            {v.paymentMethod !== 'TRANSFER' && ' — ako je fiskalizacija uključena, račun dobiva ZKI i šalje se u CIS po JIR.'}
+          </p>
         </div>
       </Dialog>
 

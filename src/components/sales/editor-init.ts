@@ -27,6 +27,7 @@ export function newInvoiceValue(lookups: SalesLookups, partnerId: string | null,
     discountAmount: 0,
     advanceAmount: 0,
     charges: [],
+    paymentMethod: 'TRANSFER',
     description: '',
     note: '',
     lines: devices.map((d, i): EditorLine => ({

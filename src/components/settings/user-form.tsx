@@ -8,6 +8,7 @@ import { Checkbox, Field, FormGrid, Input, Select } from '@/components/ui/field'
 import { Card } from '@/components/ui/misc';
 import { LEVEL_LABEL, MODULES, ROLE_DEFAULTS, ROLE_LABEL, type Level, type Module, type RoleCode } from '@/domain/permissions';
 import { cn } from '@/lib/cn';
+import { isValidOib } from '@/domain/tax';
 
 export interface UserValue {
   id?: string;
@@ -15,6 +16,8 @@ export interface UserValue {
   email: string;
   role: RoleCode;
   active: boolean;
+  /** OIB operatera za fiskalizirane račune. */
+  oib: string;
   permissions: Partial<Record<string, Level>>;
 }
 
@@ -44,7 +47,7 @@ export function UserForm({ value, save, isSelf }: { value: UserValue; save: Serv
       if (v.password.length < 8) return setLocalError('Lozinka mora imati barem 8 znakova.');
       if (v.password !== v.password2) return setLocalError('Lozinke se ne podudaraju.');
     } else if (!value.id) return setLocalError('Upišite lozinku za novog korisnika.');
-    run({ id: value.id ?? null, name: v.name, email: v.email, role: v.role, active: v.active, password: v.password || null, permissions: perms });
+    run({ id: value.id ?? null, name: v.name, email: v.email, role: v.role, active: v.active, oib: v.oib.trim() || null, password: v.password || null, permissions: perms });
   };
 
   return (
@@ -63,6 +66,19 @@ export function UserForm({ value, save, isSelf }: { value: UserValue; save: Serv
             </Field>
             <Field label="E-adresa (prijava)" required error={fields.email}>
               <Input type="email" value={v.email} onChange={(e) => setV({ ...v, email: e.target.value })} required autoComplete="off" />
+            </Field>
+            <Field
+              label="OIB (operater)"
+              error={fields.oib}
+              hint={
+                v.oib.trim() && !isValidOib(v.oib) ? (
+                  <span className="text-warn">Kontrolna znamenka ne odgovara.</span>
+                ) : (
+                  'Ispisuje se na fiskaliziranim računima koje korisnik izdaje (OibOper).'
+                )
+              }
+            >
+              <Input value={v.oib} onChange={(e) => setV({ ...v, oib: e.target.value.replace(/\s/g, '') })} inputMode="numeric" maxLength={11} autoComplete="off" />
             </Field>
             <Field label="Uloga" hint={isSelf && value.role === 'ADMIN' ? 'Ne možete sami sebi oduzeti ulogu administratora.' : undefined}>
               <Select
@@ -107,7 +123,8 @@ export function UserForm({ value, save, isSelf }: { value: UserValue; save: Serv
       >
         {admin && <p className="border-b border-line px-4 py-2.5 text-sm text-fg-3">Administrator ima puni pristup svim modulima — iznimke se ne primjenjuju.</p>}
         <div className="overflow-x-auto scroll-slim">
-          <table className="data-table">
+          {/* na mobitelu: kartica po modulu s četiri razine u jednom retku */}
+          <table className="data-table max-sm:[&_tbody_tr]:grid-cols-4">
             <thead>
               <tr>
                 <th>Modul</th>
@@ -131,14 +148,14 @@ export function UserForm({ value, save, isSelf }: { value: UserValue; save: Serv
                     </td>
                     {LEVELS.map((l) => (
                       <td key={l} className="text-center">
-                        <label className="inline-flex cursor-pointer items-center justify-center p-1">
+                        <label className="inline-flex cursor-pointer items-center justify-center p-1 max-sm:px-0">
                           <input
                             type="radio"
                             name={`perm-${m}`}
                             checked={cur === l}
                             disabled={admin}
                             onChange={() => setPerms({ ...perms, [m]: l })}
-                            className="size-4 accent-[var(--color-brand)]"
+                            className="size-4 accent-[var(--color-brand)] max-sm:size-5"
                             aria-label={`${MODULES[m]}: ${LEVEL_LABEL[l]}`}
                           />
                           {defaults[m] === l && <span className="sr-only">(zadano)</span>}
@@ -146,7 +163,7 @@ export function UserForm({ value, save, isSelf }: { value: UserValue; save: Serv
                         {defaults[m] === l && !admin && <span className="block text-[10px] leading-none text-fg-4">zadano</span>}
                       </td>
                     ))}
-                    <td className="text-sm text-fg-3">{LEVEL_LABEL[defaults[m]]}</td>
+                    <td className="text-sm text-fg-3 max-sm:col-span-4">{LEVEL_LABEL[defaults[m]]}</td>
                   </tr>
                 );
               })}

@@ -29,9 +29,9 @@ export function Card({ children, className, title, actions, padded = true }: { c
   return (
     <section className={cn('rounded-lg bg-panel shadow-[var(--shadow-panel)]', className)}>
       {(title || actions) && (
-        <header className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5">
+        <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-line px-4 py-2.5">
           <h2 className="text-md font-semibold">{title}</h2>
-          {actions && <div className="flex items-center gap-1.5">{actions}</div>}
+          {actions && <div className="flex flex-wrap items-center gap-1.5">{actions}</div>}
         </header>
       )}
       <div className={cn(padded && 'p-4')}>{children}</div>
@@ -67,7 +67,7 @@ export function Stat({ label, value, hint, tone }: { label: string; value: React
   return (
     <div className="rounded-lg bg-panel p-4 shadow-[var(--shadow-panel)]">
       <p className="text-sm text-fg-3">{label}</p>
-      <p className={cn('mt-1 text-xl font-semibold tnum', tone === 'bad' && 'text-bad-strong', tone === 'ok' && 'text-ok', tone === 'warn' && 'text-warn')}>{value}</p>
+      <p className={cn('mt-1 text-xl font-semibold tnum max-sm:text-lg', tone === 'bad' && 'text-bad-strong', tone === 'ok' && 'text-ok', tone === 'warn' && 'text-warn')}>{value}</p>
       {hint && <p className="mt-0.5 text-xs text-fg-3">{hint}</p>}
     </div>
   );

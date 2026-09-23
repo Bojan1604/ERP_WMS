@@ -21,7 +21,7 @@ export function Topbar({ user }: { user: { name: string; role: string } }) {
   };
 
   return (
-    <header className="no-print flex h-14 shrink-0 items-center gap-3 border-b border-line bg-panel px-4 pl-14 lg:pl-4">
+    <header className="no-print flex h-14 shrink-0 items-center gap-2 border-b border-line bg-panel px-3 pl-14 sm:gap-3 sm:px-4 lg:pl-4">
       <form
         className="relative w-full max-w-md"
         onSubmit={(e) => {

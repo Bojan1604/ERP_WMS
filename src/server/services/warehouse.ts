@@ -87,19 +87,23 @@ export async function requestStatusChange(tx: Tx, actor: Actor, input: StatusCha
   const status = await tx.itemStatus.findFirst({ where: { id: input.statusId, companyId: actor.companyId }, select: { id: true, kind: true } });
   assert(status, 'Status ne postoji.');
   assert(status.kind !== 'WRITTEN_OFF' && status.kind !== 'RENTED', 'Otpis i najam imaju vlastite radnje — ne idu kroz promjenu statusa.');
-  const payload: Prisma.InputJsonValue = { itemIds: ids, statusId: input.statusId, note: input.note ?? null, warehouseId: input.warehouseId ?? null };
+  const payload: Prisma.InputJsonValue = { itemIds: ids, statusId: input.statusId, note: input.note ?? null, warehouseId: input.warehouseId ?? null, requesterId: actor.id };
   return tx.approvalRequest.create({
     data: { companyId: actor.companyId, kind: 'STATUS_CHANGE', payload, requestedBy: actor.name },
     select: { id: true },
   });
 }
 
-/** Odobravanje ili odbijanje zahtjeva za promjenu statusa. */
+/**
+ * Odobravanje ili odbijanje zahtjeva za promjenu statusa. Odbiti se može i
+ * zahtjev za zaprimanje; odobrava se zaprimanjem (`approveReceiveRequest`).
+ */
 export async function resolveApproval(tx: Tx, actor: Actor, id: string, approve: boolean, note: string | null) {
   const r = await tx.approvalRequest.findFirst({ where: { id, companyId: actor.companyId } });
   assert(r, 'Zahtjev ne postoji.');
   assert(r.status === 'PENDING', 'Zahtjev je već riješen.');
   if (!approve) assert(note, 'Upišite razlog odbijanja.');
+  assert(!approve || r.kind === 'STATUS_CHANGE', 'Zahtjev za zaprimanje odobrava se zaprimanjem robe („Provjeri i zaprimi").');
   let applied = 0;
   if (approve) {
     const p = r.payload as unknown as StatusChangeInput;

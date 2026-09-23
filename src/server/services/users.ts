@@ -12,6 +12,8 @@ export interface UserInput {
   email: string;
   role: Role;
   active: boolean;
+  /** OIB operatera (za fiskalizirane račune); null = nije upisan. */
+  oib?: string | null;
   /** Prazno = lozinka se ne mijenja (kod novog korisnika obavezna). */
   password: string | null;
   /** Željena prava po modulu; spremaju se samo odstupanja od uloge. */
@@ -43,6 +45,8 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
   const taken = await tx.user.findFirst({ where: { email, ...(id ? { id: { not: id } } : {}) }, select: { id: true } });
   assert(!taken, `Korisnik s e-adresom ${email} već postoji.`);
   const permissions = permissionOverrides(input.role, input.permissions);
+  const oib = input.oib?.trim() || null;
+  if (oib) assert(/^\d{11}$/.test(oib), 'OIB mora imati 11 znamenki.');
 
   if (!id) {
     assert(input.password, 'Lozinka je obavezna za novog korisnika.');
@@ -53,6 +57,7 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
         email,
         role: input.role,
         active: input.active,
+        oib,
         permissions,
         passwordHash: await hashPassword(input.password),
       },
@@ -86,6 +91,7 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
       email,
       role: input.role,
       active: input.active,
+      oib,
       permissions,
       ...(input.password ? { passwordHash: await hashPassword(input.password) } : {}),
     },
@@ -95,6 +101,7 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
   if (before.name !== input.name) changes.name = { from: before.name, to: input.name };
   if (before.email !== email) changes.email = { from: before.email, to: email };
   if (before.role !== input.role) changes.role = { from: before.role, to: input.role };
+  if ((before.oib ?? null) !== oib) changes.oib = { from: before.oib, to: oib };
   if (before.active !== input.active) changes.active = { from: before.active, to: input.active };
   if (JSON.stringify(before.permissions ?? {}) !== JSON.stringify(permissions)) changes.permissions = { from: before.permissions, to: permissions };
   if (input.password) changes.password = { from: '•••', to: 'nova lozinka' };

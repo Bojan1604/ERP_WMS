@@ -124,7 +124,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
       {!q ? (
         <Empty icon={<Search className="size-5" />} title="Upišite pojam za pretragu" />
       ) : groups.length ? (
-        <div className="grid items-start gap-4 lg:grid-cols-2">{groups}</div>
+        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">{groups}</div>
       ) : (
         <Empty icon={<Search className="size-5" />} title="Nema rezultata" description="Provjerite upisani pojam ili pokušajte s dijelom serijskog broja." />
       )}

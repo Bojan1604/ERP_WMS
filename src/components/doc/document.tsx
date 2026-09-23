@@ -54,8 +54,8 @@ export function DocumentShell({
   signatures?: string[];
 }) {
   return (
-    <article className="print-area mx-auto max-w-[210mm] bg-white p-[14mm] text-[12px] leading-[1.45] text-black shadow-[var(--shadow-panel)]">
-      <header className="flex items-start justify-between gap-6 border-b border-black/20 pb-4">
+    <article className="print-area mx-auto max-w-[210mm] bg-white p-[14mm] text-[12px] max-sm:p-4 leading-[1.45] text-black shadow-[var(--shadow-panel)]">
+      <header className="flex items-start justify-between gap-6 border-b border-black/20 pb-4 max-sm:flex-col max-sm:gap-3">
         <div className="min-w-0">
           {company.logo ? (
             // eslint-disable-next-line @next/next/no-img-element
@@ -77,16 +77,16 @@ export function DocumentShell({
           )}
           <p className="text-black/60">{[company.email, company.phone, company.web].filter(Boolean).join(' · ')}</p>
         </div>
-        <div className="shrink-0 text-right">
+        <div className="shrink-0 text-right max-sm:text-left">
           <p className="text-[18px] font-bold uppercase tracking-wide">{title}</p>
           {number && <p className="text-[14px] font-semibold">br. {number}</p>}
           {meta && (
-            <table className="ml-auto mt-2 text-[11px]">
+            <table className="ml-auto mt-2 text-[11px] max-sm:ml-0">
               <tbody>
                 {meta.map(([k, v]) => (
                   <tr key={k}>
                     <td className="pr-3 text-black/60">{k}</td>
-                    <td className="text-right font-medium">{v}</td>
+                    <td className="text-right font-medium max-sm:text-left">{v}</td>
                   </tr>
                 ))}
               </tbody>
@@ -96,7 +96,7 @@ export function DocumentShell({
       </header>
 
       {party && (
-        <section className="mt-4 w-[55%] rounded border border-black/15 p-3">
+        <section className="mt-4 w-[55%] rounded border max-sm:w-full border-black/15 p-3">
           <p className="text-[10px] uppercase tracking-wider text-black/50">{partyLabel}</p>
           <p className="text-[13px] font-semibold">{party.name}</p>
           <p>{party.address}</p>
@@ -108,7 +108,7 @@ export function DocumentShell({
       <div className="mt-5">{children}</div>
 
       {signatures && (
-        <div className="mt-14 grid grid-cols-2 gap-16">
+        <div className="mt-14 grid grid-cols-2 gap-16 max-sm:gap-6">
           {signatures.map((s) => (
             <div key={s} className="border-t border-black/40 pt-1 text-center text-[11px] text-black/60">
               {s}
@@ -128,28 +128,31 @@ export function DocumentShell({
 /** Tablica stavki dokumenta. */
 export function DocTable({ head, rows, align }: { head: string[]; rows: ReactNode[][]; align?: Array<'left' | 'right' | 'center'> }) {
   return (
-    <table className="w-full border-collapse text-[11.5px]">
-      <thead>
-        <tr className="border-y border-black/30 bg-black/[0.04]">
-          {head.map((h, i) => (
-            <th key={h + i} className="px-1.5 py-1.5 font-semibold" style={{ textAlign: align?.[i] ?? 'left' }}>
-              {h}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r, ri) => (
-          <tr key={ri} className="border-b border-black/10 align-top">
-            {r.map((c, ci) => (
-              <td key={ci} className="px-1.5 py-1.5" style={{ textAlign: align?.[ci] ?? 'left' }}>
-                {c}
-              </td>
+    // na mobitelu tablica klizi vodoravno umjesto da gura stranicu; ispis je nepromijenjen
+    <div className="overflow-x-auto scroll-slim print:overflow-visible">
+      <table className="w-full border-collapse text-[11.5px] max-sm:min-w-[34rem]">
+        <thead>
+          <tr className="border-y border-black/30 bg-black/[0.04]">
+            {head.map((h, i) => (
+              <th key={h + i} className="px-1.5 py-1.5 font-semibold" style={{ textAlign: align?.[i] ?? 'left' }}>
+                {h}
+              </th>
             ))}
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {rows.map((r, ri) => (
+            <tr key={ri} className="border-b border-black/10 align-top">
+              {r.map((c, ci) => (
+                <td key={ci} className="px-1.5 py-1.5" style={{ textAlign: align?.[ci] ?? 'left' }}>
+                  {c}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

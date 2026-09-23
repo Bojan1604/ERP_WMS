@@ -10,6 +10,10 @@ import { eur } from '@/lib/format';
 import { today } from '@/domain/dates';
 import { PartnerPicker } from './pickers';
 import { WRITE_OFF_REASONS } from '@/domain/warehouse';
+import { Camera } from 'lucide-react';
+import { LabelPhotos, PhotoSection, type PhotoTarget, type PickedPhoto } from './label-photos';
+import { photoForm } from './image-tools';
+import { refreshScanAction } from '@/app/(app)/skladiste/skeniranje/actions';
 import {
   announceReturnAction, bulkEditAction, changeStatus, markOutAction, transferAction, writeOffAction,
 } from '@/app/(app)/skladiste/actions';
@@ -153,8 +157,29 @@ export function StatusDialog({
 export function MarkOutDialog({ count, ...base }: Base & { count: number }) {
   const [partnerId, setPartnerId] = useState<string | null>(null);
   const [note, setNote] = useState('');
+  const [photos, setPhotos] = useState<PickedPhoto[]>([]);
+  const [targets, setTargets] = useState<PhotoTarget[] | null>(null);
+  const [loadingTargets, setLoadingTargets] = useState(false);
+  const showPhotos = async () => {
+    setLoadingTargets(true);
+    // serijski brojevi odabranih — za uparivanje slike naljepnice s uređajem
+    const r = await refreshScanAction({ ids: base.itemIds });
+    setLoadingTargets(false);
+    setTargets(r.ok && r.data ? r.data.map((d) => ({ key: d.id, serial: d.serial, hint: d.dupNote ?? undefined })) : []);
+  };
+  const blocked = photos.some((p) => p.reading || !p.target);
   return (
-    <ActionDialog {...base} title="Izašlo iz skladišta" action={markOutAction} input={() => ({ itemIds: base.itemIds, partnerId, note })} confirmLabel="Označi izlaz">
+    <ActionDialog
+      {...base}
+      title="Izašlo iz skladišta"
+      action={markOutAction}
+      input={() => {
+        const data = { itemIds: base.itemIds, partnerId, note };
+        return photos.length ? photoForm(data, photos) : data;
+      }}
+      confirmLabel={photos.length ? `Označi izlaz (+${photos.length} sl.)` : 'Označi izlaz'}
+      disabled={blocked}
+    >
       <p className="text-sm text-fg-3">
         Uređaji ({count}) dobivaju status „Izašlo iz skladišta" i čekaju da prodaja izda račun ili ih doda na ugovor. Sa stanja se skidaju tek tada.
       </p>
@@ -164,6 +189,15 @@ export function MarkOutDialog({ count, ...base }: Base & { count: number }) {
       <Field label="Napomena">
         <Textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="npr. preuzeo kurir, montaža na lokaciji…" />
       </Field>
+      {targets ? (
+        <PhotoSection title="Slike naljepnica (neobavezno)" hint="Svaka slika se pročita i poveže s uređajem; ostaje trajno na kartici uređaja → Prilozi.">
+          <LabelPhotos targets={targets} photos={photos} setPhotos={setPhotos} max={Math.min(targets.length, 100)} />
+        </PhotoSection>
+      ) : (
+        <Button size="sm" variant="subtle" icon={<Camera className="size-3.5" />} loading={loadingTargets} onClick={showPhotos}>
+          Dodaj slike naljepnica
+        </Button>
+      )}
     </ActionDialog>
   );
 }

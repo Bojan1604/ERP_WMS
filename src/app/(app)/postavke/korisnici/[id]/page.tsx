@@ -20,7 +20,7 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
     ? null
     : await db.user.findFirst({
         where: { id, companyId: me.companyId },
-        select: { id: true, name: true, email: true, role: true, active: true, permissions: true, lastLoginAt: true, createdAt: true },
+        select: { id: true, name: true, email: true, role: true, active: true, oib: true, permissions: true, lastLoginAt: true, createdAt: true },
       });
   if (!isNew && !u) notFound();
   return (
@@ -52,8 +52,8 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
         save={saveUserAction}
         value={
           u
-            ? { id: u.id, name: u.name, email: u.email, role: u.role, active: u.active, permissions: (u.permissions ?? {}) as Record<string, Level> }
-            : { name: '', email: '', role: 'SALES', active: true, permissions: {} }
+            ? { id: u.id, name: u.name, email: u.email, role: u.role, active: u.active, oib: u.oib ?? '', permissions: (u.permissions ?? {}) as Record<string, Level> }
+            : { name: '', email: '', role: 'SALES', active: true, oib: '', permissions: {} }
         }
       />
     </>

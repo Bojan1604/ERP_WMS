@@ -108,6 +108,12 @@
   ::selection { background: color-mix(in srgb, var(--color-brand) 25%, transparent); }
   input[type='number']::-webkit-inner-spin-button { opacity: 0.4; }
   :focus-visible { outline: 2px solid var(--color-brand); outline-offset: 1px; }
+  /* iOS zumira stranicu pri fokusu na polje manje od 16px */
+  @media (max-width: 639px) {
+    input, select, textarea { font-size: 16px !important; }
+    input:not([type='checkbox']):not([type='radio']), select { min-height: 2.5rem; }
+  }
+  html { -webkit-tap-highlight-color: transparent; }
 }
 
 @layer components {
@@ -131,6 +137,41 @@
   .data-table tfoot td { padding: 7px 10px; border-top: 1px solid var(--color-line-strong); font-weight: 600; background: var(--color-panel-2); }
   .data-table .num { text-align: right; white-space: nowrap; }
   .data-table.compact td { padding: 4px 8px; }
+
+  /* Mobitel: redovi tablice kao kartice u dva stupca (oznake stupaca dodaje ResponsiveTables) */
+  @media (max-width: 639px) {
+    .data-table:not(.no-stack) thead { display: none; }
+    .data-table:not(.no-stack), .data-table:not(.no-stack) tbody, .data-table:not(.no-stack) tfoot { display: block; width: 100%; }
+    .data-table:not(.no-stack) tr {
+      display: grid; grid-template-columns: 1fr 1fr; column-gap: 12px; row-gap: 6px;
+      padding: 10px 12px; border-bottom: 1px solid var(--color-line); position: relative;
+    }
+    .data-table:not(.no-stack) tbody tr:hover td { background: transparent; }
+    .data-table:not(.no-stack) tbody tr[data-selected='true'] { background: var(--color-brand-soft); }
+    .data-table:not(.no-stack) td, .data-table:not(.no-stack) tfoot td {
+      display: block; min-width: 0; padding: 0; border: 0; background: transparent !important;
+      text-align: left !important; white-space: normal; overflow-wrap: anywhere;
+    }
+    .data-table:not(.no-stack) td::before {
+      content: attr(data-label); display: block;
+      font-size: 0.625rem; line-height: 0.875rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-fg-3);
+    }
+    .data-table:not(.no-stack) td[data-label='']::before, .data-table:not(.no-stack) td:not([data-label])::before { content: none; }
+    .data-table:not(.no-stack) td:empty { display: none; }
+    /* prvi stupac (broj, serijski…) je naslov kartice preko cijele širine */
+    .data-table:not(.no-stack) tbody td:first-child:not(:has(input[type='checkbox'])),
+    .data-table:not(.no-stack) tbody td:first-child:has(input[type='checkbox']) + td {
+      grid-column: 1 / -1; font-size: var(--text-md); font-weight: 600; padding-right: 32px;
+    }
+    .data-table:not(.no-stack) tbody td:first-child:not(:has(input[type='checkbox']))::before,
+    .data-table:not(.no-stack) tbody td:first-child:has(input[type='checkbox']) + td::before { content: none; }
+    .data-table:not(.no-stack) tbody td:first-child:has(input[type='checkbox']) { position: absolute; right: 12px; top: 10px; }
+    .data-table:not(.no-stack) tbody td:first-child:has(input[type='checkbox'])::before { content: none; }
+    .data-table:not(.no-stack) input[type='checkbox'] { width: 1.35rem; height: 1.35rem; }
+    .data-table:not(.no-stack) tfoot tr { background: var(--color-panel-2); font-weight: 600; }
+    /* sitni podnaslov u naslovu kartice (e-pošta, opis) ostaje običan */
+    .data-table:not(.no-stack) tbody td:first-child :is(.text-xs, .text-sm):not(.font-medium, .font-semibold) { font-weight: 400; }
+  }
 }
 
 /* Ispis dokumenata: samo sadržaj s klasom .print-area */
@@ -138,5 +179,8 @@
   @page { size: A4; margin: 14mm 12mm; }
   body { background: #fff !important; }
   .no-print { display: none !important; }
+  /* raspored aplikacije (visina ekrana + klizni sadržaj) ne smije rezati ispis na jednu stranicu */
+  html, body, .h-dvh, main { height: auto !important; min-height: 0 !important; overflow: visible !important; }
+  .h-dvh { display: block !important; }
   .print-area { box-shadow: none !important; border: 0 !important; margin: 0 !important; padding: 0 !important; max-width: none !important; }
 }

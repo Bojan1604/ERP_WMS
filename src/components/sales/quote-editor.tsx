@@ -192,7 +192,7 @@ export function QuoteEditor({ initial, lookups, stock: initialStock }: { initial
         </Card>
       </div>
 
-      <div className="no-print sticky bottom-0 z-30 -mx-4 -mb-4 mt-4 border-t border-line bg-panel/95 px-4 py-2.5 backdrop-blur sm:-mx-5 sm:-mb-5 sm:px-5">
+      <div className="no-print sticky bottom-[calc(3.75rem+env(safe-area-inset-bottom))] z-30 -mx-3 mt-4 border-t border-line bg-panel/95 px-3 py-2.5 backdrop-blur sm:-mx-5 sm:px-5 lg:bottom-0 lg:-mb-5">
         <div className="flex items-center justify-end gap-2">
           <span className="mr-auto text-sm text-fg-3">
             {v.lines.length} stavki · ukupno <b className="text-fg tnum">{eur(totals.total)}</b>

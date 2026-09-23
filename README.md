@@ -68,6 +68,33 @@ Demo prijave (lozinka za sve: `admin123`):
 
 Program ima vlastitu bazu (`wms`) i ne dijeli ništa s drugim programima na istom PostgreSQL-u.
 
+### Brzi način rada (svakodnevno korištenje)
+
+`npm run dev` je **razvojni** način: svaka stranica se pri prvom otvaranju prevodi (1–2 s). Za
+svakodnevni rad pokrenite **`pokreni.bat`** (dvoklik) ili:
+
+```bat
+npm run serve        :: izgradi i pokreni — stranice se otvaraju za 0,01–0,1 s
+```
+
+### Nadogradnja na novu verziju (bez gubitka podataka)
+
+1. Raspakirajte novu verziju preko stare mape (datoteku `.env` zadržite).
+2. `npm install`
+3. `npx prisma migrate deploy` — nadograđuje bazu novim migracijama, podaci ostaju.
+4. `npm run serve` (ili `pokreni.bat`, koji radi korake 2–4 sam).
+
+Ne pokrećite `db:reset` ni `db:seed` na bazi sa stvarnim podacima — brišu je.
+
+### Mobitel i skeniranje kamerom
+
+Otvorite program s mobitela preko adrese računala u lokalnoj mreži (npr. `http://192.168.1.20:3000`)
+i u pregledniku odaberite „Dodaj na početni zaslon" — otvara se kao aplikacija. **Kamera za
+skeniranje radi samo preko HTTPS-a** (ili na `localhost`): za probu na mreži pokrenite
+`npm run dev:https`, a za stalni rad stavite ispred programa HTTPS (npr. Caddy:
+`caddy reverse-proxy --from wms.firma.hr --to localhost:3000`). USB/Bluetooth skeneri barkoda
+rade bez HTTPS-a — program sam prepoznaje njihov unos.
+
 ### Produkcija
 
 ```bash
@@ -96,13 +123,20 @@ i povrat, odobrenja, dugi servisi, niska zaliha, garancije koje istječu. Prikaz
 - Kartica uređaja: podaci, povijest, zarada naspram nabavne cijene, jamstvo, ugovor, servisi; dupli serijski samo uz razlikovnu napomenu
 - Zaprimanje: lijepljenje stupca serijskih ili generiranje raspona — tisuće komada jednom primkom, s knjiženjem troška
 - Izlaz i povrat: izašlo → račun / ugovor / natrag; uređaji za povrat (istek ugovora, kraj sezone, raskid); u dolasku → zaprimi; ručni povrat
-- Međuskladišnice s ispisom, odobrenja promjena statusa
+- Međuskladišnice s ispisom, odobrenja promjena statusa i zaprimanja (skladištar šalje skenirano, administrator provjerava)
+- **Skeniranje** kamerom mobitela (barkod, QR, DataMatrix) i USB/Bluetooth skenerom: kartica uređaja s brzim radnjama ili skupni način za više uređaja odjednom
+- **Inventura**: skeniranje stvarnog stanja (i više ljudi istovremeno), nedostaje / pronađeno / višak, zatvaranje s prijenosom ili otpisom, izvještaj
+- **Naljepnice** s barkodom i QR-om (A4 listovi i printeri naljepnica 50×25, 62×29, 100×50 mm). QR nosi poveznicu
+  `APP_URL/skladiste/<id>` ako je u `.env` postavljen `APP_URL` (npr. `https://erp.firma.hr`), inače samo putanju
+  `/skladiste/<id>` — skener u aplikaciji je prepoznaje u oba slučaja, a kamera mobitela otvara samo punu poveznicu
+- Fotografije naljepnica pri izlazu iz skladišta i prilozi na kartici uređaja
 
 **Prodaja**
 - Računi: nacrt → izdavanje (broj `12/ZG1/1` po pravilima Porezne uprave, redni broj prati datum), uređaji sa skladišta s prijedlogom cijene (dogovoreni cjenik → cijena modela → marža), usluge, ručne stavke, popusti po stavci i na račun, neoporezive naknade, PDV prema državi kupca (HR / EU / izvoz)
 - Izdan račun se ne mijenja: **storno** (vraća robu na skladište) i **knjižno odobrenje**; djelomične uplate, „plaćeno u cijelosti", povrat u neplaćeno
 - Popis s bojama naplate (kasni / nije dospjelo / plaćeno), zadani poredak „kasni prvo", brojač dana koji staje plaćanjem, zbrojevi, CSV
 - Ispis A4 s HUB3 2D barkodom za plaćanje, otpremnica sa serijskim brojevima i jamstvom, **eRačun XML** (UBL 2.1, HR CIUS 2025: 380/381/384/386)
+- Način plaćanja, **fiskalizacija** (ZKI, JIR, QR kod, naknadna dostava) i slanje **eRačuna** posredniku — vidi [Fiskalizacija](#fiskalizacija)
 - Ponude: stavke po modelu bez serijskih, istek valjanosti, stanja, ispis, pretvaranje u račun uz odabir konkretnih uređaja
 
 **Najam**
@@ -154,9 +188,77 @@ npm run typecheck
 `test:db` očekuje bazu `wms_test` (`createdb wms_test && DATABASE_URL=…/wms_test npx prisma db push`) ili
 `TEST_DATABASE_URL`. GitHub Actions (`.github/workflows/ci.yml`) pokreće sve to i produkcijski build.
 
+## Fiskalizacija
+
+Pripremljeno je sve za **Fiskalizaciju 1.0** (CIS Porezne uprave) i **eRačun / Fiskalizaciju 2.0** (preko
+informacijskog posrednika). Postavke: **Postavke → Fiskalizacija** (popis „Spremnost za produkciju" pokazuje što još nedostaje).
+
+- **Koji račun kamo:** gotovina, kartica i „ostalo" → CIS (ZKI pri izdavanju, JIR od CIS-a); transakcijski račun
+  domaćem kupcu s OIB-om → eRačun (UBL) posredniku; transakcijski račun kupcu bez OIB-a u RH → CIS; strani kupac → ništa.
+  Način plaćanja bira se na računu (zadano: transakcijski račun); storno i odobrenje ga nasljeđuju.
+- **Izdavanje** računa izračuna ZKI u transakciji; slanje u CIS/posredniku ide tek nakon nje i nikad ne ruši izdavanje —
+  neuspjeh ostavlja račun izdan sa ZKI-jem, stanjem „Greška" i porukom. „Ponovi fiskalizaciju" na računu ili
+  „Naknadna fiskalizacija" u postavkama (do 50 računa odjednom, najviše 60 s; nedostupan CIS ili posrednik prekida
+  svoje račune) šalju ga ponovno s oznakom naknadne dostave. Prije slanja račun se atomski „zauzme" (oznaka
+  `sending` s vremenom u `Invoice.eInvoice`), pa istodobni pozivi ne šalju isti račun dvaput; zauzimanje napušteno
+  zbog pada procesa zastari nakon 5 min. Drugi JIR nikad ne prepisuje prvi. eRačun čije je slanje isteklo bez
+  odgovora dobiva stanje „nepoznato" — naknadna dostava ga ne šalje sama (provjerite kod posrednika, pa „Pošalji eRačun").
+  Ispis nosi način plaćanja, operatera (ime i OIB), ZKI, JIR i QR kod za provjeru. Svaki poziv je u dnevniku (zadnjih 50).
+- **Demo način:** okruženje TEST bez učitanog certifikata — ZKI se računa privremenim ključem, JIR je izmišljen, ništa
+  se ne šalje; posrednik „Demo" prihvaća svaki eRačun. U dnevniku su takvi zapisi označeni „demo".
+
+**Odlazak u produkciju:**
+
+1. **Postavke → Firma:** ispravan OIB firme, oznaka poslovnog prostora (prijavljena u ePoreznoj) i naplatnog uređaja (brojka).
+2. **Postavke → Korisnici:** OIB svakom korisniku koji izdaje račune (bez njega se račun za gotovinu/karticu ne izdaje).
+3. **Postavke → Fiskalizacija:** učitati FINA fiskalizacijski certifikat (.p12 i lozinka — program ga otvara, provjerava
+   OIB i rok, lozinku čuva šifriranu AES-256-GCM ključem iz `AUTH_SECRET`); „Testiraj vezu" u okruženju TEST
+   (cistest.apis-it.hr); zatim okruženje **PROD** i uključiti fiskalizaciju.
+4. eRačun: ugovor s posrednikom (ePoslovanje.hr), u ePoreznoj ovlastiti posrednika, upisati API ključ (sprema se
+   šifriran i ne vraća se u preglednik), „Testiraj vezu". Uplate na poslani eRačun prijavljuju se posredniku (eIzvještavanje o naplati).
+
+Ako Node ne vjeruje FINA-inom TLS certifikatu CIS-a, postavite `FISCAL_CA_FILE=/put/do/fina-ca.pem` (ili
+`NODE_EXTRA_CA_CERTS`). **Algoritam XML potpisa** poruke za CIS bira `FISCAL_SIGNATURE=sha256|sha1` (zadano `sha256`,
+RSA-SHA256 + SHA-256 sažetak). Primjeri u Tehničkoj specifikaciji Fiskalizacije 1.x koriste RSA-SHA1/SHA1 — ako CIS
+na testnom okruženju vrati grešku s004 „Neispravan digitalni potpis", postavite `FISCAL_SIGNATURE=sha1` (ZKI se
+uvijek računa RSA-SHA1 + MD5, neovisno o tome). Promjena `AUTH_SECRET`-a znači ponovni upis lozinke certifikata i API ključa. Kod je u
+`src/domain/fiscal.ts` (pravila, oblikovanje, QR) i `src/server/fiscal/` (certifikat, ZKI, CIS poruka i potpis, posrednici).
+
+## Uvoz podataka iz stare verzije
+
+Stara verzija (Vite/Supabase) čuva cijelu firmu kao jedan JSON. Prijenos:
+
+1. U staroj verziji: **Postavke → Sigurnosna kopija → Preuzmi kopiju (JSON)**. Prihvaćaju se i dnevne kopije
+   (`backup:<firma>:<datum>` → `{ date, savedAt, data }`), omotači `{ data }` / `{ db }` i zapisi po kolekciji
+   (`db:<firma>:items`, … — i kao redci `[{ key, value }]` iz tablice `app_kv`).
+2. Ovdje: **Postavke → Uvoz i izvoz**, ispustite datoteku (do 256 MB; šalje se u dijelovima). Prvo se prikaže analiza:
+   prepoznati oblik, broj zapisa po vrsti, upozorenja (nepostojeće veze, dupli serijski, nečitljivi datumi i brojevi,
+   nepoznati statusi, država „EU" bez ISO oznake…) i primjer preslikavanja. Ništa se ne upisuje dok ne potvrdite.
+3. **Uvezi u novu firmu** (preporučeno): stvara se firma i u njoj novi administrator (`vaše-ime+naziv-firme@domena`)
+   s nasumičnom lozinkom koja se prikaže samo jednom — korisnik pripada jednoj firmi, pa se sadašnji račun ne premješta.
+   **Uvoz u trenutnu firmu** traži potvrdu ako firma nije prazna; postojeći zapisi se preskaču po prirodnom ključu
+   (serijski + razlikovna napomena, OIB ili naziv partnera, proizvođač + model, godina + redni broj računa, broj dokumenta).
+
+Što se prenosi: skladišta, kategorije, modeli, statusi (zastavice `inStock/sold/rented/rma/returning/reserved/writtenOff`
+→ vrsta statusa), usluge, partneri, dogovorene cijene, uređaji (stanje po statusu, uz pravilo „uređaj na skladištu je čist"),
+računi (račun/predujam/storno/odobrenje, stavke, uplate ili stari `paidDate`, naknade, veza na ugovor i razdoblje —
+brojevi ostaju, zbrojevi se preračunaju, brojač se podiže pa nova numeracija nastavlja), ugovori (cijene, plan naplate i
+status po uređaju, sezona, preskočena razdoblja), ručni upisi najma, ponude, narudžbenice, primke, međuskladišnice,
+servisni nalozi, ulazni računi, troškovi (ponavljanje i izmjene po mjesecu) i stari dnevnik. Korisnici se samo
+popisuju (stara verzija čuva lozinke kao tekst) — dodajte ih u Postavke → Korisnici. Uvoz je jedna transakcija
+(uspije sve ili ništa); 20.000 uređaja i 12.000 računa upišu se za ~6 s. Kod: `src/server/import/`
+(`legacy*.ts` pretvorba, `run*.ts` upis, `backup.ts` kopija).
+
+**Sigurnosna kopija ove aplikacije** (isti ekran): „Izvoz sigurnosne kopije" preuzima cijelu firmu kao
+`{ format: 'erp-wms-backup', version: 1, … }` (bez lozinki, sesija i fiskalnog certifikata; prilozi u base64),
+a „Vrati iz sigurnosne kopije" je vraća u **novu** firmu. Vratiti se može datoteka do 256 MB (`MAX_UPLOAD_BYTES`
+u `src/server/import/upload.ts`); ekran upozori ako bi kopija bila veća (najčešće zbog priloga). Pri vraćanju se
+prilozi provjeravaju kao pri slanju (vrsta po sadržaju, do 2 MB, samo uz uređaje), a postavke firme (valuta, logo,
+brojevi) svode na dopuštene vrijednosti — odbačeno je u upozorenjima analize. Ogledna stara baza: `scripts/fixtures/legacy-sample.json`.
+
 ## Nije (još) napravljeno
 
-- izravno slanje eRačuna posredniku i fiskalizacija (XML se generira; potreban je ugovor s posrednikom i API ključ)
+- posrednik Moj-eRačun (sučelje postoji, provedba nije), provjera kupca u AMS-u, primanje ulaznih eRačuna
 - portal za klijente (prijava kvara s njihove strane)
-- čitanje naljepnica kamerom i OCR (pretraga radi s ručnim ili USB/Bluetooth skenerom barkoda)
+- OCR teksta s naljepnica bez barkoda (barkodovi i QR se čitaju kamerom i skenerom)
 - slanje dokumenata e-poštom iz programa (ispis → „Spremi kao PDF")

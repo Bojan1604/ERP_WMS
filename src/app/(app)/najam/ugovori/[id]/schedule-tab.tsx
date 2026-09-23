@@ -48,10 +48,10 @@ export function ScheduleTab({ contract: c, items, year: y }: { contract: Contrac
         </p>
       </div>
       <TableWrap>
-        <table className="data-table compact">
+        <table className="data-table no-stack compact [&_td]:whitespace-nowrap">
           <thead>
             <tr>
-              <th>Uređaj</th>
+              <th className="sticky left-0 z-[2] bg-panel-2">Uređaj</th>
               <th className="num">Mjesečno</th>
               {MONTHS_SHORT.map((m, i) => (
                 <th key={m} className={cn('num', hl(i))}>
@@ -64,7 +64,7 @@ export function ScheduleTab({ contract: c, items, year: y }: { contract: Contrac
           <tbody>
             {rows.map((r) => (
               <tr key={r.id}>
-                <td>
+                <td className="sticky left-0 z-[1] bg-panel">
                   <Link prefetch={false} href={`/skladiste/${r.itemId}`} className="link font-mono text-sm">
                     {r.serial}
                   </Link>
@@ -88,7 +88,7 @@ export function ScheduleTab({ contract: c, items, year: y }: { contract: Contrac
           </tbody>
           <tfoot>
             <tr>
-              <td>Naplata (rate)</td>
+              <td className="sticky left-0 z-[1]">Naplata (rate)</td>
               <td className="num">{amount(sum(rows.map((r) => r.monthly)))}</td>
               {billing.map((v, i) => (
                 <td key={i} className={cn('num', hl(i))}>
@@ -98,7 +98,7 @@ export function ScheduleTab({ contract: c, items, year: y }: { contract: Contrac
               <td className="num">{eur(sum(billing))}</td>
             </tr>
             <tr>
-              <td className="font-normal text-fg-2">Obračun (mjesečno)</td>
+              <td className="sticky left-0 z-[1] font-normal text-fg-2">Obračun (mjesečno)</td>
               <td />
               {accrual.map((v, i) => (
                 <td key={i} className={cn('num font-normal text-fg-2', hl(i))}>

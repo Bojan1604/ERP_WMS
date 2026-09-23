@@ -95,6 +95,13 @@ test('escape posebnih znakova', () => {
   assert.equal(xmlEscape(`a<b>&'"`), 'a&lt;b&gt;&amp;&apos;&quot;');
 });
 
+test('valuta u atributu currencyID se escapira (obrana i za neispravnu vrijednost u bazi)', () => {
+  const { xml } = buildUbl({ ...base, currency: 'EUR"><x a="' });
+  assert.doesNotMatch(xml, /currencyID="EUR"><x/);
+  assert.match(xml, /currencyID="EUR&quot;&gt;&lt;x a=&quot;"/);
+  assert.match(xml, /<cbc:DocumentCurrencyCode>EUR&quot;&gt;&lt;x a=&quot;<\/cbc:DocumentCurrencyCode>/);
+});
+
 test('storno 384: negativni iznosi i veza na izvorni račun', () => {
   const { xml, totals } = buildUbl({
     ...base,

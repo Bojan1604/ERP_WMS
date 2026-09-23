@@ -19,6 +19,7 @@ import {
   type InvoiceInput,
 } from '@/server/services/invoices';
 import { searchDevices } from '@/server/queries/sales';
+import { afterIssue, fiscalizeInvoice, reportLatestPayment, sendEInvoice, withOutcome } from '@/server/fiscal';
 
 const zLine = z.object({
   kind: z.enum(['DEVICE', 'MODEL', 'SERVICE', 'MANUAL']),
@@ -60,14 +61,18 @@ const zInvoice = z.object({
   discountAmount: zMoney.refine((v) => v >= 0, 'Popust ne može biti negativan'),
   advanceAmount: zMoney.refine((v) => v >= 0, 'Predujam ne može biti negativan'),
   charges: z.array(zCharge).default([]),
+  paymentMethod: z.enum(['TRANSFER', 'CASH', 'CARD', 'OTHER']).default('TRANSFER'),
   description: zOptText,
   note: zOptText,
   lines: z.array(zLine).min(1, 'Račun nema stavki'),
 });
 
-/** Spremanje nacrta; uz `issue` se u istoj transakciji i izdaje. */
-export const saveInvoice = action({ module: 'sales', level: 'edit' }, zInvoice, async (input, user) =>
-  transaction(async (tx) => {
+/**
+ * Spremanje nacrta; uz `issue` se u istoj transakciji i izdaje. Fiskalizacija
+ * (CIS / eRačun) ide nakon potvrde transakcije i ne ruši izdavanje.
+ */
+export const saveInvoice = action({ module: 'sales', level: 'edit' }, zInvoice, async (input, user) => {
+  const res = await transaction(async (tx) => {
     let contractId: string | null = null;
     let period: string | null = null;
     let type = input.type;
@@ -100,6 +105,7 @@ export const saveInvoice = action({ module: 'sales', level: 'edit' }, zInvoice, 
       period,
       description: input.description,
       note: input.note,
+      paymentMethod: input.paymentMethod,
       lines: input.lines.map((l) => ({ ...l, qty: l.qty || 1 })),
     };
     let id = input.id;
@@ -107,11 +113,14 @@ export const saveInvoice = action({ module: 'sales', level: 'edit' }, zInvoice, 
     else id = (await createDraft(tx, user, data)).id;
     if (input.issue) {
       const { number } = await issueInvoice(tx, user, id);
-      return { message: `Račun ${number} je izdan.`, redirect: `/prodaja/racuni/${id}`, data: { id } };
+      return { message: `Račun ${number} je izdan.`, redirect: `/prodaja/racuni/${id}`, data: { id }, issued: true };
     }
-    return { message: 'Nacrt je spremljen.', redirect: `/prodaja/racuni/${id}`, data: { id } };
-  }),
-);
+    return { message: 'Nacrt je spremljen.', redirect: `/prodaja/racuni/${id}`, data: { id }, issued: false };
+  });
+  const { issued, ...out } = res;
+  if (!issued) return out;
+  return { ...out, message: withOutcome(out.message, await afterIssue(out.data.id, user)) };
+});
 
 export const deleteInvoiceDraft = action({ module: 'sales', level: 'edit' }, z.object({ id: zId }), async ({ id }, user) =>
   transaction(async (tx) => {
@@ -125,11 +134,11 @@ export const deleteInvoiceDraft = action({ module: 'sales', level: 'edit' }, z.o
 export const addInvoicePayment = action(
   { module: 'sales', level: 'edit' },
   z.object({ invoiceId: zId, date: zDate, amount: zMoney, method: zOptText, note: zOptText }),
-  async (p, user) =>
-    transaction(async (tx) => {
-      await addPayment(tx, user, p.invoiceId, p);
-      return { message: 'Uplata je upisana.' };
-    }),
+  async (p, user) => {
+    await transaction((tx) => addPayment(tx, user, p.invoiceId, p));
+    const r = await reportLatestPayment(p.invoiceId, user);
+    return { message: r && !r.ok ? `Uplata je upisana. ${r.message}` : 'Uplata je upisana.' };
+  },
 );
 
 export const deleteInvoicePayment = action({ module: 'sales', level: 'edit' }, z.object({ paymentId: zId }), async ({ paymentId }, user) =>
@@ -139,12 +148,11 @@ export const deleteInvoicePayment = action({ module: 'sales', level: 'edit' }, z
   }),
 );
 
-export const markInvoicePaid = action({ module: 'sales', level: 'edit' }, z.object({ invoiceId: zId, date: zOptDate }), async ({ invoiceId, date }, user) =>
-  transaction(async (tx) => {
-    await markPaid(tx, user, invoiceId, date ?? undefined);
-    return { message: 'Račun je označen plaćenim.' };
-  }),
-);
+export const markInvoicePaid = action({ module: 'sales', level: 'edit' }, z.object({ invoiceId: zId, date: zOptDate }), async ({ invoiceId, date }, user) => {
+  await transaction((tx) => markPaid(tx, user, invoiceId, date ?? undefined));
+  const r = await reportLatestPayment(invoiceId, user);
+  return { message: r && !r.ok ? `Račun je označen plaćenim. ${r.message}` : 'Račun je označen plaćenim.' };
+});
 
 export const markInvoiceUnpaid = action({ module: 'sales', level: 'edit' }, z.object({ invoiceId: zId }), async ({ invoiceId }, user) =>
   transaction(async (tx) => {
@@ -158,22 +166,35 @@ export const markInvoiceUnpaid = action({ module: 'sales', level: 'edit' }, z.ob
 export const stornoInvoiceAction = action(
   { module: 'sales', level: 'edit' },
   z.object({ invoiceId: zId, reason: zOptText, date: zOptDate }),
-  async ({ invoiceId, reason, date }, user) =>
-    transaction(async (tx) => {
-      const s = await stornoInvoice(tx, user, invoiceId, { reason: reason ?? undefined, date: date ?? undefined });
-      return { message: 'Storno je izdan.', redirect: `/prodaja/racuni/${s.id}` };
-    }),
+  async ({ invoiceId, reason, date }, user) => {
+    const s = await transaction((tx) => stornoInvoice(tx, user, invoiceId, { reason: reason ?? undefined, date: date ?? undefined }));
+    return { message: withOutcome('Storno je izdan.', await afterIssue(s.id, user)), redirect: `/prodaja/racuni/${s.id}` };
+  },
 );
 
 export const creditNoteAction = action(
   { module: 'sales', level: 'edit' },
   z.object({ invoiceId: zId, description: z.string().trim().min(1, 'Opis je obavezan'), netAmount: zMoney, date: zOptDate }),
-  async ({ invoiceId, description, netAmount, date }, user) =>
-    transaction(async (tx) => {
-      const n = await creditNote(tx, user, invoiceId, { description, netAmount, date: date ?? undefined });
-      return { message: 'Odobrenje je izdano.', redirect: `/prodaja/racuni/${n.id}` };
-    }),
+  async ({ invoiceId, description, netAmount, date }, user) => {
+    const n = await transaction((tx) => creditNote(tx, user, invoiceId, { description, netAmount, date: date ?? undefined }));
+    return { message: withOutcome('Odobrenje je izdano.', await afterIssue(n.id, user)), redirect: `/prodaja/racuni/${n.id}` };
+  },
 );
+
+// ---------------------------------------------------------------- fiskalizacija i eRačun
+
+/** Ponovno slanje u CIS (naknadna dostava) — poruka greške ide korisniku, račun ostaje izdan. */
+export const refiscalizeInvoice = action({ module: 'sales', level: 'edit' }, z.object({ invoiceId: zId }), async ({ invoiceId }, user) => {
+  const r = await fiscalizeInvoice(invoiceId, user);
+  assert(r.ok, r.message);
+  return { message: r.message };
+});
+
+export const sendEInvoiceAction = action({ module: 'sales', level: 'edit' }, z.object({ invoiceId: zId }), async ({ invoiceId }, user) => {
+  const r = await sendEInvoice(invoiceId, user);
+  assert(r.ok, r.message);
+  return { message: r.message };
+});
 
 // ---------------------------------------------------------------- birač uređaja
 

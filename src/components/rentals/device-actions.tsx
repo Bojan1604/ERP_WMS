@@ -62,52 +62,55 @@ export function DeviceBulkBar({ contractId, devices, defaultFrom }: { contractId
 
   return (
     <>
-      <SelectionBar>
-        {(sel, clear) => {
-          const list = sel.map((id) => byId.get(id)).filter((d): d is DeviceInfo => Boolean(d));
-          return (
-            <>
-              <Button size="sm" icon={<Euro className="size-3.5" />} onClick={() => open('price', sel, clear)}>
-                Mjesečna cijena
-              </Button>
-              <Button size="sm" icon={<CalendarRange className="size-3.5" />} onClick={() => open('plan', sel, clear)}>
-                Plan naplate
-              </Button>
-              {list.some((d) => !d.paused) && (
-                <Button
-                  size="sm"
-                  icon={<Pause className="size-3.5" />}
-                  loading={patch.pending}
-                  onClick={() => {
-                    setClearSel(() => clear);
-                    patch.run({ contractId, ids: sel, status: 'PAUSED' });
-                  }}
-                >
-                  Pauziraj
+      {/* na mobitelu traka označenih stoji pri dnu ekrana, iznad donjeg izbornika */}
+      <div className="max-sm:fixed max-sm:inset-x-2 max-sm:bottom-[calc(5.25rem+env(safe-area-inset-bottom))] max-sm:z-30 max-sm:[&>div]:mb-0">
+        <SelectionBar>
+          {(sel, clear) => {
+            const list = sel.map((id) => byId.get(id)).filter((d): d is DeviceInfo => Boolean(d));
+            return (
+              <>
+                <Button size="sm" icon={<Euro className="size-3.5" />} onClick={() => open('price', sel, clear)}>
+                  Mjesečna cijena
                 </Button>
-              )}
-              {list.some((d) => d.paused) && (
-                <Button
-                  size="sm"
-                  icon={<Play className="size-3.5" />}
-                  loading={patch.pending}
-                  onClick={() => {
-                    setClearSel(() => clear);
-                    patch.run({ contractId, ids: sel, status: 'ACTIVE' });
-                  }}
-                >
-                  Nastavi
+                <Button size="sm" icon={<CalendarRange className="size-3.5" />} onClick={() => open('plan', sel, clear)}>
+                  Plan naplate
                 </Button>
-              )}
-              {list.some((d) => d.rented) && (
-                <Button size="sm" variant="danger" icon={<Undo2 className="size-3.5" />} onClick={() => open('remove', sel, clear)}>
-                  Ukloni s ugovora
-                </Button>
-              )}
-            </>
-          );
-        }}
-      </SelectionBar>
+                {list.some((d) => !d.paused) && (
+                  <Button
+                    size="sm"
+                    icon={<Pause className="size-3.5" />}
+                    loading={patch.pending}
+                    onClick={() => {
+                      setClearSel(() => clear);
+                      patch.run({ contractId, ids: sel, status: 'PAUSED' });
+                    }}
+                  >
+                    Pauziraj
+                  </Button>
+                )}
+                {list.some((d) => d.paused) && (
+                  <Button
+                    size="sm"
+                    icon={<Play className="size-3.5" />}
+                    loading={patch.pending}
+                    onClick={() => {
+                      setClearSel(() => clear);
+                      patch.run({ contractId, ids: sel, status: 'ACTIVE' });
+                    }}
+                  >
+                    Nastavi
+                  </Button>
+                )}
+                {list.some((d) => d.rented) && (
+                  <Button size="sm" variant="danger" icon={<Undo2 className="size-3.5" />} onClick={() => open('remove', sel, clear)}>
+                    Ukloni s ugovora
+                  </Button>
+                )}
+              </>
+            );
+          }}
+        </SelectionBar>
+      </div>
 
       <Dialog
         open={mode === 'price'}

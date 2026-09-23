@@ -139,6 +139,7 @@ export const invoiceListSelect = {
   paidDate: true,
   stornoed: true,
   refInvoiceId: true,
+  fiscalStatus: true,
   partner: { select: { id: true, name: true, excluded: true } },
   _count: { select: { lines: { where: { kind: 'DEVICE' } } } },
 } satisfies Prisma.InvoiceSelect;

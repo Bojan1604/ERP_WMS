@@ -2,7 +2,7 @@
 
 import Link, { useLinkStatus } from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Loader2, Menu, Warehouse, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/cn';
@@ -18,6 +18,12 @@ function Icon({ icon: I, active }: { icon: LucideIcon; active: boolean }) {
 export function Sidebar({ perms, company, badges }: { perms: PermissionMap; company: string; badges: Record<string, number> }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  // donja traka na mobitelu otvara isti izbornik
+  useEffect(() => {
+    const onOpen = () => setOpen(true);
+    window.addEventListener('open-nav', onOpen);
+    return () => window.removeEventListener('open-nav', onOpen);
+  }, []);
   const groups = NAV.map((g) => ({ ...g, items: g.items.filter((i) => can(perms, i.module, i.level ?? 'view')) })).filter((g) => g.items.length);
 
   // najdulja poklapajuća putanja je aktivna (/skladiste ne smije biti aktivan na /skladiste/izlaz)

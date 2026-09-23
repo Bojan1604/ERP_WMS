@@ -99,3 +99,10 @@ export async function pageAccess(module: Module, level: Exclude<Level, 'none'> =
   if (!can(u.perms, module, level)) redirect(`/zabranjeno?modul=${module}`);
   return u;
 }
+
+/** Radnje nad cijelom firmom (uvoz, izvoz, vraćanje kopije) — samo administrator. */
+export async function requireAdmin(): Promise<SessionUser> {
+  const u = await requireUser();
+  if (u.role !== 'ADMIN') throw new AuthError('Ovu radnju smije samo administrator.', 403);
+  return u;
+}

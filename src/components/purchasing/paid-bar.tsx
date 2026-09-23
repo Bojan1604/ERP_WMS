@@ -14,25 +14,28 @@ export function PaidBar({ action, today }: { action: ServerAction<{ ids: string[
   const { run, pending } = useAction(action);
   return (
     <>
-      <SelectionBar>
-        {(ids, clear) => (
-          <>
-            <Button size="sm" variant="primary" onClick={() => setAsk({ ids, clear })}>
-              Označi plaćeno
-            </Button>
-            <Button
-              size="sm"
-              loading={pending}
-              onClick={async () => {
-                const r = await run({ ids, paidDate: null });
-                if (r.ok) clear();
-              }}
-            >
-              Označi neplaćeno
-            </Button>
-          </>
-        )}
-      </SelectionBar>
+      {/* na mobitelu traka označenih stoji pri dnu ekrana, iznad donjeg izbornika */}
+      <div className="max-sm:fixed max-sm:inset-x-2 max-sm:bottom-[calc(5.25rem+env(safe-area-inset-bottom))] max-sm:z-30 max-sm:[&>div]:mb-0">
+        <SelectionBar>
+          {(ids, clear) => (
+            <>
+              <Button size="sm" variant="primary" onClick={() => setAsk({ ids, clear })}>
+                Označi plaćeno
+              </Button>
+              <Button
+                size="sm"
+                loading={pending}
+                onClick={async () => {
+                  const r = await run({ ids, paidDate: null });
+                  if (r.ok) clear();
+                }}
+              >
+                Označi neplaćeno
+              </Button>
+            </>
+          )}
+        </SelectionBar>
+      </div>
       <Dialog
         open={!!ask}
         onClose={() => setAsk(null)}

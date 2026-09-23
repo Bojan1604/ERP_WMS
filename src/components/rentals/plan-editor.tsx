@@ -86,7 +86,7 @@ export function PlanEditor({
                   </td>
                   <td className="num text-fg-3">{amount === null ? '—' : eur(amount)}</td>
                   <td>
-                    <div className="flex items-center gap-1">
+                    <div className="flex flex-wrap items-center gap-1">
                       <Select
                         aria-label="Sezona"
                         className="w-32"

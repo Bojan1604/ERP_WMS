@@ -5,6 +5,9 @@ import { action } from '@/server/action';
 import { db, transaction } from '@/server/db';
 import { audit, diff } from '@/server/audit';
 import { can } from '@/domain/permissions';
+import { DomainError } from '@/server/errors';
+import { itemEvents } from '@/server/services/items';
+import { addAttachments, photoBytes, withPhotos, zPhotos } from '@/server/services/attachments';
 import { zBool, zId, zIds, zMoney, zOptDate, zOptId, zOptInt, zOptMoney, zOptText, zReq } from '@/server/zod';
 import {
   announceReturn, applyStatusChange, bulkEdit, markOut, requestStatusChange, transferItems, updateItem, writeOff,
@@ -62,15 +65,36 @@ export const transferAction = action(
     }),
 );
 
+/** Izlaz iz skladišta; uz njega neobavezne slike naljepnica — svaka postaje prilog svog uređaja. */
 export const markOutAction = action(
   { module: 'warehouse', level: 'ops' },
-  z.object({ itemIds: zIds, partnerId: zOptId, note: zOptText }),
-  async (input, user) =>
-    transaction(async (tx) => {
+  withPhotos(z.object({ itemIds: zIds, partnerId: zOptId, note: zOptText, photos: zPhotos })),
+  async ({ photos, ...input }, user) => {
+    const files = await photoBytes(photos);
+    return transaction(async (tx) => {
       const r = await markOut(tx, user, input);
-      await audit(tx, user, { entity: 'item', action: 'out', summary: `Izlaz iz skladišta (${kom(r.count)})`, diff: { itemIds: input.itemIds } });
-      return { message: `Označeno kao izašlo iz skladišta (${kom(r.count)}).` };
-    }),
+      const ids = new Set(input.itemIds);
+      const byItem = new Map<string, typeof files>();
+      for (const f of files) {
+        if (!f.target || !ids.has(f.target)) throw new DomainError('Slika nije povezana s uređajem koji izlazi.');
+        byItem.set(f.target, [...(byItem.get(f.target) ?? []), f]);
+      }
+      if (byItem.size) {
+        const serials = new Map((await tx.item.findMany({ where: { id: { in: [...byItem.keys()] }, companyId: user.companyId }, select: { id: true, serial: true } })).map((i) => [i.id, i.serial]));
+        for (const [itemId, list] of byItem) {
+          await addAttachments(tx, user, 'item', itemId, list.map((f) => ({ fileName: `Izlaz ${serials.get(itemId) ?? ''}`, data: f.data })));
+        }
+        await itemEvents(tx, user, [...byItem.keys()], { type: 'ATTACHMENT', message: 'Priložena slika naljepnice pri izlazu iz skladišta' });
+      }
+      await audit(tx, user, {
+        entity: 'item',
+        action: 'out',
+        summary: `Izlaz iz skladišta (${kom(r.count)})${files.length ? `, slika: ${files.length}` : ''}`,
+        diff: { itemIds: input.itemIds },
+      });
+      return { message: `Označeno kao izašlo iz skladišta (${kom(r.count)})${files.length ? ` — priloženo slika: ${files.length}` : ''}.` };
+    });
+  },
 );
 
 export const writeOffAction = action(

@@ -41,11 +41,11 @@ export function OverviewGrid({
 
   return (
     <div className="overflow-x-auto scroll-slim rounded-lg bg-panel shadow-[var(--shadow-panel)]">
-      <table className="data-table compact [&_td]:whitespace-nowrap">
+      <table className="data-table no-stack compact [&_td]:whitespace-nowrap">
         <thead>
           <tr>
-            <th className="sticky left-0 z-[2] w-40 min-w-40 max-w-40 bg-panel-2">Klijent</th>
-            <th className="sticky left-40 z-[2] bg-panel-2">Serijski</th>
+            <th className="sticky left-0 z-[2] w-40 min-w-40 max-w-40 bg-panel-2 max-sm:w-28 max-sm:min-w-28 max-sm:max-w-28">Klijent</th>
+            <th className="sticky left-40 z-[2] bg-panel-2 max-sm:static">Serijski</th>
             <th>Ugovor</th>
             <th>Model</th>
             <th>Kategorija</th>
@@ -62,10 +62,10 @@ export function OverviewGrid({
         <tbody>
           {rows.map((r) => (
             <tr key={r.itemId}>
-              <td className="sticky left-0 z-[1] w-40 min-w-40 max-w-40 truncate bg-panel" title={r.partner ?? ''}>
+              <td className="sticky left-0 z-[1] w-40 min-w-40 max-w-40 truncate bg-panel max-sm:w-28 max-sm:min-w-28 max-sm:max-w-28 max-sm:shadow-[1px_0_0_var(--color-line)]" title={r.partner ?? ''}>
                 {r.partner ?? <span className="text-fg-4">—</span>}
               </td>
-              <td className="sticky left-40 z-[1] bg-panel">
+              <td className="sticky left-40 z-[1] bg-panel max-sm:static">
                 <Link prefetch={false} href={`/skladiste/${r.itemId}`} className="link font-mono text-sm">
                   {r.serial}
                 </Link>
@@ -96,13 +96,17 @@ export function OverviewGrid({
                   <td
                     key={m}
                     className={cn('num select-none', hl(m), future(m) && !c.manual && 'bg-panel-2/60', c.manual && 'font-bold', canEdit && 'cursor-cell')}
-                    title={c.manual ? 'Ručni upis — dvoklik za izmjenu, prazno vraća izračun' : canEdit ? 'Dvoklik za ručni upis' : undefined}
+                    title={c.manual ? 'Ručni upis — dvoklik (dodir) za izmjenu, prazno vraća izračun' : canEdit ? 'Dvoklik (dodir) za ručni upis' : undefined}
                     onDoubleClick={() => canEdit && setEdit({ itemId: r.itemId, m, value: c.manual && c.v !== null ? String(c.v).replace('.', ',') : '' })}
+                    // na dodirnom zaslonu dvoklik ne radi pouzdano — dovoljan je jedan dodir
+                    onClick={() => canEdit && !editing && window.matchMedia('(pointer: coarse)').matches && setEdit({ itemId: r.itemId, m, value: c.manual && c.v !== null ? String(c.v).replace('.', ',') : '' })}
                   >
                     {editing ? (
                       <input
                         autoFocus
                         aria-label="Ručni iznos"
+                        inputMode="decimal"
+                        enterKeyHint="done"
                         value={edit.value}
                         disabled={save.pending}
                         onChange={(e) => setEdit({ ...edit, value: e.target.value })}
@@ -128,7 +132,7 @@ export function OverviewGrid({
         </tbody>
         <tfoot>
           <tr>
-            <td className="sticky left-0 z-[1]" colSpan={2}>
+            <td className="sticky left-0 z-[1] max-sm:static" colSpan={2}>
               {integer(totals.devices)} uređaja
             </td>
             <td colSpan={4} />

@@ -1,0 +1,87 @@
+import 'server-only';
+import { db } from '../db';
+import { buildUbl, type UblKind } from '@/domain/ubl';
+import type { ChargeInput } from '@/domain/invoice';
+import { UBL_PAYMENT_MEANS } from '@/domain/fiscal';
+import { toISO } from '@/domain/dates';
+import { num } from '@/domain/money';
+import { readMeta } from './issue';
+
+const timeOf = (d: Date | null) =>
+  d ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Zagreb', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(d) : undefined;
+
+/** eRačun (UBL 2.1, HR CIUS-2025) za izdani račun: XML, naziv datoteke i osnovni podaci. Null ako račun ne postoji. */
+export async function invoiceUbl(companyId: string, id: string) {
+  const inv = await db.invoice.findFirst({
+    where: { id, companyId },
+    include: {
+      company: { omit: { fiscalCert: true, fiscalCertPassword: true, eInvoiceApiKey: true } },
+      partner: true,
+      refInvoice: { select: { number: true, date: true, kind: true } },
+      lines: {
+        orderBy: { sort: 'asc' },
+        select: {
+          description: true,
+          unit: true,
+          kpd: true,
+          qty: true,
+          unitPrice: true,
+          discountPct: true,
+          item: { select: { serial: true } },
+          model: { select: { code: true, kpd: true } },
+          service: { select: { kpd: true } },
+        },
+      },
+    },
+  });
+  if (!inv) return null;
+  if (inv.status !== 'ISSUED' || !inv.number) return { inv, xml: null, fileName: null };
+  const c = inv.company;
+  const meta = readMeta(inv.eInvoice);
+  const { xml, fileName } = buildUbl({
+    kind: inv.kind as UblKind,
+    type: inv.type,
+    number: inv.number,
+    issueDate: toISO(inv.date),
+    issueTime: timeOf(inv.issuedAt),
+    dueDate: inv.dueDate ? toISO(inv.dueDate) : null,
+    deliveryDate: inv.deliveryDate ? toISO(inv.deliveryDate) : null,
+    period: inv.period,
+    currency: c.currency,
+    notes: [inv.description, inv.note],
+    seller: { name: c.name, oib: c.oib, vatId: c.vatId, address: c.address, zip: c.zip, city: c.city, country: c.country, iban: c.iban, vatRegistered: c.vatRegistered },
+    // operater: ime i OIB korisnika koji je izdao račun (stariji računi bez OIB-a korisnika nose OIB firme)
+    operator: inv.issuedBy ? { name: meta.operator?.name ?? inv.issuedBy, oib: meta.operator?.oib ?? c.oib } : null,
+    buyer: {
+      name: inv.partner.name,
+      oib: inv.partner.oib,
+      vatId: inv.partner.vatId,
+      address: inv.partner.address,
+      zip: inv.partner.zip,
+      city: inv.partner.city,
+      country: inv.partner.country,
+    },
+    vatRate: num(inv.vatRate),
+    taxCategory: inv.taxCategory,
+    exemptReason: inv.taxExemptReason,
+    discountPct: num(inv.discountPct),
+    discountAmount: num(inv.discountAmount),
+    charges: Array.isArray(inv.charges) ? (inv.charges as unknown as ChargeInput[]) : [],
+    advanceAmount: num(inv.advanceAmount),
+    paymentModel: 'HR00',
+    paymentReference: inv.paymentRef,
+    paymentMeansCode: UBL_PAYMENT_MEANS[inv.paymentMethod],
+    billingReference: inv.refInvoice?.number ? { number: inv.refInvoice.number, date: toISO(inv.refInvoice.date), kind: inv.refInvoice.kind as UblKind } : null,
+    lines: inv.lines.map((l) => ({
+      description: l.description,
+      serial: l.item?.serial ?? null,
+      code: l.model?.code ?? null,
+      kpd: l.kpd ?? l.model?.kpd ?? l.service?.kpd ?? null,
+      unit: l.unit,
+      qty: num(l.qty),
+      unitPrice: num(l.unitPrice),
+      discountPct: num(l.discountPct),
+    })),
+  });
+  return { inv, xml, fileName };
+}

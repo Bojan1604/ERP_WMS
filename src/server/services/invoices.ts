@@ -1,5 +1,5 @@
 import 'server-only';
-import type { InvoiceKind, InvoiceType, LineKind, Prisma } from '@prisma/client';
+import type { InvoiceKind, InvoiceType, LineKind, PaymentMethod, Prisma } from '@prisma/client';
 import type { Tx } from '../db';
 import { DomainError, assert } from '../errors';
 import { nextSeq } from '../numbering';
@@ -8,6 +8,7 @@ import { changeItemStatus, itemEvents, type Actor } from './items';
 import { documentTotals, formatInvoiceNumber, lineShareOfNet, openAmount, paymentReference, INVOICE_KIND_LABEL, type ChargeInput } from '@/domain/invoice';
 import { addDays, formatDate, fromISO, toISO, today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
+import { fiscalAtIssue } from '../fiscal/issue';
 
 // ---------------------------------------------------------------- ulazni oblici
 
@@ -47,6 +48,8 @@ export interface InvoiceInput {
   period?: string | null;
   description?: string | null;
   note?: string | null;
+  /** Način plaćanja — određuje fiskalizaciju (gotovina/kartica → CIS). */
+  paymentMethod?: PaymentMethod;
   lines: LineInput[];
 }
 
@@ -172,6 +175,7 @@ function headerData(input: InvoiceInput) {
     period: input.period ?? null,
     description: input.description ?? null,
     note: input.note ?? null,
+    paymentMethod: input.paymentMethod ?? 'TRANSFER',
   } satisfies Partial<Prisma.InvoiceUncheckedCreateInput>;
 }
 
@@ -246,6 +250,8 @@ export async function issueInvoice(tx: Tx, actor: Actor, id: string) {
   const seq = await nextSeq(tx, actor.companyId, 'INVOICE', year);
   const number = formatInvoiceNumber(seq, inv.company.invoicePremises, inv.company.invoiceDevice, inv.company.invoiceSeparator);
   const termDays = inv.partner.paymentTermDays ?? inv.company.paymentTermDays;
+  // cijele sekunde: isto vrijeme ide u ZKI, u CIS poruku i na ispis
+  const issuedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
   await tx.invoice.update({
     where: { id },
     data: {
@@ -254,17 +260,24 @@ export async function issueInvoice(tx: Tx, actor: Actor, id: string) {
       number,
       paymentRef: paymentReference(seq, year),
       dueDate: inv.dueDate ?? (inv.kind === 'INVOICE' || inv.kind === 'ADVANCE' ? fromISO(addDays(date, termDays)) : null),
-      issuedAt: new Date(),
+      issuedAt,
       issuedBy: actor.name,
     },
   });
-  await recalcInvoice(tx, id);
+  const totals = await recalcInvoice(tx, id);
+  // fiskalizacija: ZKI i stanje PENDING; poziv CIS-a/posrednika ide nakon transakcije
+  const fiscal = await fiscalAtIssue(tx, actor, { paymentMethod: inv.paymentMethod, company: inv.company, partner: inv.partner, seq, issuedAt, total: totals.total });
+  await tx.invoice.update({ where: { id }, data: fiscal });
   await audit(tx, actor, {
     entity: 'invoice',
     entityId: id,
     action: 'issue',
     summary: `${INVOICE_KIND_LABEL[inv.kind]} ${number} izdan za ${inv.partner.name}`,
   });
+  // gotovina i kartica se naplaćuju pri izdavanju
+  if (inv.kind === 'INVOICE' && (inv.paymentMethod === 'CASH' || inv.paymentMethod === 'CARD') && totals.total > 0) {
+    await addPayment(tx, actor, id, { date, amount: totals.total, method: inv.paymentMethod === 'CASH' ? 'Gotovina' : 'Kartica', note: 'Naplaćeno pri izdavanju' });
+  }
   return { number };
 }
 
@@ -349,7 +362,9 @@ export async function stornoInvoice(tx: Tx, actor: Actor, id: string, opts: { da
   assert(inv.status === 'ISSUED', 'Nacrt se ne stornira — obrišite ga.');
   assert(inv.kind === 'INVOICE' || inv.kind === 'ADVANCE', 'Storno i odobrenje se ne storniraju.');
   assert(!inv.stornoed, 'Račun je već storniran.');
-  assert(num(inv.paidTotal) === 0, 'Račun ima uplate — prvo ih uklonite ili izdajte odobrenje.');
+  // gotovina/kartica su naplaćene pri izdavanju — storno je ujedno povrat novca kupcu
+  const paidOnIssue = inv.paymentMethod === 'CASH' || inv.paymentMethod === 'CARD';
+  assert(paidOnIssue || num(inv.paidTotal) === 0, 'Račun ima uplate — prvo ih uklonite ili izdajte odobrenje.');
   assert(num(inv.creditedTotal) === 0, 'Na račun su izdana odobrenja — ostatak iznosa ispravite novim odobrenjem umjesto stornom.');
 
   const date = await correctionDate(tx, actor.companyId, opts.date);
@@ -368,6 +383,7 @@ export async function stornoInvoice(tx: Tx, actor: Actor, id: string, opts: { da
       discountAmount: inv.discountAmount,
       charges: inv.charges as Prisma.InputJsonValue,
       refInvoiceId: inv.id,
+      paymentMethod: inv.paymentMethod,
       contractId: inv.contractId,
       period: inv.period,
       description: `Storno računa ${inv.number}${opts.reason ? ` — ${opts.reason}` : ''}`,
@@ -444,6 +460,7 @@ export async function creditNote(
       taxCategory: inv.taxCategory,
       taxExemptReason: inv.taxExemptReason,
       refInvoiceId: inv.id,
+      paymentMethod: inv.paymentMethod,
       description: `Odobrenje po računu ${inv.number}`,
       createdBy: actor.name,
       lines: { create: [{ sort: 0, kind: 'MANUAL', description: input.description, qty: -1, unitPrice: input.netAmount }] },

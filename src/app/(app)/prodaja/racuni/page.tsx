@@ -13,6 +13,7 @@ import { PageHeader, Notice, TableWrap, Badge, Empty } from '@/components/ui/mis
 import { LinkButton } from '@/components/ui/button';
 import { DateFilter, FilterBar, SearchFilter, SegmentFilter, SelectFilter, ToggleFilter } from '@/components/ui/filters';
 import { Pagination, readPage } from '@/components/ui/pagination';
+import { FISCAL_STATUS_LABEL, FISCAL_STATUS_TONE } from '@/domain/fiscal';
 import { KIND_SHORT, PayBadge, PAY_TONE, rowTone, SortHeader, TYPE_LABEL } from '@/components/sales/list-bits';
 import { amount, date, eur, integer } from '@/lib/format';
 import { cn } from '@/lib/cn';
@@ -85,8 +86,8 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
           options={[{ value: '', label: cur }, ...years.filter((y) => String(y) !== cur).slice(0, 5).map((y) => ({ value: String(y), label: String(y) })), { value: 'sve', label: 'Sve' }]}
         />
         <SearchFilter placeholder="Broj, partner, opis…" />
-      </FilterBar>
-      <FilterBar>
+        {/* na računalu ostali filtri u drugom retku; na mobitelu su svi iza jednog gumba „Filtri" */}
+        <div aria-hidden className="h-0 basis-full max-sm:hidden" />
         <SelectFilter name="partner" placeholder="Svi partneri" options={partners.map((p) => ({ value: p.id, label: p.name }))} />
         <SelectFilter
           name="vrsta"
@@ -177,11 +178,16 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
                         {r.refInvoiceId && <span className="mr-1 text-fg-3">↳</span>}
                         {r.number ?? 'Nacrt'}
                       </Link>
+                      {r.fiscalStatus !== 'NOT_REQUIRED' && (
+                        <Badge tone={FISCAL_STATUS_TONE[r.fiscalStatus]} className="ml-1.5" title={`Fiskalizacija: ${FISCAL_STATUS_LABEL[r.fiscalStatus]}`}>
+                          {r.fiscalStatus === 'SENT' ? 'F' : r.fiscalStatus === 'PENDING' ? 'F čeka' : 'F greška'}
+                        </Badge>
+                      )}
                     </td>
                     <td className="whitespace-nowrap">{date(r.date)}</td>
                     <td className="whitespace-nowrap text-fg-2">{r.dueDate ? date(r.dueDate) : '—'}</td>
-                    <td className="max-w-72">
-                      <Link prefetch={false} href={href} className="block truncate hover:underline">
+                    <td className="max-w-72 max-sm:col-span-2 max-sm:max-w-none">
+                      <Link prefetch={false} href={href} className="block truncate hover:underline max-sm:whitespace-normal">
                         {r.partner.name}
                       </Link>
                       {r.description && <span className="block truncate text-xs text-fg-3">{r.description}</span>}

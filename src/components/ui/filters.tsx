@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState, useTransition, type ReactNode } from 'react';
+import { Children, isValidElement, useEffect, useRef, useState, useTransition, type ReactNode } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Loader2, Search, X } from 'lucide-react';
+import { Loader2, Search, SlidersHorizontal, X } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { controlClass, type Option } from './field';
 
@@ -29,8 +29,56 @@ export function useQueryParams() {
   return { params, set, pending };
 }
 
+/**
+ * Traka filtara. Na mobitelu ostaje vidljiv samo prvi element (obično tražilica),
+ * a ostali su iza gumba „Filtri" (s brojem aktivnih filtara).
+ */
 export function FilterBar({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cn('no-print mb-3 flex flex-wrap items-center gap-2', className)}>{children}</div>;
+  const [open, setOpen] = useState(false);
+  const params = useSearchParams();
+  // tražilica i segmentni odabir ostaju vidljivi; ostalo je na mobitelu iza gumba „Filtri"
+  const items = Children.toArray(children).filter(Boolean);
+  const pinnedTypes: unknown[] = [SearchFilter, SegmentFilter];
+  // iz poslužiteljske komponente klijentski filtri stižu kao „lazy" reference, pa usporedba
+  // tipa ne uspijeva — tada ih prepoznajemo po propsima (SearchFilter: name/placeholder/className, SegmentFilter: name + options)
+  const only = (p: object, keys: string[]) => Object.keys(p).every((k) => keys.includes(k));
+  const isPinned = (c: unknown) => {
+    if (!isValidElement(c)) return false;
+    if (pinnedTypes.includes(c.type)) return true;
+    if (typeof c.type === 'string') return false;
+    const p = (c.props ?? {}) as Record<string, unknown>;
+    const search = only(p, ['name', 'placeholder', 'className']);
+    const segment = only(p, ['name', 'options']) && Array.isArray(p.options);
+    return search || segment;
+  };
+  const pinnedSet = new Set(items.filter(isPinned));
+  if (!pinnedSet.size && items.length) pinnedSet.add(items[0]);
+  const restCount = items.length - pinnedSet.size;
+  const active = [...params.keys()].filter((k) => !['page', 'q', 'sort', 'tab'].includes(k)).length;
+  // redoslijed na računalu ostaje kao u kodu; na mobitelu (order) prvo stoje stalni filtri, pa gumb, pa ostali
+  return (
+    <div className={cn('no-print mb-3 flex flex-wrap items-center gap-2', className)}>
+      {items.map((c, i) =>
+        pinnedSet.has(c) ? (
+          c
+        ) : (
+          <div key={isValidElement(c) && c.key != null ? c.key : i} className={cn('max-sm:order-2 max-sm:w-full sm:contents', open ? 'max-sm:flex max-sm:flex-wrap max-sm:items-center max-sm:gap-2' : 'max-sm:hidden')}>
+            {c}
+          </div>
+        ),
+      )}
+      {restCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className={cn(controlClass, 'order-1 flex h-10 w-auto items-center gap-1.5 sm:hidden', active > 0 && 'border-brand text-brand')}
+        >
+          <SlidersHorizontal className="size-4" />
+          Filtri{active > 0 && ` (${active})`}
+        </button>
+      )}
+    </div>
+  );
 }
 
 export function SearchFilter({ name = 'q', placeholder = 'Traži…', className }: { name?: string; placeholder?: string; className?: string }) {

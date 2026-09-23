@@ -28,13 +28,16 @@ export function formatCell(c: Col, v: Row[string]) {
 export function ReportTable({ columns, rows, totals }: { columns: Col[]; rows: Row[]; totals?: Row | null }) {
   if (!rows.length) return <TableWrap><Empty title="Nema podataka" description="Za odabrane filtre nema zapisa." /></TableWrap>;
   const firstTotalKey = columns[0]?.key;
+  // široke (pivot) tablice na mobitelu ostaju tablice s vodoravnim klizanjem i zaključanim prvim stupcem; ostale postaju kartice
+  const wide = columns.length > 7;
+  const stick = (ci: number, bg: string) => wide && ci === 0 && cn('max-sm:sticky max-sm:left-0 max-sm:shadow-[1px_0_0_var(--color-line)]', bg);
   return (
-    <TableWrap className="max-h-[70vh] overflow-y-auto">
-      <table className="data-table compact">
+    <TableWrap className="max-h-[70vh] overflow-y-auto max-sm:max-h-none">
+      <table className={cn('data-table compact', wide && 'no-stack [&_td]:whitespace-nowrap')}>
         <thead>
           <tr>
-            {columns.map((c) => (
-              <th key={c.key} className={cn(NUMERIC.has(c.kind ?? '') && 'num')}>
+            {columns.map((c, ci) => (
+              <th key={c.key} className={cn(NUMERIC.has(c.kind ?? '') && 'num', stick(ci, 'max-sm:z-[2] max-sm:bg-panel-2'))}>
                 {c.label}
               </th>
             ))}
@@ -47,7 +50,7 @@ export function ReportTable({ columns, rows, totals }: { columns: Col[]; rows: R
                 const f = formatCell(c, r[c.key]);
                 const negative = (c.kind === 'money' || c.kind === 'days') && Number(r[c.key]) < 0;
                 return (
-                  <td key={c.key} className={cn(NUMERIC.has(c.kind ?? '') && 'num', c.kind === 'mono' && 'font-mono text-sm', negative && 'text-bad-strong', ci === 0 && 'font-medium')}>
+                  <td key={c.key} className={cn(NUMERIC.has(c.kind ?? '') && 'num', c.kind === 'mono' && 'font-mono text-sm', negative && 'text-bad-strong', ci === 0 && 'font-medium', stick(ci, 'max-sm:z-[1] max-sm:bg-panel'))}>
                     {f === null ? (
                       <span className="text-fg-4">—</span>
                     ) : ci === 0 && r._href ? (
@@ -64,12 +67,12 @@ export function ReportTable({ columns, rows, totals }: { columns: Col[]; rows: R
           ))}
         </tbody>
         {totals && (
-          <tfoot className="sticky bottom-0">
+          <tfoot className="sticky bottom-0 max-sm:static">
             <tr>
-              {columns.map((c) => {
+              {columns.map((c, ci) => {
                 const v = totals[c.key];
                 return (
-                  <td key={c.key} className={cn(NUMERIC.has(c.kind ?? '') && 'num', Number(v) < 0 && c.kind === 'money' && 'text-bad-strong')}>
+                  <td key={c.key} className={cn(NUMERIC.has(c.kind ?? '') && 'num', Number(v) < 0 && c.kind === 'money' && 'text-bad-strong', stick(ci, 'max-sm:z-[1]'))}>
                     {c.key === firstTotalKey && (v === undefined || v === null) ? 'Ukupno' : (formatCell(c, v ?? null) ?? '')}
                   </td>
                 );

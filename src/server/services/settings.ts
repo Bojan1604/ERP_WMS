@@ -5,6 +5,7 @@ import { audit, diff } from '../audit';
 import { DomainError, assert } from '../errors';
 import type { Actor } from './items';
 import { STATUS_KIND_LABEL } from './items';
+import { MAX_LOGO_BYTES, isCurrencyCode, isValidLogo } from '@/domain/company';
 
 // ---------------------------------------------------------------- firma
 
@@ -39,22 +40,24 @@ export interface CompanyInput {
   statusChangeNeedsApproval: boolean;
 }
 
-export const MAX_LOGO_BYTES = 300 * 1024;
+export { MAX_LOGO_BYTES };
 
 export async function saveCompany(tx: Tx, actor: Actor, input: CompanyInput) {
   const before = await tx.company.findUniqueOrThrow({ where: { id: actor.companyId } });
   if (input.logo) {
     assert(/^data:image\/(png|jpeg|gif|webp|svg\+xml);base64,/.test(input.logo), 'Logo mora biti slika (PNG, JPG, GIF, WebP ili SVG).');
-    assert(input.logo.length * 0.75 <= MAX_LOGO_BYTES * 1.02, 'Logo je prevelik — najviše 300 KB.');
+    assert(isValidLogo(input.logo), 'Logo je prevelik — najviše 300 KB.');
   }
   assert(input.vatRate >= 0 && input.vatRate <= 100, 'Stopa PDV-a mora biti između 0 i 100.');
   assert(input.defaultMarginPct >= 0 && input.defaultMarginPct < 100, 'Bruto marža mora biti između 0 i 100 %.');
   assert(input.invoicePremises.trim() && input.invoiceDevice.trim(), 'Oznaka poslovnog prostora i naplatnog uređaja su obavezne.');
   assert(!/\s/.test(input.invoicePremises + input.invoiceDevice + input.invoiceSeparator), 'Oznake u broju računa ne smiju imati razmake.');
+  const currency = input.currency.trim().toUpperCase();
+  assert(isCurrencyCode(currency), 'Valuta mora biti oznaka od tri slova (npr. EUR).');
   const data = {
     ...input,
     country: input.country.toUpperCase().slice(0, 2),
-    currency: input.currency.toUpperCase().slice(0, 3),
+    currency,
     oib: input.oib?.replace(/\s+/g, '') || null,
     iban: input.iban?.replace(/\s+/g, '').toUpperCase() || null,
   };

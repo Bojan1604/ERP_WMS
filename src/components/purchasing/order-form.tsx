@@ -107,8 +107,11 @@ export function OrderForm({
               const locked = (l.received ?? 0) > 0;
               return (
                 <tr key={l.id ?? `n${i}`}>
-                  <td className="text-fg-3">{i + 1}</td>
-                  <td className="min-w-72">
+                  <td className="text-fg-3">
+                    <span className="sm:hidden">Stavka </span>
+                    {i + 1}
+                  </td>
+                  <td className="min-w-72 max-sm:col-span-2 max-sm:min-w-0">
                     <Combobox
                       options={models}
                       value={l.modelId || null}
@@ -128,7 +131,7 @@ export function OrderForm({
                   </td>
                   <td className="num text-fg-3">{l.received ?? 0}</td>
                   <td className="num">{eur(r2((Number(l.qty) || 0) * (Number(l.unitCost) || 0)))}</td>
-                  <td>
+                  <td className="max-sm:absolute max-sm:right-2 max-sm:top-1.5">
                     <button
                       type="button"
                       disabled={locked}
@@ -144,13 +147,13 @@ export function OrderForm({
             })}
           </tbody>
           <tfoot>
-            <tr>
-              <td colSpan={2}>
+            <tr className="max-sm:[&>td]:before:hidden">
+              <td colSpan={2} className="max-sm:col-span-2">
                 <Button size="sm" variant="ghost" icon={<Plus className="size-4" />} onClick={() => setV((s) => ({ ...s, lines: [...s.lines, { modelId: '', qty: 1, unitCost: 0 }] }))}>
                   Dodaj stavku
                 </Button>
               </td>
-              <td className="num">{v.lines.reduce((a, l) => a + (Number(l.qty) || 0), 0)} kom</td>
+              <td className="num max-sm:col-span-2">{v.lines.reduce((a, l) => a + (Number(l.qty) || 0), 0)} kom</td>
               <td colSpan={2} className="num">
                 Ukupno bez PDV-a
               </td>
@@ -162,9 +165,10 @@ export function OrderForm({
       </Card>
 
       <FormError error={localError ?? error} />
-      <div className="flex justify-end gap-2">
+      {/* na mobitelu traka za spremanje ostaje pri dnu ekrana, iznad donjeg izbornika */}
+      <div className="flex justify-end gap-2 max-lg:sticky max-lg:bottom-[calc(3.75rem+env(safe-area-inset-bottom))] max-lg:z-30 max-lg:-mx-3 max-lg:border-t max-lg:border-line max-lg:bg-panel/95 max-lg:px-3 max-lg:py-2.5 max-lg:backdrop-blur sm:max-lg:-mx-5 sm:max-lg:px-5">
         <LinkButton href={cancelHref}>Odustani</LinkButton>
-        <Button variant="primary" loading={pending} onClick={submit}>
+        <Button variant="primary" loading={pending} onClick={submit} className="max-sm:flex-1">
           Spremi narudžbenicu
         </Button>
       </div>

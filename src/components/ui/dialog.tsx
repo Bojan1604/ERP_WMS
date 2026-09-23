@@ -37,10 +37,15 @@ export function Dialog({
         e.preventDefault();
         onClose();
       }}
-      className={cn('no-print m-auto w-[calc(100vw-2rem)] rounded-xl bg-panel p-0 text-fg shadow-[var(--shadow-pop)] backdrop:bg-black/40', w)}
+      className={cn(
+        'no-print m-auto w-[calc(100vw-2rem)] rounded-xl bg-panel p-0 text-fg shadow-[var(--shadow-pop)] backdrop:bg-black/40',
+        // na mobitelu: list koji izlazi s dna ekrana, cijele širine
+        'max-sm:mb-0 max-sm:w-full max-sm:max-w-none max-sm:rounded-b-none',
+        w,
+      )}
     >
       {open && (
-        <div className="flex max-h-[88vh] flex-col">
+        <div className="flex max-h-[88vh] flex-col max-sm:max-h-[92dvh]">
           <header className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
             <h2 className="text-md font-semibold">{title}</h2>
             <button type="button" onClick={onClose} className="grid size-7 place-items-center rounded-md text-fg-3 hover:bg-muted" aria-label="Zatvori">
@@ -48,7 +53,7 @@ export function Dialog({
             </button>
           </header>
           <div className="min-h-0 flex-1 overflow-y-auto scroll-slim p-4">{children}</div>
-          {footer && <footer className="flex justify-end gap-2 border-t border-line px-4 py-3">{footer}</footer>}
+          {footer && <footer className="flex flex-wrap justify-end gap-2 border-t border-line px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">{footer}</footer>}
         </div>
       )}
     </dialog>

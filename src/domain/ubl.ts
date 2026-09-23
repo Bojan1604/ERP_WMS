@@ -226,7 +226,8 @@ function taxCategoryXml(t: UblTreatment, tag = 'TaxCategory', withName = false) 
 // ---------------------------------------------------------------- dokument
 
 export function buildUbl(input: UblInput): { xml: string; root: 'Invoice' | 'CreditNote'; fileName: string; totals: UblTotals } {
-  const cur = input.currency || 'EUR';
+  // valuta ide u atribut currencyID — escapira se jednom ovdje (obrana i kad u bazi nije ispravna oznaka)
+  const cur = esc(input.currency || 'EUR');
   const credit = input.kind === 'CREDIT_NOTE';
   const storno = input.kind === 'STORNO';
   const advance = input.kind === 'ADVANCE';
@@ -441,7 +442,7 @@ export function buildUbl(input: UblInput): { xml: string; root: 'Invoice' | 'Cre
   <cbc:ProfileID>${profile}</cbc:ProfileID>
   <cbc:ID>${esc(input.number)}</cbc:ID>
 ${head}${notes.map((n) => `\n  <cbc:Note>${esc(n)}</cbc:Note>`).join('')}
-  <cbc:DocumentCurrencyCode>${esc(cur)}</cbc:DocumentCurrencyCode>${
+  <cbc:DocumentCurrencyCode>${cur}</cbc:DocumentCurrencyCode>${
     period ? `\n  <cac:InvoicePeriod><cbc:StartDate>${period.from}</cbc:StartDate><cbc:EndDate>${period.to}</cbc:EndDate></cac:InvoicePeriod>` : ''
   }${ref}
   <cac:AccountingSupplierParty>

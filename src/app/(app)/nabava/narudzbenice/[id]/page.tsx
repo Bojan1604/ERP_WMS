@@ -9,6 +9,7 @@ import { num, r2 } from '@/domain/money';
 import { today } from '@/domain/dates';
 import { Badge, Card, Detail, PageHeader, TableWrap } from '@/components/ui/misc';
 import { LinkButton } from '@/components/ui/button';
+import { MoreMenu } from '@/components/ui/more-menu';
 import { ActionButton } from '@/components/ui/action';
 import { ReceiveDialog } from '@/components/purchasing/receive-dialog';
 import { ORDER_STATUS, RECEIPT_STATUS } from '@/components/purchasing/labels';
@@ -58,32 +59,37 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
                 Pošalji dobavljaču
               </ActionButton>
             )}
-            {canEdit && (order.status === 'ORDERED' || order.status === 'CANCELLED') && received === 0 && (
-              <ActionButton action={orderStatusAction} input={{ id, to: 'DRAFT' as const }} variant="ghost">
-                Vrati u nacrt
-              </ActionButton>
-            )}
-            {canEdit && editable && (
-              <ActionButton
-                action={orderStatusAction}
-                input={{ id, to: 'CANCELLED' as const }}
-                variant="ghost"
-                confirm={received ? 'Dio robe je već zaprimljen. Otkazivanjem se ostatak više ne očekuje. Nastaviti?' : 'Otkazati narudžbenicu?'}
-                confirmLabel="Otkaži narudžbenicu"
-              >
-                Otkaži
-              </ActionButton>
-            )}
-            {canEdit && postedReceipts === 0 && (
-              <ActionButton
-                action={deleteOrderAction}
-                input={{ id }}
-                variant="danger"
-                confirm={`Trajno obrisati narudžbenicu ${order.number}?`}
-                confirmLabel="Obriši"
-              >
-                Obriši
-              </ActionButton>
+            {/* na mobitelu sporedne radnje su iza gumba „Više" */}
+            {canEdit && (((order.status === 'ORDERED' || order.status === 'CANCELLED') && received === 0) || editable || postedReceipts === 0) && (
+              <MoreMenu>
+                {canEdit && (order.status === 'ORDERED' || order.status === 'CANCELLED') && received === 0 && (
+                  <ActionButton action={orderStatusAction} input={{ id, to: 'DRAFT' as const }} variant="ghost">
+                    Vrati u nacrt
+                  </ActionButton>
+                )}
+                {canEdit && editable && (
+                  <ActionButton
+                    action={orderStatusAction}
+                    input={{ id, to: 'CANCELLED' as const }}
+                    variant="ghost"
+                    confirm={received ? 'Dio robe je već zaprimljen. Otkazivanjem se ostatak više ne očekuje. Nastaviti?' : 'Otkazati narudžbenicu?'}
+                    confirmLabel="Otkaži narudžbenicu"
+                  >
+                    Otkaži
+                  </ActionButton>
+                )}
+                {canEdit && postedReceipts === 0 && (
+                  <ActionButton
+                    action={deleteOrderAction}
+                    input={{ id }}
+                    variant="danger"
+                    confirm={`Trajno obrisati narudžbenicu ${order.number}?`}
+                    confirmLabel="Obriši"
+                  >
+                    Obriši
+                  </ActionButton>
+                )}
+              </MoreMenu>
             )}
           </>
         }

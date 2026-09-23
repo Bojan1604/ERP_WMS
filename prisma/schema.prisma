@@ -138,6 +138,7 @@ enum ExpenseSource {
 
 enum RequestKind {
   STATUS_CHANGE
+  RECEIVE // skladištar šalje skenirane serijske brojeve na zaprimanje
 }
 
 enum RequestStatus {

@@ -53,7 +53,7 @@ export function PendingTable({ rows, showContract = true, canIssue, canEdit }: {
   return (
     <div>
       {picked.length > 0 && (
-        <div className="no-print sticky top-0 z-20 mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-nav px-3 py-2 text-nav-fg shadow-[var(--shadow-pop)]">
+        <div className="no-print sticky top-0 z-20 mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-nav px-3 py-2 text-nav-fg shadow-[var(--shadow-pop)] max-sm:fixed max-sm:inset-x-2 max-sm:top-auto max-sm:bottom-[calc(5.25rem+env(safe-area-inset-bottom))] max-sm:z-30 max-sm:mb-0">
           <span className="mr-1 text-sm">
             Označeno: <b className="text-white">{picked.length}</b> · <b className="text-white">{eur(total)}</b>
           </span>
@@ -157,6 +157,8 @@ export function PendingTable({ rows, showContract = true, canIssue, canEdit }: {
           )}
         </table>
       </div>
+      {/* mjesto za traku označenih koja na mobitelu stoji iznad donjeg izbornika */}
+      {picked.length > 0 && <div aria-hidden className="h-32 sm:hidden" />}
 
       <Dialog
         open={ask !== null}

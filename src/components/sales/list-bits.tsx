@@ -55,14 +55,14 @@ export function PayBadge({ state }: { state: PaymentState }) {
 export function rowTone(key: PaymentState['key']): string {
   switch (key) {
     case 'overdue':
-      return '[&>td]:bg-bad-soft/45 [&>td:first-child]:shadow-[inset_3px_0_0_var(--color-bad-strong)]';
+      return '[&>td]:bg-bad-soft/45 [&>td:first-child]:shadow-[inset_3px_0_0_var(--color-bad-strong)] max-sm:bg-bad-soft/45 max-sm:shadow-[inset_3px_0_0_var(--color-bad-strong)] max-sm:[&>td:first-child]:shadow-none!';
     case 'open':
     case 'partial':
-      return '[&>td]:bg-warn-soft/45 [&>td:first-child]:shadow-[inset_3px_0_0_var(--color-warn)]';
+      return '[&>td]:bg-warn-soft/45 [&>td:first-child]:shadow-[inset_3px_0_0_var(--color-warn)] max-sm:bg-warn-soft/45 max-sm:shadow-[inset_3px_0_0_var(--color-warn)] max-sm:[&>td:first-child]:shadow-none!';
     case 'paid':
-      return '[&>td]:bg-ok-soft/35 [&>td:first-child]:shadow-[inset_3px_0_0_var(--color-ok)]';
+      return '[&>td]:bg-ok-soft/35 [&>td:first-child]:shadow-[inset_3px_0_0_var(--color-ok)] max-sm:bg-ok-soft/35 max-sm:shadow-[inset_3px_0_0_var(--color-ok)] max-sm:[&>td:first-child]:shadow-none!';
     case 'draft':
-      return '[&>td]:text-fg-2 [&>td:first-child]:shadow-[inset_3px_0_0_var(--color-line-strong)]';
+      return '[&>td]:text-fg-2 [&>td:first-child]:shadow-[inset_3px_0_0_var(--color-line-strong)] max-sm:shadow-[inset_3px_0_0_var(--color-line-strong)] max-sm:[&>td:first-child]:shadow-none!';
     default:
       return '';
   }
