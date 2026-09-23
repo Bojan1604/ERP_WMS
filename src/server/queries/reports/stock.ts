@@ -1,0 +1,230 @@
+import 'server-only';
+import { Prisma } from '@prisma/client';
+import { db } from '../../db';
+import { addDays, today } from '@/domain/dates';
+import { STATUS_KIND_LABEL } from '../../services/items';
+import { n, opt, type ReportDef, type Row } from './types';
+
+const r2 = (v: number) => Math.round(v * 100) / 100;
+const iso = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
+/** Uređaji isključenih partnera ne ulaze u izvještaje. */
+const notExcluded = Prisma.sql`(hp.id IS NULL OR hp."excluded" = false)`;
+
+const AGE = [
+  { key: 'a3', label: 'do 3 mj.', from: 0, to: 3 },
+  { key: 'a6', label: '3–6 mj.', from: 3, to: 6 },
+  { key: 'a12', label: '6–12 mj.', from: 6, to: 12 },
+  { key: 'a24', label: '12–24 mj.', from: 12, to: 24 },
+  { key: 'a24p', label: 'više od 24', from: 24, to: 100000 },
+];
+
+export const stockReports: ReportDef[] = [
+  {
+    slug: 'stanje-po-statusima',
+    title: 'Stanje zalihe po statusima',
+    area: 'Skladište',
+    description: 'Broj uređaja i nabavna vrijednost po statusu.',
+    filters: ['category'],
+    run: async (companyId, f) => {
+      const rows = await db.$queryRaw<Array<{ name: string; kind: string; cnt: number; value: Prisma.Decimal }>>`
+        SELECT s.name, s."kind"::text AS kind, COUNT(it.id)::int AS cnt, COALESCE(SUM(it."cost"), 0) AS value
+        FROM "Item" it
+        JOIN "ItemStatus" s ON s.id = it."statusId"
+        JOIN "DeviceModel" m ON m.id = it."modelId"
+        LEFT JOIN "Partner" hp ON hp.id = it."partnerId"
+        WHERE it."companyId" = ${companyId} AND ${notExcluded} ${opt(!!f.categoryId, Prisma.sql`AND m."categoryId" = ${f.categoryId}`)}
+        GROUP BY s.id ORDER BY s."sort", s.name`;
+      const total = rows.reduce((a, r) => a + r.cnt, 0);
+      const out: Row[] = rows.map((r) => ({
+        name: r.name, kind: STATUS_KIND_LABEL[r.kind as keyof typeof STATUS_KIND_LABEL], count: r.cnt, share: total ? (r.cnt / total) * 100 : null,
+        value: n(r.value), avg: r.cnt ? r2(n(r.value) / r.cnt) : null,
+      }));
+      return {
+        columns: [
+          { key: 'name', label: 'Status' },
+          { key: 'kind', label: 'Vrsta' },
+          { key: 'count', label: 'Uređaja', kind: 'int' },
+          { key: 'share', label: 'Udio', kind: 'pct', sum: true },
+          { key: 'value', label: 'Nabavna vrijednost', kind: 'money' },
+          { key: 'avg', label: 'Prosj. nabavna', kind: 'money', sum: false },
+        ],
+        rows: out,
+        chart: { kind: 'hbar', title: 'Uređaja po statusu', unit: 'int', rows: out.map((r) => ({ label: String(r.name), value: Number(r.count) })) },
+      };
+    },
+  },
+  {
+    slug: 'zaliha-po-kategoriji',
+    title: 'Zaliha po kategoriji i skladištu',
+    area: 'Skladište',
+    description: 'Uređaji na skladištu (raspoloživi) po kategoriji i skladištu, s nabavnom vrijednošću.',
+    filters: ['category'],
+    run: async (companyId, f) => {
+      const rows = await db.$queryRaw<Array<{ category: string | null; warehouse: string | null; cnt: number; value: Prisma.Decimal; models: number }>>`
+        SELECT c.name AS category, w.name AS warehouse, COUNT(*)::int AS cnt, SUM(it."cost") AS value, COUNT(DISTINCT m.id)::int AS models
+        FROM "Item" it
+        JOIN "DeviceModel" m ON m.id = it."modelId"
+        LEFT JOIN "Category" c ON c.id = m."categoryId"
+        LEFT JOIN "Warehouse" w ON w.id = it."warehouseId"
+        WHERE it."companyId" = ${companyId} AND it."state" = 'IN_STOCK' ${opt(!!f.categoryId, Prisma.sql`AND m."categoryId" = ${f.categoryId}`)}
+        GROUP BY c.name, w.name ORDER BY c.name NULLS LAST, w.name NULLS LAST`;
+      const byCat = new Map<string, number>();
+      for (const r of rows) byCat.set(r.category ?? 'Bez kategorije', (byCat.get(r.category ?? 'Bez kategorije') ?? 0) + n(r.value));
+      return {
+        columns: [
+          { key: 'category', label: 'Kategorija' },
+          { key: 'warehouse', label: 'Skladište' },
+          { key: 'models', label: 'Modela', kind: 'int', sum: false },
+          { key: 'count', label: 'Uređaja', kind: 'int' },
+          { key: 'value', label: 'Nabavna vrijednost', kind: 'money' },
+        ],
+        rows: rows.map((r) => ({ category: r.category ?? 'Bez kategorije', warehouse: r.warehouse ?? 'Bez skladišta', models: r.models, count: r.cnt, value: n(r.value) })),
+        chart: { kind: 'hbar', title: 'Vrijednost zalihe po kategoriji', rows: [...byCat.entries()].sort((a, b) => b[1] - a[1]).map(([label, value]) => ({ label, value })) },
+      };
+    },
+  },
+  {
+    slug: 'starost-zalihe',
+    title: 'Starost zalihe',
+    area: 'Skladište',
+    description: 'Uređaji na skladištu po modelu i broju mjeseci od zaprimanja — gdje stoji roba koja se ne prodaje.',
+    filters: ['category'],
+    run: async (companyId, f) => {
+      const now = today();
+      const rows = await db.$queryRaw<Array<Record<string, number> & { id: string; model: string; value: Prisma.Decimal; avgDays: number }>>`
+        WITH s AS (
+          SELECT it."modelId", it."cost",
+                 (${now}::date - COALESCE(it."importDate", it."createdAt"::date)) AS days,
+                 (EXTRACT(YEAR FROM age(${now}::date, COALESCE(it."importDate", it."createdAt"::date))) * 12
+                  + EXTRACT(MONTH FROM age(${now}::date, COALESCE(it."importDate", it."createdAt"::date))))::int AS months
+          FROM "Item" it JOIN "DeviceModel" m ON m.id = it."modelId"
+          WHERE it."companyId" = ${companyId} AND it."state" = 'IN_STOCK' ${opt(!!f.categoryId, Prisma.sql`AND m."categoryId" = ${f.categoryId}`)}
+        )
+        SELECT m.id, concat_ws(' ', m.brand, m.name) AS model,
+               COUNT(*) FILTER (WHERE months < 3)::int AS a3,
+               COUNT(*) FILTER (WHERE months >= 3 AND months < 6)::int AS a6,
+               COUNT(*) FILTER (WHERE months >= 6 AND months < 12)::int AS a12,
+               COUNT(*) FILTER (WHERE months >= 12 AND months < 24)::int AS a24,
+               COUNT(*) FILTER (WHERE months >= 24)::int AS a24p,
+               COUNT(*)::int AS total, SUM(s."cost") AS value, AVG(days)::float8 AS "avgDays"
+        FROM s JOIN "DeviceModel" m ON m.id = s."modelId"
+        GROUP BY m.id ORDER BY "avgDays" DESC`;
+      const out: Row[] = rows.map((r) => ({
+        model: r.model, ...Object.fromEntries(AGE.map((a) => [a.key, r[a.key] || null])), total: r.total, value: n(r.value), avgDays: Math.round(r.avgDays),
+      }));
+      const sums = Object.fromEntries(AGE.map((a) => [a.key, rows.reduce((x, r) => x + (r[a.key] ?? 0), 0)]));
+      return {
+        columns: [
+          { key: 'model', label: 'Model' },
+          ...AGE.map((a) => ({ key: a.key, label: a.label, kind: 'int' as const })),
+          { key: 'total', label: 'Ukupno', kind: 'int' },
+          { key: 'value', label: 'Nabavna vrijednost', kind: 'money' },
+          { key: 'avgDays', label: 'Prosj. starost', kind: 'days', sum: false },
+        ],
+        rows: out,
+        chart: { kind: 'bar', unit: 'int', series: [{ key: 'v', label: 'Uređaja' }], data: AGE.map((a) => ({ label: a.label, values: { v: sums[a.key] } })) },
+        note: 'Starost se računa od datuma zaprimanja (ako ga nema — od unosa uređaja).',
+      };
+    },
+  },
+  {
+    slug: 'garancije-istjecu',
+    title: 'Garancije koje istječu',
+    area: 'Skladište',
+    description: 'Prodani uređaji kojima jamstvo istječe u odabranom razdoblju — prilika za produženo jamstvo ili zamjenu.',
+    filters: ['days'],
+    defaultDays: 60,
+    run: async (companyId, f) => {
+      const now = today();
+      const rows = await db.$queryRaw<Array<{ id: string; serial: string; model: string; partner: string | null; partnerId: string | null; start: Date; ends: Date; left: number }>>`
+        SELECT it.id, it.serial, concat_ws(' ', m.brand, m.name) AS model, hp.name AS partner, hp.id AS "partnerId",
+               it."warrantyStart" AS start, (it."warrantyStart" + make_interval(months => it."warrantyMonths"))::date AS ends,
+               ((it."warrantyStart" + make_interval(months => it."warrantyMonths"))::date - ${now}::date) AS left
+        FROM "Item" it
+        JOIN "DeviceModel" m ON m.id = it."modelId"
+        LEFT JOIN "Partner" hp ON hp.id = it."partnerId"
+        WHERE it."companyId" = ${companyId} AND it."state" = 'SOLD' AND it."warrantyStart" IS NOT NULL AND it."warrantyMonths" > 0 AND ${notExcluded}
+          AND (it."warrantyStart" + make_interval(months => it."warrantyMonths"))::date BETWEEN ${now}::date AND ${addDays(now, f.days)}::date
+        ORDER BY ends, it.serial
+        LIMIT 2000`;
+      return {
+        columns: [
+          { key: 'serial', label: 'Serijski broj', kind: 'mono' },
+          { key: 'model', label: 'Model' },
+          { key: 'partner', label: 'Kupac' },
+          { key: 'start', label: 'Prodano', kind: 'date' },
+          { key: 'ends', label: 'Jamstvo do', kind: 'date' },
+          { key: 'left', label: 'Preostalo', kind: 'days', sum: false },
+        ],
+        rows: rows.map((r) => ({ serial: r.serial, model: r.model, partner: r.partner, start: iso(r.start), ends: iso(r.ends), left: r.left, _href: `/skladiste/${r.id}` })),
+        totals: { serial: `${rows.length} uređaja` },
+      };
+    },
+  },
+  {
+    slug: 'otpisani-uredaji',
+    title: 'Otpisani uređaji',
+    area: 'Skladište',
+    description: 'Uređaji otpisani u godini, s razlogom i nabavnom vrijednošću (gubitak).',
+    filters: ['year'],
+    run: async (companyId, f) => {
+      const rows = await db.$queryRaw<Array<{ id: string; serial: string; model: string; date: Date | null; reason: string | null; cost: Prisma.Decimal }>>`
+        SELECT it.id, it.serial, concat_ws(' ', m.brand, m.name) AS model, it."writeOffDate" AS date, it."writeOffReason" AS reason, it."cost"
+        FROM "Item" it JOIN "DeviceModel" m ON m.id = it."modelId"
+        WHERE it."companyId" = ${companyId} AND it."state" = 'WRITTEN_OFF'
+          AND EXTRACT(YEAR FROM COALESCE(it."writeOffDate", it."updatedAt"::date)) = ${f.year}
+        ORDER BY it."writeOffDate" DESC NULLS LAST, it.serial`;
+      return {
+        columns: [
+          { key: 'serial', label: 'Serijski broj', kind: 'mono' },
+          { key: 'model', label: 'Model' },
+          { key: 'date', label: 'Datum otpisa', kind: 'date' },
+          { key: 'reason', label: 'Razlog' },
+          { key: 'cost', label: 'Nabavna vrijednost', kind: 'money' },
+        ],
+        rows: rows.map((r) => ({ serial: r.serial, model: r.model, date: iso(r.date), reason: r.reason, cost: n(r.cost), _href: `/skladiste/${r.id}` })),
+        totals: rows.length ? { serial: `${rows.length} uređaja`, cost: r2(rows.reduce((a, r) => a + n(r.cost), 0)) } : null,
+      };
+    },
+  },
+  {
+    slug: 'servis-po-modelu',
+    title: 'Servis po modelu',
+    area: 'Servis',
+    description: 'Servisni nalozi po modelu: otvoreni i zatvoreni, jamstveni, trajanje popravka i udio kvarova.',
+    filters: ['year'],
+    run: async (companyId, f) => {
+      const rows = await db.$queryRaw<Array<{ model: string | null; total: number; open: number; closed: number; warranty: number; avgDays: number | null; cost: Prisma.Decimal; devices: number | null }>>`
+        SELECT concat_ws(' ', m.brand, m.name) AS model, COUNT(*)::int AS total,
+               COUNT(*) FILTER (WHERE so."status" IN ('REPORTED','RECEIVED','DIAGNOSIS','AT_SUPPLIER'))::int AS open,
+               COUNT(*) FILTER (WHERE so."status" NOT IN ('REPORTED','RECEIVED','DIAGNOSIS','AT_SUPPLIER'))::int AS closed,
+               COUNT(*) FILTER (WHERE so."underWarranty")::int AS warranty,
+               AVG(so."closedAt" - so."reportedAt")::float8 AS "avgDays",
+               SUM(so."cost") AS cost,
+               (SELECT COUNT(*)::int FROM "Item" x WHERE x."modelId" = m.id) AS devices
+        FROM "ServiceOrder" so
+        LEFT JOIN "Item" it ON it.id = so."itemId"
+        LEFT JOIN "DeviceModel" m ON m.id = it."modelId"
+        LEFT JOIN "Partner" hp ON hp.id = so."partnerId"
+        WHERE so."companyId" = ${companyId} AND EXTRACT(YEAR FROM so."reportedAt") = ${f.year} AND ${notExcluded}
+        GROUP BY m.id ORDER BY total DESC`;
+      return {
+        columns: [
+          { key: 'model', label: 'Model' },
+          { key: 'total', label: 'Naloga', kind: 'int' },
+          { key: 'open', label: 'Otvoreno', kind: 'int' },
+          { key: 'closed', label: 'Zatvoreno', kind: 'int' },
+          { key: 'warranty', label: 'U jamstvu', kind: 'int' },
+          { key: 'avgDays', label: 'Prosj. trajanje', kind: 'days', sum: false },
+          { key: 'rate', label: 'Udio kvarova', kind: 'pct', sum: false },
+          { key: 'cost', label: 'Trošak', kind: 'money' },
+        ],
+        rows: rows.map((r) => ({
+          model: r.model || 'Nepoznat uređaj', total: r.total, open: r.open, closed: r.closed, warranty: r.warranty,
+          avgDays: r.avgDays === null ? null : Math.round(r.avgDays * 10) / 10, rate: r.devices ? Math.round((r.total / r.devices) * 1000) / 10 : null, cost: n(r.cost),
+        })),
+        chart: { kind: 'hbar', title: 'Servisnih naloga po modelu', unit: 'int', rows: rows.slice(0, 10).map((r) => ({ label: r.model || 'Nepoznat uređaj', value: r.total })) },
+      };
+    },
+  },
+];

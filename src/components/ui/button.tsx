@@ -62,8 +62,17 @@ export function LinkButton({
   children?: ReactNode;
   target?: string;
 }) {
+  // izvozi (CSV, XML) su API rute — obična poveznica, bez klijentske navigacije i prefetcha
+  if (href.startsWith('/api/')) {
+    return (
+      <a href={href} target={target} className={buttonClass(variant, size, className)}>
+        {icon}
+        {children}
+      </a>
+    );
+  }
   return (
-    <Link href={href} target={target} className={buttonClass(variant, size, className)}>
+    <Link href={href} target={target} prefetch={false} className={buttonClass(variant, size, className)}>
       {icon}
       {children}
     </Link>

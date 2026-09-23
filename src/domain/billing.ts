@@ -151,7 +151,9 @@ export function devicePlan(c: ContractTerms, d: ContractDevice): PlanPeriod[] {
     }
     if (c.endDate && (!to || to > c.endDate)) to = c.endDate;
     return { ...p, to };
-  });
+  })
+    // razdoblje koje počinje nakon kraja ugovora (ili sljedećeg razdoblja) ne postoji
+    .filter((p) => !p.to || p.to >= p.from);
 }
 
 /** Sva zaduženja uređaja u rasponu razdoblja (uključivo). */

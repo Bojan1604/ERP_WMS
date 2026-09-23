@@ -1,0 +1,109 @@
+import Link from 'next/link';
+import { Download, Plus, Users } from 'lucide-react';
+import { pageAccess } from '@/server/auth';
+import { listPartners } from '@/server/queries/partners';
+import { can } from '@/domain/permissions';
+import { Badge, Empty, PageHeader, TableWrap } from '@/components/ui/misc';
+import { LinkButton } from '@/components/ui/button';
+import { FilterBar, SearchFilter, SegmentFilter, ToggleFilter } from '@/components/ui/filters';
+import { Pagination, readPage } from '@/components/ui/pagination';
+import { eur, integer } from '@/lib/format';
+
+export const metadata = { title: 'Partneri' };
+
+type Params = Record<string, string | string[] | undefined>;
+
+export default async function PartnersPage({ searchParams }: { searchParams: Promise<Params> }) {
+  const user = await pageAccess('partners');
+  const params = await searchParams;
+  const page = readPage(params, 50);
+  const { rows, total } = await listPartners(user.companyId, params, page);
+  const qs = new URLSearchParams(Object.entries(params).filter((e): e is [string, string] => typeof e[1] === 'string' && e[0] !== 'page')).toString();
+
+  return (
+    <>
+      <PageHeader
+        title="Partneri"
+        subtitle="Kupci i dobavljači"
+        actions={
+          <>
+            <LinkButton href={`/api/partneri${qs ? `?${qs}` : ''}`} icon={<Download className="size-4" />}>
+              CSV
+            </LinkButton>
+            {can(user.perms, 'partners', 'edit') && (
+              <LinkButton href="/partneri/novi" variant="primary" icon={<Plus className="size-4" />}>
+                Novi partner
+              </LinkButton>
+            )}
+          </>
+        }
+      />
+      <FilterBar>
+        <SearchFilter placeholder="Naziv, OIB, mjesto…" />
+        <SegmentFilter
+          name="tip"
+          options={[
+            { value: '', label: 'Svi' },
+            { value: 'kupci', label: 'Kupci' },
+            { value: 'dobavljaci', label: 'Dobavljači' },
+          ]}
+        />
+        <ToggleFilter name="iskljuceni" label="Samo isključeni iz obračuna" />
+      </FilterBar>
+      <TableWrap>
+        {rows.length ? (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Naziv</th>
+                <th>OIB</th>
+                <th>Mjesto</th>
+                <th>Uloga</th>
+                <th className="num">Otvoreno</th>
+                <th className="num">Uređaja</th>
+                <th className="num">Ugovora</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((p) => (
+                <tr key={p.id}>
+                  <td className="max-w-80">
+                    <Link prefetch={false} href={`/partneri/${p.id}`} className="font-medium hover:underline">
+                      {p.name}
+                    </Link>
+                    {p.excluded && (
+                      <Badge tone="neutral" className="ml-2" title="Ne ulazi u izvještaje ni nadzornu ploču">
+                        isključen
+                      </Badge>
+                    )}
+                    {p.note && (
+                      <Badge tone="warn" className="ml-1.5" title={p.note}>
+                        napomena
+                      </Badge>
+                    )}
+                    {(p.email || p.phone) && <div className="truncate text-xs text-fg-3">{[p.email, p.phone].filter(Boolean).join(' · ')}</div>}
+                  </td>
+                  <td className="font-mono text-sm">{p.oib ?? <span className="text-fg-4">—</span>}</td>
+                  <td>
+                    {p.city ?? <span className="text-fg-4">—</span>}
+                    {p.country !== 'HR' && <span className="ml-1.5 text-xs text-fg-3">{p.country}</span>}
+                  </td>
+                  <td className="space-x-1 whitespace-nowrap">
+                    {p.isCustomer && <Badge tone="brand">kupac</Badge>}
+                    {p.isSupplier && <Badge tone="info">dobavljač</Badge>}
+                  </td>
+                  <td className="num">{p.open ? <span className="font-medium">{eur(p.open)}</span> : <span className="text-fg-4">—</span>}</td>
+                  <td className="num">{p.devices ? integer(p.devices) : <span className="text-fg-4">—</span>}</td>
+                  <td className="num">{p.contracts ? integer(p.contracts) : <span className="text-fg-4">—</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <Empty icon={<Users className="size-5" />} title="Nema partnera" description="Promijenite filtre ili dodajte novog partnera." />
+        )}
+      </TableWrap>
+      <Pagination page={page.page} pageSize={page.pageSize} total={total} params={params} basePath="/partneri" />
+    </>
+  );
+}

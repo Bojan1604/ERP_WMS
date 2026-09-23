@@ -6,7 +6,7 @@ export default function NotFound() {
       <div>
         <h1 className="text-xl">Stranica ne postoji</h1>
         <p className="mt-2 text-fg-3">Zapis je možda obrisan ili poveznica nije ispravna.</p>
-        <Link href="/" className="link mt-4 inline-block">
+        <Link prefetch={false} href="/" className="link mt-4 inline-block">
           Natrag na početnu
         </Link>
       </div>

@@ -65,3 +65,9 @@ test('razlog povrata', () => {
   assert.equal(returnReason(c({ seasonFrom: 5, seasonTo: 9 }), d(), '2026-10-10'), 'Sezona završila');
   assert.equal(returnReason(c(), d(), '2026-10-10'), null);
 });
+
+test('razdoblje iza kraja ugovora se ne naplaćuje', () => {
+  const k = c({ startDate: '2026-01-01', endDate: '2026-06-30' });
+  const ch = deviceCharges(k, d({ monthly: 10, plan: [{ from: '2026-01-01' }, { from: '2026-09-01', billing: 'ONCE' }] }), '2026-01', '2026-12');
+  assert.deepEqual(ch.map((x) => x.period), ['2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06']);
+});

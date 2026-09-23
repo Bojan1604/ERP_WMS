@@ -9,6 +9,7 @@ hrvatskom.
 
 ```
 src/domain/        čista poslovna logika — bez baze, Reacta i `server-only`; 100 % testabilno
+                   (invoice, billing, plan, pricing, tax, expenses, dates, money, hub3, ubl, warehouse, permissions)
 src/server/        samo na poslužitelju
   db.ts            Prisma klijent, `transaction(fn)`
   auth.ts          sesija, `pageAccess(modul, razina)` za stranice, `requireAccess` za API
@@ -53,7 +54,10 @@ src/components/<modul>/  klijentske komponente pojedinog modula
 8. **Prava**: stranica počinje s `const user = await pageAccess('modul', 'view')`; akcija navodi modul i
    razinu. Moduli i razine: `src/domain/permissions.ts`.
 9. **Datoteka preko ~400 linija se dijeli.**
-10. Nazivi ruta i sučelja na hrvatskom, kod (identifikatori) na engleskom, komentari na hrvatskom.
+10. **Poveznice u tablicama imaju `prefetch={false}`** — inače svaki redak pokreće renderiranje na poslužitelju.
+11. **Svaki strani ključ ima indeks** (`@@index([stupac])`); tekstualna pretraga ide na stupce s trigram (GIN) indeksom,
+     a pretraga po povezanoj tablici se razrješava unaprijed u id-eve (vidi `resolveSearch` u queries/warehouse.ts).
+12. Nazivi ruta i sučelja na hrvatskom, kod (identifikatori) na engleskom, komentari na hrvatskom.
 
 ## Naredbe
 
@@ -61,7 +65,9 @@ src/components/<modul>/  klijentske komponente pojedinog modula
 npm run dev            # razvoj (http://localhost:3000)
 npm run typecheck      # tsc --noEmit
 npm test               # testovi domene i servisa (node:test)
-npm run db:push        # shema → baza
+npm run db:push        # shema → baza (razvoj)
+npm run db:deploy      # migracije → baza (produkcija)
+npm run test:db        # integracijski testovi servisa (baza wms_test)
 npm run db:seed        # demo firma (admin@demo.hr / admin123)
 node scripts/smoke.mjs http://localhost:3000 / /skladiste …   # prolaz kroz stranice u pregledniku
 ```

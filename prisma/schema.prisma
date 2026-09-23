@@ -13,12 +13,15 @@
 // =============================================================================
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  // pg_trgm: pretraga po dijelu teksta (ILIKE '%…%') koristi GIN indeks umjesto čitanja cijele tablice
+  extensions = [pg_trgm]
 }
 
 // ---------------------------------------------------------------- enumeracije
@@ -34,20 +37,20 @@ enum Role {
 /// Uloga statusa u logici programa. Naziv i boju statusa firma bira sama,
 /// ali svaki status pripada jednoj od ovih vrsta.
 enum StatusKind {
-  IN_STOCK    // na skladištu, raspoloživ
-  RESERVED    // izašao iz skladišta, čeka potvrdu prodaje (račun/ugovor)
-  SOLD        // prodan
-  RENTED      // u najmu (vezan uz ugovor)
-  SERVICE     // pokvaren / na servisu — automatski otvara servisni nalog
-  RETURNING   // najavljen povrat s terena
+  IN_STOCK // na skladištu, raspoloživ
+  RESERVED // izašao iz skladišta, čeka potvrdu prodaje (račun/ugovor)
+  SOLD // prodan
+  RENTED // u najmu (vezan uz ugovor)
+  SERVICE // pokvaren / na servisu — automatski otvara servisni nalog
+  RETURNING // najavljen povrat s terena
   WRITTEN_OFF // otpisan
-  OTHER       // demo, gratis, kod klijenta, zamjenski…
+  OTHER // demo, gratis, kod klijenta, zamjenski…
 }
 
 enum InvoiceKind {
-  INVOICE     // račun
-  ADVANCE     // račun za predujam
-  STORNO      // poništava cijeli račun
+  INVOICE // račun
+  ADVANCE // račun za predujam
+  STORNO // poništava cijeli račun
   CREDIT_NOTE // knjižno odobrenje — umanjuje dio iznosa
 }
 
@@ -63,10 +66,10 @@ enum InvoiceStatus {
 }
 
 enum LineKind {
-  DEVICE  // konkretan uređaj po serijskom broju
-  MODEL   // model i količina, bez serijskih (ponude)
+  DEVICE // konkretan uređaj po serijskom broju
+  MODEL // model i količina, bez serijskih (ponude)
   SERVICE // usluga iz šifrarnika
-  MANUAL  // slobodna stavka
+  MANUAL // slobodna stavka
 }
 
 enum Billing {
@@ -157,34 +160,34 @@ enum Series {
 // ---------------------------------------------------------------- firma i korisnici
 
 model Company {
-  id        String   @id @default(cuid())
-  name      String
-  oib       String?
-  vatId     String?
-  address   String?
-  zip       String?
-  city      String?
-  country   String   @default("HR")
-  iban      String?
-  bank      String?
-  email     String?
-  phone     String?
-  web       String?
-  logo      String?  // data URL, mali PNG/SVG za ispis dokumenata
-  currency  String   @default("EUR")
+  id       String  @id @default(cuid())
+  name     String
+  oib      String?
+  vatId    String?
+  address  String?
+  zip      String?
+  city     String?
+  country  String  @default("HR")
+  iban     String?
+  bank     String?
+  email    String?
+  phone    String?
+  web      String?
+  logo     String? // data URL, mali PNG/SVG za ispis dokumenata
+  currency String  @default("EUR")
 
-  vatRegistered       Boolean @default(true)
-  vatRate             Decimal @default(25) @db.Decimal(5, 2)
-  overdueDays         Int     @default(30)
-  paymentTermDays     Int     @default(15)
-  quoteValidDays      Int     @default(15)
-  defaultMarginPct    Decimal @default(35) @db.Decimal(5, 2)
-  defaultWarrantyMonths Int   @default(24)
-  rentFallbackPct     Decimal @default(5.5) @db.Decimal(5, 2) // prijedlog najma kao % nabavne
-  invoicePremises     String  @default("PP1")
-  invoiceDevice       String  @default("1")
-  invoiceSeparator    String  @default("/")
-  invoiceFooter       String?
+  vatRegistered             Boolean @default(true)
+  vatRate                   Decimal @default(25) @db.Decimal(5, 2)
+  overdueDays               Int     @default(30)
+  paymentTermDays           Int     @default(15)
+  quoteValidDays            Int     @default(15)
+  defaultMarginPct          Decimal @default(35) @db.Decimal(5, 2)
+  defaultWarrantyMonths     Int     @default(24)
+  rentFallbackPct           Decimal @default(5.5) @db.Decimal(5, 2) // prijedlog najma kao % nabavne
+  invoicePremises           String  @default("PP1")
+  invoiceDevice             String  @default("1")
+  invoiceSeparator          String  @default("/")
+  invoiceFooter             String?
   statusChangeNeedsApproval Boolean @default(true)
 
   createdAt DateTime @default(now())
@@ -218,18 +221,18 @@ model Company {
 }
 
 model User {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   companyId    String
-  email        String   @unique
+  email        String    @unique
   name         String
   passwordHash String
   role         Role
   /// Iznimke od prava uloge: { "warehouse": "edit", "purchasing": "view" }
-  permissions  Json     @default("{}")
-  active       Boolean  @default(true)
+  permissions  Json      @default("{}")
+  active       Boolean   @default(true)
   lastLoginAt  DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   sessions Session[]
@@ -256,7 +259,7 @@ model DocumentCounter {
   companyId String
   series    Series
   year      Int
-  last      Int     @default(0)
+  last      Int    @default(0)
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -300,19 +303,19 @@ model DeviceModel {
   categoryId     String?
   brand          String?
   name           String
-  code           String?  // šifra artikla
-  kpd            String?  // KPD 2025 klasifikacija za eRačun
+  code           String? // šifra artikla
+  kpd            String? // KPD 2025 klasifikacija za eRačun
   salePrice      Decimal? @db.Decimal(14, 2) // cijena bez PDV-a; prednost pred izračunom iz marže
   rentPrice      Decimal? @db.Decimal(14, 2) // mjesečni najam
   marginPct      Decimal? @db.Decimal(5, 2)
   warrantyMonths Int?
   minStock       Int      @default(0)
-  specs          String?  // procesor, ekran, OS…
+  specs          String? // procesor, ekran, OS…
   active         Boolean  @default(true)
   createdAt      DateTime @default(now())
 
-  company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  category        Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  company         Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  category        Category?           @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   items           Item[]
   priceAgreements PriceAgreement[]
   orderLines      PurchaseOrderLine[]
@@ -321,6 +324,8 @@ model DeviceModel {
 
   @@unique([companyId, brand, name])
   @@index([companyId, categoryId])
+  // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
+  @@index([categoryId])
 }
 
 model ItemStatus {
@@ -341,16 +346,16 @@ model ItemStatus {
 }
 
 model Service {
-  id        String   @id @default(cuid())
+  id        String  @id @default(cuid())
   companyId String
   name      String
-  unit      String   @default("kom")
-  price     Decimal  @default(0) @db.Decimal(14, 2)
+  unit      String  @default("kom")
+  price     Decimal @default(0) @db.Decimal(14, 2)
   kpd       String?
-  active    Boolean  @default(true)
+  active    Boolean @default(true)
 
-  company Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  lines   InvoiceLine[]
+  company    Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  lines      InvoiceLine[]
   quoteLines QuoteLine[]
 
   @@unique([companyId, name])
@@ -407,6 +412,7 @@ model Partner {
   priceAgreements  PriceAgreement[]
 
   @@index([companyId, name])
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "Partner_name_trgm_idx")
   @@index([companyId, oib])
 }
 
@@ -424,6 +430,8 @@ model PriceAgreement {
 
   @@unique([partnerId, modelId])
   @@index([companyId])
+  // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
+  @@index([modelId])
 }
 
 // ---------------------------------------------------------------- uređaji
@@ -440,9 +448,9 @@ model Item {
   state          StatusKind
   warehouseId    String?
   supplierId     String?
-  partnerId      String?    // kupac / najmoprimac / kod koga je uređaj
-  invoiceId      String?    // zadnji račun na kojem je uređaj (prodaja ili rata)
-  receiptId      String?    // primka kojom je zaprimljen
+  partnerId      String? // kupac / najmoprimac / kod koga je uređaj
+  invoiceId      String? // zadnji račun na kojem je uređaj (prodaja ili rata)
+  receiptId      String? // primka kojom je zaprimljen
   cost           Decimal    @default(0) @db.Decimal(14, 2)
   salePrice      Decimal?   @db.Decimal(14, 2) // stvarno ostvarena prodajna cijena (neto)
   rentPrice      Decimal?   @db.Decimal(14, 2)
@@ -463,29 +471,40 @@ model Item {
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
 
-  company      Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  model        DeviceModel    @relation(fields: [modelId], references: [id])
-  status       ItemStatus     @relation(fields: [statusId], references: [id])
-  warehouse    Warehouse?     @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
-  supplier     Partner?       @relation("ItemSupplier", fields: [supplierId], references: [id], onDelete: SetNull)
-  partner      Partner?       @relation("ItemHolder", fields: [partnerId], references: [id], onDelete: SetNull)
-  invoice      Invoice?       @relation("ItemLastInvoice", fields: [invoiceId], references: [id], onDelete: SetNull)
-  receipt      GoodsReceipt?  @relation(fields: [receiptId], references: [id], onDelete: SetNull)
-  contractItem ContractItem?
-  events       ItemEvent[]
-  invoiceLines InvoiceLine[]
-  quoteLines   QuoteLine[]
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  model         DeviceModel    @relation(fields: [modelId], references: [id])
+  status        ItemStatus     @relation(fields: [statusId], references: [id])
+  warehouse     Warehouse?     @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  supplier      Partner?       @relation("ItemSupplier", fields: [supplierId], references: [id], onDelete: SetNull)
+  partner       Partner?       @relation("ItemHolder", fields: [partnerId], references: [id], onDelete: SetNull)
+  invoice       Invoice?       @relation("ItemLastInvoice", fields: [invoiceId], references: [id], onDelete: SetNull)
+  receipt       GoodsReceipt?  @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+  contractItem  ContractItem?
+  events        ItemEvent[]
+  invoiceLines  InvoiceLine[]
+  quoteLines    QuoteLine[]
   serviceOrders ServiceOrder[] @relation("ServiceItem")
   replacements  ServiceOrder[] @relation("ServiceReplacement")
   transferItems TransferItem[]
   rentOverrides RentOverride[]
 
   @@index([companyId, serial])
+  @@index([serial(ops: raw("gin_trgm_ops"))], type: Gin, map: "Item_serial_trgm_idx")
+  @@index([note(ops: raw("gin_trgm_ops"))], type: Gin, map: "Item_note_trgm_idx")
+  @@index([dupNote(ops: raw("gin_trgm_ops"))], type: Gin, map: "Item_dupNote_trgm_idx")
   @@index([companyId, state])
   @@index([companyId, modelId])
   @@index([companyId, partnerId])
   @@index([companyId, warehouseId, state])
   @@index([companyId, createdAt])
+  // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
+  @@index([invoiceId])
+  @@index([modelId])
+  @@index([partnerId])
+  @@index([receiptId])
+  @@index([statusId])
+  @@index([supplierId])
+  @@index([warehouseId])
 }
 
 model ItemEvent {
@@ -493,9 +512,9 @@ model ItemEvent {
   companyId String
   itemId    String
   at        DateTime @default(now())
-  type      String   // RECEIVED, SOLD, RENTED, RETURNED, STATUS, TRANSFER, WRITE_OFF, SERVICE, OUT, EDIT…
+  type      String // RECEIVED, SOLD, RENTED, RETURNED, STATUS, TRANSFER, WRITE_OFF, SERVICE, OUT, EDIT…
   message   String
-  refType   String?  // invoice, contract, receipt, transfer, service
+  refType   String? // invoice, contract, receipt, transfer, service
   refId     String?
   userName  String?
 
@@ -524,6 +543,9 @@ model Transfer {
 
   @@unique([companyId, number])
   @@index([companyId, date])
+  // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
+  @@index([fromWarehouseId])
+  @@index([toWarehouseId])
 }
 
 model TransferItem {
@@ -538,17 +560,17 @@ model TransferItem {
 }
 
 model ApprovalRequest {
-  id            String        @id @default(cuid())
-  companyId     String
-  kind          RequestKind
-  status        RequestStatus @default(PENDING)
+  id          String        @id @default(cuid())
+  companyId   String
+  kind        RequestKind
+  status      RequestStatus @default(PENDING)
   /// STATUS_CHANGE: { itemIds: string[], statusId: string, note?: string }
-  payload       Json
-  requestedBy   String
-  resolvedBy    String?
-  resolveNote   String?
-  createdAt     DateTime      @default(now())
-  resolvedAt    DateTime?
+  payload     Json
+  requestedBy String
+  resolvedBy  String?
+  resolveNote String?
+  createdAt   DateTime      @default(now())
+  resolvedAt  DateTime?
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -558,25 +580,25 @@ model ApprovalRequest {
 // ---------------------------------------------------------------- prodaja
 
 model Quote {
-  id            String      @id @default(cuid())
-  companyId     String
-  number        String
-  date          DateTime    @db.Date
-  validUntil    DateTime?   @db.Date
-  partnerId     String
-  status        QuoteStatus @default(DRAFT)
-  vatRate       Decimal     @db.Decimal(5, 2)
-  discountPct   Decimal     @default(0) @db.Decimal(6, 2)
-  discountAmount Decimal    @default(0) @db.Decimal(14, 2)
-  netTotal      Decimal     @default(0) @db.Decimal(14, 2)
-  vatTotal      Decimal     @default(0) @db.Decimal(14, 2)
-  grandTotal    Decimal     @default(0) @db.Decimal(14, 2)
-  hideSerials   Boolean     @default(false)
-  note          String?
-  invoiceId     String?     @unique
-  createdBy     String?
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  id             String      @id @default(cuid())
+  companyId      String
+  number         String
+  date           DateTime    @db.Date
+  validUntil     DateTime?   @db.Date
+  partnerId      String
+  status         QuoteStatus @default(DRAFT)
+  vatRate        Decimal     @db.Decimal(5, 2)
+  discountPct    Decimal     @default(0) @db.Decimal(6, 2)
+  discountAmount Decimal     @default(0) @db.Decimal(14, 2)
+  netTotal       Decimal     @default(0) @db.Decimal(14, 2)
+  vatTotal       Decimal     @default(0) @db.Decimal(14, 2)
+  grandTotal     Decimal     @default(0) @db.Decimal(14, 2)
+  hideSerials    Boolean     @default(false)
+  note           String?
+  invoiceId      String?     @unique
+  createdBy      String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
 
   company Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
   partner Partner     @relation(fields: [partnerId], references: [id])
@@ -586,6 +608,8 @@ model Quote {
   @@unique([companyId, number])
   @@index([companyId, date])
   @@index([companyId, status])
+  // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
+  @@index([partnerId])
 }
 
 model QuoteLine {
@@ -609,67 +633,71 @@ model QuoteLine {
   service Service?     @relation(fields: [serviceId], references: [id], onDelete: SetNull)
 
   @@index([quoteId])
+  // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
+  @@index([itemId])
+  @@index([modelId])
+  @@index([serviceId])
 }
 
 model Invoice {
-  id             String        @id @default(cuid())
-  companyId      String
-  status         InvoiceStatus @default(DRAFT)
-  kind           InvoiceKind   @default(INVOICE)
-  type           InvoiceType   @default(SALE)
+  id              String        @id @default(cuid())
+  companyId       String
+  status          InvoiceStatus @default(DRAFT)
+  kind            InvoiceKind   @default(INVOICE)
+  type            InvoiceType   @default(SALE)
   /// Redni broj u godini — dodjeljuje se pri izdavanju, nikad se ne ponavlja.
-  seq            Int?
-  year           Int
-  number         String?
-  partnerId      String
-  date           DateTime      @db.Date
-  dueDate        DateTime?     @db.Date
-  deliveryDate   DateTime?     @db.Date
-  vatRate        Decimal       @db.Decimal(5, 2)
+  seq             Int?
+  year            Int
+  number          String?
+  partnerId       String
+  date            DateTime      @db.Date
+  dueDate         DateTime?     @db.Date
+  deliveryDate    DateTime?     @db.Date
+  vatRate         Decimal       @db.Decimal(5, 2)
   /// Porezna kategorija (S, AE, K, G, E, O) i razlog oslobođenja za eRačun.
-  taxCategory    String        @default("S")
+  taxCategory     String        @default("S")
   taxExemptReason String?
-  discountPct    Decimal       @default(0) @db.Decimal(6, 2)
-  discountAmount Decimal       @default(0) @db.Decimal(14, 2)
+  discountPct     Decimal       @default(0) @db.Decimal(6, 2)
+  discountAmount  Decimal       @default(0) @db.Decimal(14, 2)
   /// Neoporezive naknade: [{ kind, label, amount }]
-  charges        Json          @default("[]")
-  advanceAmount  Decimal       @default(0) @db.Decimal(14, 2)
+  charges         Json          @default("[]")
+  advanceAmount   Decimal       @default(0) @db.Decimal(14, 2)
   /// Izvorni račun je storniran (poništen stornom) — nema potraživanja.
-  stornoed       Boolean       @default(false)
+  stornoed        Boolean       @default(false)
   // zbrojevi — preračunavaju se pri svakoj izmjeni stavki ili uplata
-  netTotal       Decimal       @default(0) @db.Decimal(14, 2)
-  vatTotal       Decimal       @default(0) @db.Decimal(14, 2)
-  chargesTotal   Decimal       @default(0) @db.Decimal(14, 2)
-  grandTotal     Decimal       @default(0) @db.Decimal(14, 2)
-  paidTotal      Decimal       @default(0) @db.Decimal(14, 2)
+  netTotal        Decimal       @default(0) @db.Decimal(14, 2)
+  vatTotal        Decimal       @default(0) @db.Decimal(14, 2)
+  chargesTotal    Decimal       @default(0) @db.Decimal(14, 2)
+  grandTotal      Decimal       @default(0) @db.Decimal(14, 2)
+  paidTotal       Decimal       @default(0) @db.Decimal(14, 2)
   /// Zbroj izdanih knjižnih odobrenja na ovaj račun (pozitivan iznos).
-  creditedTotal  Decimal       @default(0) @db.Decimal(14, 2)
-  openAmount     Decimal       @default(0) @db.Decimal(14, 2)
-  costTotal      Decimal       @default(0) @db.Decimal(14, 2)
-  paidDate       DateTime?     @db.Date
-  refInvoiceId   String?       // storno/odobrenje → izvorni
-  contractId     String?
-  period         String?       // YYYY-MM — razdoblje najma koje rata pokriva
-  description    String?
-  note           String?
-  paymentRef     String?       // poziv na broj
+  creditedTotal   Decimal       @default(0) @db.Decimal(14, 2)
+  openAmount      Decimal       @default(0) @db.Decimal(14, 2)
+  costTotal       Decimal       @default(0) @db.Decimal(14, 2)
+  paidDate        DateTime?     @db.Date
+  refInvoiceId    String? // storno/odobrenje → izvorni
+  contractId      String?
+  period          String? // YYYY-MM — razdoblje najma koje rata pokriva
+  description     String?
+  note            String?
+  paymentRef      String? // poziv na broj
   /// Stanje slanja eRačuna: { status, sentAt, id, error }
-  eInvoice       Json          @default("{}")
-  createdBy      String?
-  issuedBy       String?
-  issuedAt       DateTime?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  eInvoice        Json          @default("{}")
+  createdBy       String?
+  issuedBy        String?
+  issuedAt        DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
-  company     Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  partner     Partner       @relation(fields: [partnerId], references: [id])
-  contract    Contract?     @relation(fields: [contractId], references: [id], onDelete: SetNull)
-  refInvoice  Invoice?      @relation("InvoiceCorrections", fields: [refInvoiceId], references: [id], onDelete: SetNull)
-  corrections Invoice[]     @relation("InvoiceCorrections")
-  lines       InvoiceLine[]
-  payments    Payment[]
-  items       Item[]        @relation("ItemLastInvoice")
-  quote       Quote?
+  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  partner       Partner        @relation(fields: [partnerId], references: [id])
+  contract      Contract?      @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  refInvoice    Invoice?       @relation("InvoiceCorrections", fields: [refInvoiceId], references: [id], onDelete: SetNull)
+  corrections   Invoice[]      @relation("InvoiceCorrections")
+  lines         InvoiceLine[]
+  payments      Payment[]
+  items         Item[]         @relation("ItemLastInvoice")
+  quote         Quote?
   serviceOrders ServiceOrder[]
 
   @@unique([companyId, year, seq])
@@ -678,6 +706,9 @@ model Invoice {
   @@index([companyId, status, kind])
   @@index([companyId, openAmount])
   @@index([contractId, period])
+  // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
+  @@index([partnerId])
+  @@index([refInvoiceId])
 }
 
 model InvoiceLine {
@@ -710,6 +741,9 @@ model InvoiceLine {
 
   @@index([invoiceId])
   @@index([itemId])
+  // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
+  @@index([modelId])
+  @@index([serviceId])
 }
 
 model Payment {
@@ -741,7 +775,7 @@ model Contract {
   billingDay       Int?
   billing          Billing        @default(MONTHLY)
   billingMode      BillingMode    @default(IN_ADVANCE)
-  seasonFrom       Int?           // 1–12
+  seasonFrom       Int? // 1–12
   seasonTo         Int?
   terminatedAt     DateTime?      @db.Date
   note             String?
@@ -757,6 +791,8 @@ model Contract {
   @@unique([companyId, number])
   @@index([companyId, status])
   @@index([companyId, partnerId])
+  // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
+  @@index([partnerId])
 }
 
 /// Uređaj na ugovoru s vlastitom mjesečnom cijenom i planom naplate.
@@ -784,8 +820,8 @@ model RentOverride {
   companyId String
   itemId    String
   year      Int
-  month     Int      // 1–12
-  amount    Decimal  @db.Decimal(14, 2)
+  month     Int // 1–12
+  amount    Decimal @db.Decimal(14, 2)
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   item    Item    @relation(fields: [itemId], references: [id], onDelete: Cascade)
@@ -817,6 +853,8 @@ model PurchaseOrder {
 
   @@unique([companyId, number])
   @@index([companyId, status])
+  // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
+  @@index([supplierId])
 }
 
 model PurchaseOrderLine {
@@ -831,6 +869,8 @@ model PurchaseOrderLine {
   model DeviceModel   @relation(fields: [modelId], references: [id])
 
   @@index([orderId])
+  // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
+  @@index([modelId])
 }
 
 model GoodsReceipt {
@@ -848,34 +888,38 @@ model GoodsReceipt {
   createdBy         String?
   createdAt         DateTime      @default(now())
 
-  company  Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  supplier Partner?       @relation(fields: [supplierId], references: [id], onDelete: SetNull)
-  order    PurchaseOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
-  warehouse Warehouse     @relation(fields: [warehouseId], references: [id])
-  items    Item[]
-  expense  Expense?
+  company   Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  supplier  Partner?       @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  order     PurchaseOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  warehouse Warehouse      @relation(fields: [warehouseId], references: [id])
+  items     Item[]
+  expense   Expense?
 
   @@unique([companyId, number])
   @@index([companyId, date])
+  // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
+  @@index([orderId])
+  @@index([supplierId])
+  @@index([warehouseId])
 }
 
 /// Ulazni račun dobavljača (knjiga URA).
 model SupplierInvoice {
-  id          String    @id @default(cuid())
-  companyId   String
-  internalNo  String
-  number      String    // broj računa dobavljača
-  supplierId  String
-  issueDate   DateTime  @db.Date
-  dueDate     DateTime? @db.Date
-  netAmount   Decimal   @default(0) @db.Decimal(14, 2)
-  vatAmount   Decimal   @default(0) @db.Decimal(14, 2)
-  total       Decimal   @default(0) @db.Decimal(14, 2)
-  paidDate    DateTime? @db.Date
-  category    String?
-  note        String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id         String    @id @default(cuid())
+  companyId  String
+  internalNo String
+  number     String // broj računa dobavljača
+  supplierId String
+  issueDate  DateTime  @db.Date
+  dueDate    DateTime? @db.Date
+  netAmount  Decimal   @default(0) @db.Decimal(14, 2)
+  vatAmount  Decimal   @default(0) @db.Decimal(14, 2)
+  total      Decimal   @default(0) @db.Decimal(14, 2)
+  paidDate   DateTime? @db.Date
+  category   String?
+  note       String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   supplier Partner  @relation(fields: [supplierId], references: [id])
@@ -883,6 +927,8 @@ model SupplierInvoice {
 
   @@unique([companyId, internalNo])
   @@index([companyId, issueDate])
+  // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
+  @@index([supplierId])
 }
 
 // ---------------------------------------------------------------- servis
@@ -923,32 +969,36 @@ model ServiceOrder {
   @@unique([companyId, number])
   @@index([companyId, status])
   @@index([itemId])
+  // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
+  @@index([invoiceId])
+  @@index([partnerId])
+  @@index([replacementItemId])
 }
 
 // ---------------------------------------------------------------- troškovi
 
 model Expense {
-  id                String         @id @default(cuid())
+  id                String        @id @default(cuid())
   companyId         String
-  date              DateTime       @db.Date
+  date              DateTime      @db.Date
   categoryId        String?
   description       String
   partnerId         String?
-  netAmount         Decimal        @default(0) @db.Decimal(14, 2)
-  vatAmount         Decimal        @default(0) @db.Decimal(14, 2)
-  paid              Boolean        @default(false)
-  paidDate          DateTime?      @db.Date
+  netAmount         Decimal       @default(0) @db.Decimal(14, 2)
+  vatAmount         Decimal       @default(0) @db.Decimal(14, 2)
+  paid              Boolean       @default(false)
+  paidDate          DateTime?     @db.Date
   frequency         Frequency?
-  recurringUntil    DateTime?      @db.Date
+  recurringUntil    DateTime?     @db.Date
   /// Izmjene pojedinih rata ponavljajućeg troška: { "2026-03": { amount?: n, skipped?: true } }
-  overrides         Json           @default("{}")
-  source            ExpenseSource  @default(MANUAL)
-  receiptId         String?        @unique
-  supplierInvoiceId String?        @unique
+  overrides         Json          @default("{}")
+  source            ExpenseSource @default(MANUAL)
+  receiptId         String?       @unique
+  supplierInvoiceId String?       @unique
   note              String?
   createdBy         String?
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
 
   company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   category        ExpenseCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
@@ -958,6 +1008,9 @@ model Expense {
 
   @@index([companyId, date])
   @@index([companyId, categoryId])
+  // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
+  @@index([categoryId])
+  @@index([partnerId])
 }
 
 // ---------------------------------------------------------------- prilozi i dnevnik
@@ -965,7 +1018,7 @@ model Expense {
 model Attachment {
   id        String   @id @default(cuid())
   companyId String
-  entity    String   // item, invoice, contract, service, expense, supplierInvoice
+  entity    String // item, invoice, contract, service, expense, supplierInvoice
   entityId  String
   fileName  String
   mime      String
@@ -987,7 +1040,7 @@ model AuditLog {
   userName  String?
   entity    String
   entityId  String?
-  action    String   // create, update, delete, issue, storno, …
+  action    String // create, update, delete, issue, storno, …
   summary   String
   diff      Json?
 

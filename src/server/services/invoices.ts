@@ -110,6 +110,15 @@ async function writeLines(tx: Tx, actor: Actor, invoiceId: string, type: Invoice
   assert(items.length === itemIds.length, 'Neki uređaji na računu ne postoje.');
   const byId = new Map(items.map((i) => [i.id, i]));
 
+  // šifrarnici sa stavki moraju pripadati istoj firmi
+  const modelIds = [...new Set(lines.map((l) => l.modelId).filter((v): v is string => !!v))];
+  const serviceIds = [...new Set(lines.filter((l) => l.kind === 'SERVICE').map((l) => l.serviceId).filter((v): v is string => !!v))];
+  const [models, services] = await Promise.all([
+    modelIds.length ? tx.deviceModel.count({ where: { id: { in: modelIds }, companyId: actor.companyId } }) : 0,
+    serviceIds.length ? tx.service.count({ where: { id: { in: serviceIds }, companyId: actor.companyId } }) : 0,
+  ]);
+  assert(models === modelIds.length && services === serviceIds.length, 'Neki modeli ili usluge na računu ne postoje.');
+
   await tx.invoiceLine.deleteMany({ where: { invoiceId } });
   await tx.invoiceLine.createMany({
     data: lines.map((l, sort) => {
@@ -182,6 +191,8 @@ export async function updateDraft(tx: Tx, actor: Actor, id: string, input: Invoi
   const inv = await tx.invoice.findFirst({ where: { id, companyId: actor.companyId } });
   assert(inv, 'Račun ne postoji.');
   assert(inv.status === 'DRAFT', 'Izdani račun se ne može mijenjati — ispravak ide stornom ili odobrenjem.');
+  const partner = await tx.partner.findFirst({ where: { id: input.partnerId, companyId: actor.companyId }, select: { id: true } });
+  assert(partner, 'Kupac ne postoji.');
   await tx.invoice.update({ where: { id }, data: headerData(input) });
   await writeLines(tx, actor, id, input.type, input.lines);
   await recalcInvoice(tx, id);
@@ -317,6 +328,18 @@ async function applyRent(tx: Tx, actor: Actor, inv: IssuingInvoice) {
   }
 }
 
+/** Datum ispravka: danas, ali ne raniji od zadnjeg izdanog računa u godini (redni broj prati datum). */
+async function correctionDate(tx: Tx, companyId: string, requested?: string) {
+  if (requested) return requested;
+  const t = today();
+  const last = await tx.invoice.findFirst({
+    where: { companyId, status: 'ISSUED', year: Number(t.slice(0, 4)) },
+    orderBy: { date: 'desc' },
+    select: { date: true },
+  });
+  return last && toISO(last.date) > t ? toISO(last.date) : t;
+}
+
 // ---------------------------------------------------------------- storno i odobrenje
 
 /** Storno poništava cijeli račun: novi dokument s negativnim stavkama. */
@@ -327,8 +350,9 @@ export async function stornoInvoice(tx: Tx, actor: Actor, id: string, opts: { da
   assert(inv.kind === 'INVOICE' || inv.kind === 'ADVANCE', 'Storno i odobrenje se ne storniraju.');
   assert(!inv.stornoed, 'Račun je već storniran.');
   assert(num(inv.paidTotal) === 0, 'Račun ima uplate — prvo ih uklonite ili izdajte odobrenje.');
+  assert(num(inv.creditedTotal) === 0, 'Na račun su izdana odobrenja — ostatak iznosa ispravite novim odobrenjem umjesto stornom.');
 
-  const date = opts.date ?? today();
+  const date = await correctionDate(tx, actor.companyId, opts.date);
   const storno = await tx.invoice.create({
     data: {
       companyId: actor.companyId,
@@ -373,12 +397,22 @@ export async function stornoInvoice(tx: Tx, actor: Actor, id: string, opts: { da
 
   // prodana roba koja je još kod kupca vraća se na skladište
   if (inv.type === 'SALE') {
-    const sold = await tx.item.findMany({ where: { invoiceId: inv.id, state: 'SOLD' }, select: { id: true } });
+    const sold = await tx.item.findMany({ where: { invoiceId: inv.id, state: 'SOLD' }, select: { id: true, receipt: { select: { warehouseId: true } } } });
     if (sold.length) {
-      await changeItemStatus(tx, actor, sold.map((i) => i.id), {
-        kind: 'IN_STOCK',
-        event: { type: 'RETURNED', message: `Vraćen na skladište — storno računa ${inv.number}`, refType: 'invoice', refId: storno.id },
-      });
+      // vraća se u skladište iz kojeg je zaprimljen, a ako ga nema — u prvo aktivno
+      const fallback = await tx.warehouse.findFirst({ where: { companyId: actor.companyId, active: true }, orderBy: [{ sort: 'asc' }, { name: 'asc' }], select: { id: true } });
+      const groups = new Map<string | null, string[]>();
+      for (const i of sold) {
+        const w = i.receipt?.warehouseId ?? fallback?.id ?? null;
+        groups.set(w, [...(groups.get(w) ?? []), i.id]);
+      }
+      for (const [warehouseId, ids] of groups) {
+        await changeItemStatus(tx, actor, ids, {
+          kind: 'IN_STOCK',
+          data: { warehouseId },
+          event: { type: 'RETURNED', message: `Vraćen na skladište — storno računa ${inv.number}`, refType: 'invoice', refId: storno.id },
+        });
+      }
     }
   }
   return storno;
@@ -397,7 +431,7 @@ export async function creditNote(
   assert(input.netAmount > 0, 'Iznos odobrenja mora biti veći od 0.');
   const maxNet = r2(num(inv.netTotal) - num(inv.creditedTotal) / (1 + num(inv.vatRate) / 100));
   assert(input.netAmount <= maxNet + 0.005, 'Odobrenje ne može biti veće od iznosa računa.');
-  const date = input.date ?? today();
+  const date = await correctionDate(tx, actor.companyId, input.date);
   const note = await tx.invoice.create({
     data: {
       companyId: actor.companyId,
@@ -443,7 +477,8 @@ export async function markPaid(tx: Tx, actor: Actor, invoiceId: string, date?: s
   assert(inv, 'Račun ne postoji.');
   const open = num(inv.openAmount);
   if (open <= 0) return;
-  await addPayment(tx, actor, invoiceId, { date: date ?? toISO(inv.date > new Date() ? inv.date : new Date()) , amount: open, note: 'Plaćeno u cijelosti' });
+  const t = today();
+  await addPayment(tx, actor, invoiceId, { date: date ?? (toISO(inv.date) > t ? toISO(inv.date) : t), amount: open, note: 'Plaćeno u cijelosti' });
 }
 
 export async function deletePayment(tx: Tx, actor: Actor, paymentId: string) {

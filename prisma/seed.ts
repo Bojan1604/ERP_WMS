@@ -66,13 +66,33 @@ const SUPPLIERS: Array<{ name: string; city: string; country: string; oib?: stri
   { name: 'Barkod Sustavi d.o.o.', city: 'Split', country: 'HR' },
 ];
 
+/** Brisanje firme sa svim podacima — redom, od dokumenata prema šifrarnicima. */
+async function deleteCompany(companyId: string) {
+  const w = { where: { companyId } };
+  await db.$transaction([
+    db.session.deleteMany({ where: { user: { companyId } } }),
+    db.user.deleteMany(w),
+    db.payment.deleteMany({ where: { invoice: { companyId } } }),
+    db.quote.deleteMany(w),
+    db.serviceOrder.deleteMany(w),
+    db.expense.deleteMany(w),
+    db.invoice.updateMany({ ...w, data: { refInvoiceId: null } }),
+    db.item.updateMany({ ...w, data: { invoiceId: null, receiptId: null } }),
+    db.invoice.deleteMany(w),
+    db.contract.deleteMany(w),
+    db.transfer.deleteMany(w),
+    db.supplierInvoice.deleteMany(w),
+    db.goodsReceipt.deleteMany(w),
+    db.purchaseOrder.deleteMany(w),
+    db.item.deleteMany(w),
+    db.company.delete({ where: { id: companyId } }),
+  ]);
+}
+
 async function main() {
   const t0 = Date.now();
   const existing = await db.company.findMany({ where: { name: 'Demo Oprema d.o.o.' }, select: { id: true } });
-  for (const c of existing) {
-    await db.user.deleteMany({ where: { companyId: c.id } });
-    await db.company.delete({ where: { id: c.id } });
-  }
+  for (const c of existing) await deleteCompany(c.id);
 
   const company = await db.company.create({
     data: {

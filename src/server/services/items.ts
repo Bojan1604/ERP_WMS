@@ -5,19 +5,12 @@ import type { SessionUser } from '../auth';
 import { DomainError } from '../errors';
 import { nextDocNumber } from '../numbering';
 import { fromISO, today } from '@/domain/dates';
+import { STATE_LABEL } from '@/domain/warehouse';
 
 export type Actor = Pick<SessionUser, 'id' | 'name' | 'companyId'>;
 
-export const STATUS_KIND_LABEL: Record<StatusKind, string> = {
-  IN_STOCK: 'Na skladištu',
-  RESERVED: 'Izašlo iz skladišta',
-  SOLD: 'Prodan',
-  RENTED: 'U najmu',
-  SERVICE: 'Na servisu',
-  RETURNING: 'U dolasku',
-  WRITTEN_OFF: 'Otpisan',
-  OTHER: 'Ostalo',
-};
+/** Nazivi vrsta statusa — jedan izvor u domeni, dostupan i klijentu. */
+export const STATUS_KIND_LABEL: Record<StatusKind, string> = STATE_LABEL;
 
 /** Sistemski status za vrstu (npr. „Na skladištu" za IN_STOCK). */
 export async function statusFor(tx: Tx, companyId: string, kind: StatusKind) {
@@ -55,7 +48,10 @@ export async function changeItemStatus(tx: Tx, actor: Actor, itemIds: string[], 
 
   const items = await tx.item.findMany({
     where: { id: { in: itemIds }, companyId: actor.companyId },
-    select: { id: true, serial: true, state: true, partnerId: true, invoiceId: true, contractItem: { select: { contractId: true } } },
+    select: {
+      id: true, serial: true, state: true, partnerId: true, invoiceId: true, warehouseId: true,
+      contractItem: { select: { contractId: true, monthly: true, plan: true, skipped: true, status: true } },
+    },
   });
   if (items.length !== new Set(itemIds).size) throw new DomainError('Neki od odabranih uređaja ne postoje.');
 
@@ -104,12 +100,22 @@ export async function changeItemStatus(tx: Tx, actor: Actor, itemIds: string[], 
   return { count: items.length, kind };
 }
 
-async function openServiceOrders(
-  tx: Tx,
-  actor: Actor,
-  items: Array<{ id: string; serial: string; partnerId: string | null; invoiceId: string | null }>,
-  statusName: string,
-) {
+type OpeningItem = {
+  id: string;
+  serial: string;
+  state: StatusKind;
+  partnerId: string | null;
+  invoiceId: string | null;
+  warehouseId: string | null;
+  contractItem: { contractId: string; monthly: Prisma.Decimal; plan: Prisma.JsonValue; skipped: string[]; status: string | null } | null;
+};
+
+/**
+ * Automatski servisni nalog. U tijek se sprema stanje uređaja prije kvara
+ * (uključujući ugovor, cijenu i plan), jer ga je promjena statusa upravo skinula
+ * s ugovora — povrat ili zamjenski uređaj tada znaju vratiti najam.
+ */
+async function openServiceOrders(tx: Tx, actor: Actor, items: OpeningItem[], statusName: string) {
   const open = await tx.serviceOrder.findMany({
     where: { companyId: actor.companyId, itemId: { in: items.map((i) => i.id) }, status: { in: ['REPORTED', 'RECEIVED', 'DIAGNOSIS', 'AT_SUPPLIER'] } },
     select: { itemId: true },
@@ -132,7 +138,22 @@ async function openServiceOrders(
         receivedAt: fromISO(t),
         issue: 'Nije upisano',
         note: `Automatski otvoreno — status uređaja promijenjen u „${statusName}"`,
-        timeline: [{ at: new Date().toISOString(), status: 'RECEIVED', by: actor.name, note: 'Nalog otvoren automatski' }],
+        timeline: [
+          {
+            at: new Date().toISOString(),
+            status: 'RECEIVED',
+            by: actor.name,
+            note: 'Nalog otvoren automatski',
+            prev: {
+              state: i.state,
+              partnerId: i.partnerId,
+              warehouseId: i.warehouseId,
+              contract: i.contractItem
+                ? { contractId: i.contractItem.contractId, monthly: i.contractItem.monthly.toNumber(), plan: i.contractItem.plan, skipped: i.contractItem.skipped, status: i.contractItem.status }
+                : null,
+            },
+          },
+        ] as Prisma.InputJsonValue,
         createdBy: actor.name,
       },
     });

@@ -1,0 +1,322 @@
+'use client';
+
+import { useMemo, useState } from 'react';
+import { Boxes, FilePlus2, Info, PenLine, Save, Send, Wrench } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card, Badge, Notice } from '@/components/ui/misc';
+import { Field, Input, Select, Textarea } from '@/components/ui/field';
+import { Combobox } from '@/components/ui/combobox';
+import { Dialog } from '@/components/ui/dialog';
+import { useAction } from '@/components/ui/action';
+import { eur } from '@/lib/format';
+import { documentTotals } from '@/domain/invoice';
+import { customerVat } from '@/domain/tax';
+import { addDays } from '@/domain/dates';
+import { saveInvoice } from '@/app/(app)/prodaja/racuni/actions';
+import { DevicePicker } from './device-picker';
+import { CatalogPicker } from './catalog-picker';
+import { LinesTable } from './lines-table';
+import { TaxFields } from './invoice-tax-fields';
+import { TotalsBox } from './totals-box';
+import { lineKey } from './inputs';
+import type { DeviceOpt, EditorCharge, EditorLine, SalesLookups } from './types';
+
+export interface InvoiceEditorValue {
+  id: string | null;
+  type: 'SALE' | 'SERVICE' | 'RENT';
+  kind: 'INVOICE' | 'ADVANCE';
+  partnerId: string | null;
+  date: string;
+  dueDate: string;
+  deliveryDate: string;
+  vatRate: number;
+  taxCategory: string;
+  taxExemptReason: string;
+  discountPct: number;
+  discountAmount: number;
+  advanceAmount: number;
+  charges: EditorCharge[];
+  description: string;
+  note: string;
+  lines: EditorLine[];
+}
+
+export function deviceToLine(d: DeviceOpt): EditorLine {
+  return {
+    key: lineKey(),
+    kind: 'DEVICE',
+    itemId: d.id,
+    modelId: d.modelId,
+    description: d.model,
+    unit: 'kom',
+    kpd: d.kpd ?? '',
+    qty: 1,
+    unitPrice: d.price,
+    discountPct: 0,
+    warrantyMonths: d.warrantyMonths,
+    agreedPrice: d.priceSource === 'agreed',
+    serial: d.serial,
+    cost: d.cost,
+  };
+}
+
+/** Editor nacrta računa: kupac, datumi, stavke, popusti, naknade i živi zbrojevi. */
+export function InvoiceEditor({ initial, lookups }: { initial: InvoiceEditorValue; lookups: SalesLookups }) {
+  const { partners, services, company } = lookups;
+  const [v, setV] = useState<InvoiceEditorValue>(initial);
+  const [dueTouched, setDueTouched] = useState(!!initial.id);
+  const [picker, setPicker] = useState<'devices' | 'services' | null>(null);
+  const [confirmIssue, setConfirmIssue] = useState(false);
+  const { run, pending } = useAction(saveInvoice);
+  const set = (patch: Partial<InvoiceEditorValue>) => setV((cur) => ({ ...cur, ...patch }));
+
+  const partner = partners.find((p) => p.id === v.partnerId) ?? null;
+  const term = partner?.paymentTermDays ?? company.paymentTermDays;
+  const treatment = partner ? customerVat(partner.country, company) : null;
+  const totals = useMemo(
+    () =>
+      documentTotals({
+        lines: v.lines,
+        vatRate: v.vatRate,
+        discountPct: v.discountPct,
+        discountAmount: v.discountAmount,
+        charges: v.charges.map((c) => ({ kind: c.kind, label: c.label, amount: c.amount ?? 0, pct: c.pct ?? 0 })),
+      }),
+    [v.lines, v.vatRate, v.discountPct, v.discountAmount, v.charges],
+  );
+
+  const choosePartner = (id: string | null) => {
+    const p = partners.find((x) => x.id === id);
+    if (!p) return set({ partnerId: null });
+    const t = customerVat(p.country, company);
+    set({
+      partnerId: p.id,
+      vatRate: t.rate,
+      taxCategory: t.category,
+      taxExemptReason: t.exemptReason ?? '',
+      ...(dueTouched ? {} : { dueDate: addDays(v.date, p.paymentTermDays ?? company.paymentTermDays) }),
+    });
+  };
+
+  const addLines = (lines: EditorLine[]) => set({ lines: [...v.lines, ...lines] });
+  const addService = (id: string) => {
+    const s = services.find((x) => x.id === id);
+    if (!s) return;
+    setV((cur) => ({
+      ...cur,
+      lines: [
+        ...cur.lines,
+        { key: lineKey(), kind: 'SERVICE', serviceId: s.id, description: s.name, unit: s.unit, kpd: s.kpd ?? '', qty: 1, unitPrice: s.price, discountPct: 0, warrantyMonths: null, agreedPrice: false },
+      ],
+    }));
+  };
+  const addManual = () =>
+    addLines([{ key: lineKey(), kind: 'MANUAL', description: '', unit: 'kom', kpd: '', qty: 1, unitPrice: 0, discountPct: 0, warrantyMonths: null, agreedPrice: false }]);
+
+  const save = (issue: boolean) =>
+    run({
+      ...v,
+      issue,
+      charges: v.charges.filter((c) => c.amount || c.pct),
+      lines: v.lines.map((l) => ({
+        kind: l.kind,
+        itemId: l.itemId ?? null,
+        modelId: l.modelId ?? null,
+        serviceId: l.serviceId ?? null,
+        description: l.description,
+        unit: l.unit,
+        kpd: l.kpd,
+        qty: l.qty,
+        unitPrice: l.unitPrice,
+        discountPct: l.discountPct,
+        monthly: l.monthly ?? null,
+        months: l.months ?? null,
+        warrantyMonths: l.warrantyMonths,
+        agreedPrice: l.agreedPrice,
+      })),
+    });
+
+  const usedItems = v.lines.map((l) => l.itemId).filter((x): x is string => !!x);
+  const rent = v.type === 'RENT';
+
+  return (
+    <div>
+      {partner?.note && (
+        <Notice tone="warn">
+          <span className="inline-flex items-start gap-2">
+            <Info className="mt-0.5 size-4 shrink-0" />
+            <span>
+              <b>Napomena o partneru:</b> {partner.note}
+            </span>
+          </span>
+        </Notice>
+      )}
+      {partner?.excluded && <Notice tone="info">Partner je isključen iz obračuna — račun neće ulaziti u izvještaje.</Notice>}
+
+      <Card title="Kupac i datumi" className="mb-4">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-6">
+          <Field label="Kupac" required className="md:col-span-3">
+            <Combobox
+              options={partners.map((p) => ({ value: p.id, label: p.name, hint: [p.city, p.country !== 'HR' ? p.country : null].filter(Boolean).join(', ') }))}
+              value={v.partnerId}
+              onChange={(id) => choosePartner(id)}
+              placeholder="Odaberite kupca…"
+            />
+          </Field>
+          <Field label="Vrsta" className="md:col-span-1">
+            {rent ? (
+              <Input value="Najam" disabled />
+            ) : (
+              <Select
+                value={v.type}
+                onChange={(e) => set({ type: e.target.value as 'SALE' | 'SERVICE' })}
+                options={[
+                  { value: 'SALE', label: 'Prodaja' },
+                  { value: 'SERVICE', label: 'Usluga' },
+                ]}
+              />
+            )}
+          </Field>
+          <Field label="Dokument" className="md:col-span-2">
+            <Select
+              value={v.kind}
+              onChange={(e) => set({ kind: e.target.value as 'INVOICE' | 'ADVANCE' })}
+              options={[
+                { value: 'INVOICE', label: 'Račun' },
+                { value: 'ADVANCE', label: 'Račun za predujam' },
+              ]}
+            />
+          </Field>
+          <Field label="Datum računa" required className="md:col-span-2">
+            <Input
+              type="date"
+              value={v.date}
+              onChange={(e) => set({ date: e.target.value, ...(dueTouched || !e.target.value ? {} : { dueDate: addDays(e.target.value, term) }) })}
+            />
+          </Field>
+          <Field label="Dospijeće" hint={`Rok plaćanja: ${term} dana`} className="md:col-span-2">
+            <Input
+              type="date"
+              value={v.dueDate}
+              onChange={(e) => {
+                setDueTouched(true);
+                set({ dueDate: e.target.value });
+              }}
+            />
+          </Field>
+          <Field label="Datum isporuke" className="md:col-span-2">
+            <Input type="date" value={v.deliveryDate} onChange={(e) => set({ deliveryDate: e.target.value })} />
+          </Field>
+          <Field label="Opis računa" className="md:col-span-6">
+            <Input value={v.description} onChange={(e) => set({ description: e.target.value })} placeholder="npr. Oprema za blagajnu — lokacija Split" />
+          </Field>
+        </div>
+        {treatment && (
+          <p className="mt-3 flex flex-wrap items-center gap-2 text-sm text-fg-3">
+            Porezni tretman: <Badge tone={treatment.category === 'S' ? 'brand' : 'info'}>{treatment.label}</Badge>
+            {(treatment.rate !== v.vatRate || treatment.category !== v.taxCategory) && <Badge tone="warn">ručno promijenjeno</Badge>}
+          </p>
+        )}
+      </Card>
+
+      <Card
+        title="Stavke"
+        padded={false}
+        className="mb-4"
+        actions={
+          <>
+            {!rent && (
+              <Button size="sm" variant="subtle" icon={<Boxes className="size-3.5" />} onClick={() => setPicker('devices')}>
+                Uređaji sa skladišta
+              </Button>
+            )}
+            <Button size="sm" icon={<Wrench className="size-3.5" />} onClick={() => setPicker('services')}>
+              Usluga
+            </Button>
+            <Button size="sm" icon={<PenLine className="size-3.5" />} onClick={addManual}>
+              Ručna stavka
+            </Button>
+          </>
+        }
+      >
+        <LinesTable lines={v.lines} onChange={(lines) => set({ lines })} mode="invoice" />
+      </Card>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_22rem]">
+        <Card title="Popust, porez i naknade">
+          <TaxFields v={v} set={(p) => set(p as Partial<InvoiceEditorValue>)} />
+          <Field label="Napomena (ispisuje se ispod stavki)" className="mt-3">
+            <Textarea value={v.note} onChange={(e) => set({ note: e.target.value })} rows={2} />
+          </Field>
+        </Card>
+        <Card title="Zbroj">
+          <TotalsBox t={totals} vatRate={v.vatRate} advance={v.advanceAmount} />
+        </Card>
+      </div>
+
+      <div className="no-print sticky bottom-0 z-30 -mx-4 -mb-4 mt-4 border-t border-line bg-panel/95 px-4 py-2.5 backdrop-blur sm:-mx-5 sm:-mb-5 sm:px-5">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <span className="mr-auto text-sm text-fg-3">
+            {v.lines.length} stavki · ukupno <b className="text-fg tnum">{eur(totals.total)}</b>
+          </span>
+          <Button icon={<Save className="size-4" />} loading={pending} disabled={!v.partnerId} onClick={() => save(false)}>
+            Spremi nacrt
+          </Button>
+          <Button variant="primary" icon={<Send className="size-4" />} disabled={!v.partnerId || !v.lines.length || pending} onClick={() => setConfirmIssue(true)}>
+            Izdaj račun
+          </Button>
+        </div>
+      </div>
+
+      <Dialog
+        open={confirmIssue}
+        onClose={() => setConfirmIssue(false)}
+        title="Izdavanje računa"
+        size="sm"
+        footer={
+          <>
+            <Button onClick={() => setConfirmIssue(false)}>Odustani</Button>
+            <Button
+              variant="primary"
+              loading={pending}
+              icon={<FilePlus2 className="size-4" />}
+              onClick={async () => {
+                const r = await save(true);
+                if (r.ok) setConfirmIssue(false);
+              }}
+            >
+              Izdaj račun
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-2 text-base text-fg-2">
+          <p>
+            Račun za <b className="text-fg">{partner?.name}</b> na <b className="text-fg tnum">{eur(totals.total)}</b> dobit će redni broj i više se neće moći mijenjati —
+            ispravak je moguć samo stornom ili odobrenjem.
+          </p>
+          {v.type === 'SALE' && v.lines.some((l) => l.kind === 'DEVICE') && <p>Uređaji s računa bit će skinuti sa stanja (status „Prodan").</p>}
+        </div>
+      </Dialog>
+
+      <DevicePicker
+        open={picker === 'devices'}
+        onClose={() => setPicker(null)}
+        onPick={(ds) => addLines(ds.map(deviceToLine))}
+        partnerId={v.partnerId}
+        models={lookups.models}
+        categories={lookups.categories}
+        warehouses={lookups.warehouses}
+        exclude={usedItems}
+      />
+      <CatalogPicker
+        open={picker === 'services'}
+        onClose={() => setPicker(null)}
+        title="Usluge iz šifrarnika"
+        entries={services.map((s) => ({ id: s.id, label: s.name, hint: [s.unit, s.kpd && `KPD ${s.kpd}`].filter(Boolean).join(' · '), price: s.price }))}
+        onPick={addService}
+        empty="Nema usluga — dodajte ih u Postavke → Šifrarnici."
+      />
+    </div>
+  );
+}
