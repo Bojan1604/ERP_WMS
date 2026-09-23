@@ -3,17 +3,15 @@
 import Link, { useLinkStatus } from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
-import * as Icons from 'lucide-react';
-import { Loader2, Menu, X } from 'lucide-react';
+import { Loader2, Menu, Warehouse, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { can, type PermissionMap } from '@/domain/permissions';
 import { NAV } from './nav';
 
-function Icon({ name, active }: { name: string; active: boolean }) {
+function Icon({ icon: I, active }: { icon: LucideIcon; active: boolean }) {
   const { pending } = useLinkStatus();
   if (pending) return <Loader2 className="size-4 shrink-0 animate-spin" />;
-  const I = (Icons as unknown as Record<string, LucideIcon>)[name] ?? Icons.Circle;
   return <I className={cn('size-4 shrink-0', active ? 'text-white' : 'text-nav-fg-2')} />;
 }
 
@@ -44,7 +42,7 @@ export function Sidebar({ perms, company, badges }: { perms: PermissionMap; comp
                       on ? 'bg-brand text-white' : 'text-nav-fg hover:bg-nav-2 hover:text-white',
                     )}
                   >
-                    <Icon name={i.icon} active={on} />
+                    <Icon icon={i.icon} active={on} />
                     <span className="flex-1 truncate">{i.label}</span>
                     {!!badges[i.href] && (
                       <span className={cn('rounded-full px-1.5 text-xs tnum', on ? 'bg-white/25 text-white' : 'bg-warn text-nav')}>{badges[i.href]}</span>
@@ -62,7 +60,7 @@ export function Sidebar({ perms, company, badges }: { perms: PermissionMap; comp
   const brand = (
     <div className="flex h-14 shrink-0 items-center gap-2.5 px-4">
       <div className="grid size-8 place-items-center rounded-lg bg-brand text-white">
-        <Icons.Warehouse className="size-4.5" />
+        <Warehouse className="size-4.5" />
       </div>
       <div className="min-w-0">
         <p className="truncate text-md font-semibold text-white">ERP · WMS</p>

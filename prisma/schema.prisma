@@ -146,7 +146,28 @@ enum RequestStatus {
   REJECTED
 }
 
+enum PaymentMethod {
+  TRANSFER // transakcijski račun (virman)
+  CASH // gotovina
+  CARD // kartica
+  OTHER
+}
+
+/// Stanje fiskalizacije računa (CIS za gotovinu/kartice, eRačun/F2.0 za transakcijske).
+enum FiscalStatus {
+  NOT_REQUIRED
+  PENDING
+  SENT
+  FAILED
+}
+
+enum StocktakeStatus {
+  OPEN
+  CLOSED
+}
+
 enum Series {
+  STOCKTAKE
   INVOICE
   QUOTE
   CONTRACT
@@ -190,6 +211,22 @@ model Company {
   invoiceFooter             String?
   statusChangeNeedsApproval Boolean @default(true)
 
+  // fiskalizacija i eRačun (priprema — adapteri u src/server/fiscal)
+  fiscalEnabled      Boolean     @default(false)
+  /// TEST (demo okolina CIS-a / posrednika) ili PROD
+  fiscalEnv          String      @default("TEST")
+  /// Fiskalizacijski certifikat (FINA .p12) i lozinka (šifrirana s AUTH_SECRET).
+  fiscalCert         Bytes?
+  fiscalCertPassword String?
+  /// Sažetak certifikata: { subject, issuer, validTo, oib }
+  fiscalCertInfo     Json?
+  /// U sustavu PDV-a za potrebe fiskalizacije (USustPdv).
+  fiscalSequenceMode String      @default("P") // P = na razini poslovnog prostora, N = na razini uređaja
+  eInvoiceProvider   String      @default("none") // none | demo | eposlovanje | moj-eracun
+  eInvoiceApiKey     String? // šifrirano
+  fiscalLogs         FiscalLog[]
+  stocktakes         Stocktake[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -220,6 +257,61 @@ model Company {
   rentOverrides     RentOverride[]
 }
 
+/// Trag svake komunikacije s CIS-om ili posrednikom (zahtjev, odgovor, greška).
+model FiscalLog {
+  id        String   @id @default(cuid())
+  companyId String
+  invoiceId String?
+  kind      String // FISCAL (CIS) | EINVOICE (posrednik) | PAYMENT_REPORT
+  ok        Boolean
+  request   String?
+  response  String?
+  error     String?
+  at        DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, at])
+  @@index([invoiceId])
+}
+
+/// Inventura: skeniranje stvarnog stanja i usporedba s evidencijom.
+model Stocktake {
+  id          String          @id @default(cuid())
+  companyId   String
+  number      String
+  warehouseId String?
+  status      StocktakeStatus @default(OPEN)
+  note        String?
+  createdBy   String?
+  startedAt   DateTime        @default(now())
+  closedAt    DateTime?
+  /// Sažetak pri zatvaranju: { expected, found, missing, extra, wrongWarehouse }
+  summary     Json?
+
+  company   Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  warehouse Warehouse?      @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  scans     StocktakeScan[]
+
+  @@unique([companyId, number])
+  @@index([companyId, status])
+  @@index([warehouseId])
+}
+
+model StocktakeScan {
+  id          String   @id @default(cuid())
+  stocktakeId String
+  serial      String
+  itemId      String?
+  scannedAt   DateTime @default(now())
+  scannedBy   String?
+
+  stocktake Stocktake @relation(fields: [stocktakeId], references: [id], onDelete: Cascade)
+
+  @@unique([stocktakeId, serial])
+  @@index([itemId])
+}
+
 model User {
   id           String    @id @default(cuid())
   companyId    String
@@ -229,6 +321,8 @@ model User {
   role         Role
   /// Iznimke od prava uloge: { "warehouse": "edit", "purchasing": "view" }
   permissions  Json      @default("{}")
+  /// OIB operatera — obavezan na fiskaliziranom računu (OibOper).
+  oib          String?
   active       Boolean   @default(true)
   lastLoginAt  DateTime?
   createdAt    DateTime  @default(now())
@@ -281,6 +375,7 @@ model Warehouse {
   receipts      GoodsReceipt[]
   transfersFrom Transfer[]     @relation("TransferFrom")
   transfersTo   Transfer[]     @relation("TransferTo")
+  stocktakes    Stocktake[]
 
   @@unique([companyId, name])
 }
@@ -683,6 +778,14 @@ model Invoice {
   paymentRef      String? // poziv na broj
   /// Stanje slanja eRačuna: { status, sentAt, id, error }
   eInvoice        Json          @default("{}")
+  paymentMethod   PaymentMethod @default(TRANSFER)
+  /// Zaštitni kod izdavatelja i jedinstveni identifikator računa (CIS).
+  zki             String?
+  jir             String?
+  fiscalStatus    FiscalStatus  @default(NOT_REQUIRED)
+  fiscalizedAt    DateTime?
+  fiscalError     String?
+  fiscalAttempts  Int           @default(0)
   createdBy       String?
   issuedBy        String?
   issuedAt        DateTime?

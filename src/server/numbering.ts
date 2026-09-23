@@ -25,6 +25,7 @@ const PREFIX: Record<Exclude<Series, 'INVOICE'>, string> = {
   TRANSFER: 'MSK',
   SERVICE: 'RMA',
   SUPPLIER_INVOICE: 'URA',
+  STOCKTAKE: 'INV',
 };
 
 export async function nextDocNumber(tx: Tx, companyId: string, series: Exclude<Series, 'INVOICE'>, year: number) {

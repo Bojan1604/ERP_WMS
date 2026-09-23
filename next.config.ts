@@ -10,10 +10,12 @@ const securityHeaders = [
 const config: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
-  serverExternalPackages: ['@prisma/client', 'bcryptjs', 'bwip-js'],
+  serverExternalPackages: ['@prisma/client', 'bcryptjs', 'bwip-js', 'node-forge', 'xml-crypto', '@xmldom/xmldom'],
   experimental: {
     optimizePackageImports: ['lucide-react'],
-    serverActions: { bodySizeLimit: '8mb' },
+    serverActions: { bodySizeLimit: '50mb' },
+    // već otvorena stranica se pri povratku prikazuje odmah (osvježava se nakon izmjene)
+    staleTimes: { dynamic: 30, static: 300 },
   },
   async headers() {
     return [{ source: '/:path*', headers: securityHeaders }];
