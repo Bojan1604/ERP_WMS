@@ -12,6 +12,7 @@ import { buildEffectiveConfig } from '../../src/server/mdm/config';
 import { assignSites, deleteProfile, duplicateProfile, saveDeviceOverrides, saveProfile, setDeviceProfile, zConfig, zSettings, type ProfileInput } from '../../src/server/mdm/profiles';
 import { addAppVersion, deleteVersion } from '../../src/server/mdm/apps';
 import { uploadOrg } from '../../src/server/mdm/files';
+import { deviceConfig, profileEditor } from '../../src/server/queries/mdm-library';
 import type { ProfileSettings } from '../../src/domain/mdm';
 
 assert.match(process.env.DATABASE_URL ?? '', /wms_test/, 'Integracijski testovi smiju raditi samo nad testnom bazom (wms_test).');
@@ -223,4 +224,17 @@ test('profil lokacije vrijedi samo za uređaje iste platforme', async () => {
   assert.equal(await version(win.id), w0, 'Android profil ne mijenja verziju Windows uređaja');
   const cfg = await buildEffectiveConfig(db, await db.mdmDevice.findUniqueOrThrow({ where: { id: win.id } }));
   assert.equal(cfg.settings.kiosk, undefined, 'Windows uređaj ne dobiva postavke Android profila');
+});
+
+test('PIN za održavanje ne ide pregledniku korisnika bez prava uređivanja', async () => {
+  const s = await setup();
+  await db.mdmDevice.update({ where: { id: s.devices.a.id }, data: { maintenancePin: '4711' } });
+  const p = await transaction((tx) => saveProfile(tx, s.owner, s.actor, input({ settings: { maintenancePin: '9021' } })));
+  await transaction((tx) => assignSites(tx, s.owner, s.actor, p.id, [s.site.id]));
+  const viewer: MdmScope = { ...s.clientScope, level: 'ops' };
+  const seen = JSON.stringify(await deviceConfig(viewer, s.devices.a.id)) + JSON.stringify(await profileEditor(viewer, p.id));
+  assert.ok(!seen.includes('4711') && !seen.includes('9021'), 'PIN se ne smije pojaviti u podacima za preglednik');
+  const editor = await deviceConfig(s.owner, s.devices.a.id);
+  assert.equal(editor?.editor.settings.maintenancePin, '9021', 'tko uređuje, vidi PIN u uređivaču');
+  assert.ok(!editor?.effectiveJson.includes('9021'), 'JSON pregled uvijek skriva PIN');
 });

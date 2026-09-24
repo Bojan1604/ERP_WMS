@@ -116,14 +116,20 @@ export interface AxmlElement {
 
 function readStringPool(buf: Uint8Array, dv: DataView, at: number): string[] {
   const headerSize = dv.getUint16(at + 2, true);
+  const chunkSize = dv.getUint32(at + 4, true);
   const count = dv.getUint32(at + 8, true);
   const flags = dv.getUint32(at + 16, true);
   const stringsStart = dv.getUint32(at + 20, true);
+  const end = Math.min(at + chunkSize, buf.length);
+  // tablica pomaka mora stati u blok; bez toga lažni APK s milijun pomaka na isti niz troši svu memoriju
+  if (count > 100_000 || at + headerSize + count * 4 > end || at + stringsStart > end) throw new Error('Neispravan popis nizova u AndroidManifest.xml');
   const utf8 = (flags & 0x100) !== 0;
   const strings: string[] = [];
   const u8 = new TextDecoder('utf-8');
+  let decoded = 0;
   for (let i = 0; i < count; i++) {
     let p = at + stringsStart + dv.getUint32(at + headerSize + i * 4, true);
+    if (p >= end) throw new Error('Neispravan popis nizova u AndroidManifest.xml');
     if (utf8) {
       // duljina u znakovima pa u bajtovima; svaka 1 ili 2 bajta
       p += buf[p] & 0x80 ? 2 : 1;
@@ -132,17 +138,21 @@ function readStringPool(buf: Uint8Array, dv: DataView, at: number): string[] {
         len = ((len & 0x7f) << 8) | buf[p + 1];
         p += 2;
       } else p += 1;
-      strings.push(u8.decode(buf.subarray(p, p + len)));
+      decoded += len;
+      strings.push(u8.decode(buf.subarray(p, Math.min(p + len, end))));
     } else {
       let len = dv.getUint16(p, true);
       if (len & 0x8000) {
         len = ((len & 0x7fff) << 16) | dv.getUint16(p + 2, true);
         p += 4;
       } else p += 2;
+      len = Math.min(len, Math.max(0, (end - p) >> 1));
+      decoded += len * 2;
       let s = '';
       for (let k = 0; k < len; k++) s += String.fromCharCode(dv.getUint16(p + k * 2, true));
       strings.push(s);
     }
+    if (decoded > 16 * 1024 * 1024) throw new Error('AndroidManifest.xml je prevelik');
   }
   return strings;
 }

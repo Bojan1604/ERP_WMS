@@ -24,4 +24,5 @@
 | **Izvještaji** | 31 izvještaj | 21 izvještaj (neki spojeni), svi računati u bazi, s CSV-om i ispisom |
 | **Ispis i PDF** | Pravi PDF (pdfmake), slanje e-poštom s privitkom | Ispis A4 iz preglednika („Spremi kao PDF"); slanje e-poštom još nije |
 | **Portal za klijente** | Postojao (prijava kvara) | Još nije prenesen |
+| **Upravljanje uređajima (MDM)** | Nije postojalo | Web konzola za Windows i Android uređaje: vi vidite sve, distributer svoje klijente, klijent samo svoje; upis kodom ili QR-om, konfiguracije, aplikacije (APK/MSI/EXE), datoteke, naredbe, zaslon, zapisnici; Android i Windows agent |
 | **Pokretanje** | Vite + Supabase, GitHub Pages | Node.js + PostgreSQL; `pokreni.bat`, Docker, migracije baze (nadogradnja bez gubitka podataka) |

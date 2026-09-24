@@ -5,6 +5,7 @@ import { pageAccess } from '@/server/auth';
 import { env } from '@/server/env';
 import { getMdmScope } from '@/server/mdm/scope';
 import { tokenState } from '@/server/mdm/enroll';
+import { androidSignatureChecksum } from '@/server/mdm/agent';
 import { enrollTokens, orgOptions, pendingDevices, profileOptions, siteOptions } from '@/server/queries/mdm';
 import { PLATFORM_LABEL, type Platform } from '@/domain/mdm';
 import { Badge, Card, Empty, PageHeader } from '@/components/ui/misc';
@@ -56,7 +57,7 @@ export default async function EnrollPage({ searchParams }: { searchParams: Promi
     sites,
     profiles: profiles.map((p) => ({ id: p.id, name: p.name, platform: p.platform as Platform })),
   };
-  const checksum = process.env.MDM_ANDROID_SIGNATURE_CHECKSUM?.trim() || null;
+  const checksum = await androidSignatureChecksum();
   const host = new URL(url).host;
 
   return (

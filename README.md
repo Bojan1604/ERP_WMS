@@ -163,6 +163,52 @@ Globalna pretraga (serijski broj vodi ravno na uređaj), svijetla i tamna tema, 
 
 ---
 
+## MDM — upravljanje uređajima
+
+Web konzola za Windows računala, Android računala i Android handheldove (po uzoru na
+Orderman SystemCenter Next, bez Orderman radio uređaja). Izbornik **MDM** u aplikaciji.
+
+**Tko što vidi**
+
+| Račun | Vidi |
+|---|---|
+| Korisnici vaše firme (Administrator) | sve distributere, sve klijente i sve uređaje |
+| Distributer (račun se otvara u MDM → Organizacije) | svoju organizaciju, svoje klijente i njihove uređaje |
+| Klijent | samo svoju organizaciju i svoje uređaje |
+
+Distributer i klijent ne vide ERP dio (računi, skladište…), samo MDM.
+
+**Mogućnosti:** nadzorna ploča (online/offline, baterija, prostor, upozorenja) · popis uređaja s filtrima i
+skupnim naredbama · detalji uređaja (telemetrija, instalirane aplikacije, zaslon uživo, zapisnici, naredbe,
+događaji, bilješke, veza na uređaj u skladištu) · naredbe: ponovno pokretanje, primjena konfiguracije,
+instalacija/uklanjanje aplikacije, snimka zaslona, prikupljanje zapisnika, zaključavanje, poruka, slanje datoteke,
+zaključani način (kiosk), brisanje (Android, samo vlasnik), PowerShell skripta (Windows, samo vlasnik), zaboravi
+uređaj · konfiguracije (profili) po lokaciji ili uređaju: aplikacije, kiosk, ograničenja, Wi-Fi, zaslon, zvuk,
+vremenska zona, PIN za održavanje · knjižnica aplikacija (APK, MSI, EXE s verzijama) · datoteke · dokumenti
+· upis uređaja 6-znamenkastim kodom ili ključem (Android QR, Windows naredba).
+
+**Demo:** `npx tsx scripts/mdm-demo.ts` stvara distributere, klijente, lokacije i uređaje na čekanju
+(`distributor@demo.hr`, `distributor2@demo.hr`, `klijent@demo.hr`, lozinka `admin123`).
+`node scripts/mdm-agent-sim.mjs --help` — simulator uređaja (bez pravih uređaja).
+
+**Za prave uređaje treba:**
+
+1. Poslužitelj dostupan uređajima preko **HTTPS-a** (javna adresa ili VPN) i `APP_URL` u `.env`.
+2. Agenti u `agents/dist/` (poslužitelj ih nudi na `/api/mdm/agent/download/*`):
+   - Windows: već je u paketu (`agents/dist/windows`). Na računalu kao administrator pokrenite naredbu s
+     *MDM → Upis uređaja*.
+   - Android: GitHub → Actions → *MDM agenti* → zadnji zeleni run → preuzmite `mdm-agent-android` i
+     raspakirajte u `agents/dist/android/` (ili `agents/build-dist.sh`). Upis: tvornički reset uređaja,
+     6× dodir početnog zaslona, skeniranje QR koda s *Upis uređaja*.
+3. Za stalan Android QR: potpisni ključ u GitHub tajnama `ANDROID_KEYSTORE_BASE64`,
+   `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` (bez njih se gradi debug APK
+   čiji se potpis mijenja svakom izgradnjom). Checksum se čita iz `agents/dist/android/signature-checksum.txt`
+   ili `MDM_ANDROID_SIGNATURE_CHECKSUM`.
+
+Neobavezno u `.env`: `MDM_STORAGE_DIR` (mapa za aplikacije, snimke i zapisnike; zadano `storage/mdm`),
+`MDM_AGENT_DIR`, `MDM_DEFAULT_COMPANY_ID` (firma za uređaje upisane kodom). Protokol agenta:
+`docs/mdm-agent-protocol.md`; agenti: `agents/README.md`.
+
 ## Arhitektura
 
 Next.js 15 (App Router, server komponente, server akcije) · TypeScript · Prisma 6 · PostgreSQL · Tailwind 4.

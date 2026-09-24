@@ -5,7 +5,7 @@ import { plain } from '../plain';
 import { buildEffectiveConfig, deviceProfile } from '../mdm/config';
 import { canEditShared, deviceWhere, orgWhere, sharedWhere, type MdmScope } from '../mdm/scope';
 import { appReferences } from '../mdm/apps';
-import { maskWifi, redactSettings } from '../mdm/profiles';
+import { maskWifi, pinFor, redactSettings } from '../mdm/profiles';
 import { mergeConfig, type DeviceOverrides, type Platform, type ProfileApp, type ProfileSettings } from '@/domain/mdm';
 import { toEditor, type LibraryApp } from '@/components/mdm/config-model';
 
@@ -134,7 +134,7 @@ export async function profileEditor(scope: MdmScope, id: string) {
   const [library, sites, counts] = await Promise.all([libraryFor(scope, p.platform, p.orgId), sitesFor(scope, p), profileDeviceCounts(scope, [p])]);
   return {
     profile: { id: p.id, name: p.name, platform: p.platform, orgId: p.orgId, orgName: p.org?.name ?? null, note: p.note, version: p.version, updatedAt: p.updatedAt.toISOString() },
-    editor: toEditor(settings, apps, maskWifi(settings.wifi)),
+    editor: toEditor(pinFor(settings, scope.level === 'edit' && canEditShared(scope, p.orgId)), apps, maskWifi(settings.wifi)),
     library,
     sites,
     devices: counts.get(p.id) ?? 0,
@@ -272,7 +272,7 @@ export async function deviceConfig(scope: MdmScope, id: string) {
     site: d.site ? { id: d.site.id, name: d.site.name, profile: d.site.profile } : null,
     profile: profile ? { id: profile.id, name: profile.name, version: profile.version, own: !!d.profileId, editable: canEditShared(scope, profile.orgId) } : null,
     profiles,
-    editor: toEditor(merged.settings, merged.apps, maskWifi(merged.settings.wifi)),
+    editor: toEditor(pinFor(merged.settings, scope.level === 'edit'), merged.apps, maskWifi(merged.settings.wifi)),
     inherited: base.apps.map((a) => a.appId),
     hasOverrides: !!(overrides.settings && Object.keys(overrides.settings).length) || !!overrides.apps?.length,
     overridesJson: JSON.stringify({ ...overrides, ...(overrides.settings ? { settings: redactSettings(overrides.settings as ProfileSettings) } : {}) }, null, 2),

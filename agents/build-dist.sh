@@ -4,7 +4,7 @@
 #   dist/android/app-release.apk   dist/windows/wms-agent.zip   dist/windows/install.ps1
 #
 # Upotreba:
-#   agents/build-dist.sh                 # zadnji uspješni run na grani mdm-agents (traži gh CLI)
+#   agents/build-dist.sh                 # zadnji uspješni run na grani main (traži gh CLI)
 #   agents/build-dist.sh -b main         # druga grana
 #   agents/build-dist.sh -r 1234567890   # određeni run
 #   agents/build-dist.sh -d ~/Downloads  # već preuzeti/raspakirani artefakti (mape mdm-agent-android, mdm-agent-windows ili zip-ovi)
@@ -12,7 +12,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DIST="$HERE/dist"
-BRANCH="mdm-agents"
+BRANCH="main"
 RUN_ID=""
 SRC=""
 while getopts "b:r:d:h" o; do

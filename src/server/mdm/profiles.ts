@@ -82,10 +82,17 @@ export interface MaskedWifi {
 export const maskWifi = (list: WifiNetwork[] | undefined): MaskedWifi[] =>
   (list ?? []).map((w) => ({ ssid: w.ssid, security: w.security, hidden: !!w.hidden, hasPassword: !!w.password, origSsid: w.ssid, password: '' }));
 
-/** Postavke za prikaz (JSON pregled, preglednik): lozinke zamijenjene s „••••". */
+/** Postavke za prikaz (JSON pregled, preglednik): lozinke i PIN zamijenjeni s „••••". */
 export function redactSettings(s: ProfileSettings): ProfileSettings {
-  return { ...s, ...(s.wifi ? { wifi: s.wifi.map((w) => (w.password ? { ...w, password: '••••' } : w)) } : {}) };
+  return {
+    ...s,
+    ...(s.wifi ? { wifi: s.wifi.map((w) => (w.password ? { ...w, password: '••••' } : w)) } : {}),
+    ...(s.maintenancePin ? { maintenancePin: '••••' } : {}),
+  };
 }
+
+/** PIN za održavanje vidi samo tko smije uređivati (kao na pregledu uređaja). */
+export const pinFor = (s: ProfileSettings, canEdit: boolean): ProfileSettings => (canEdit ? s : { ...s, maintenancePin: undefined });
 
 /** Nova lista mreža: prazna lozinka preuzima staru (po izvornom SSID-u). */
 export function resolveWifi(next: WifiInput[], prev: WifiNetwork[] | undefined): WifiNetwork[] {

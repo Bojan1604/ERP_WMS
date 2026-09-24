@@ -731,6 +731,18 @@ export const isArtifact = (s: string): s is ArtifactName => Object.hasOwn(ARTIFA
 
 export const agentDir = () => path.resolve(process.env.MDM_AGENT_DIR || path.join(process.cwd(), 'agents', 'dist'));
 
+/** SHA-256 potpisa APK-a za Android QR: MDM_ANDROID_SIGNATURE_CHECKSUM, inače iz izgradnje (agents/dist). */
+export async function androidSignatureChecksum(): Promise<string | null> {
+  const env = process.env.MDM_ANDROID_SIGNATURE_CHECKSUM?.trim();
+  if (env) return env;
+  try {
+    const v = (await readFile(path.join(agentDir(), 'android', 'signature-checksum.txt'), 'utf8')).trim();
+    return /^[A-Za-z0-9_-]{43}=?$/.test(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 const shaCache = new Map<string, { key: string; sha256: string }>();
 
 async function sha256File(file: string, size: number, mtimeMs: number): Promise<string> {
