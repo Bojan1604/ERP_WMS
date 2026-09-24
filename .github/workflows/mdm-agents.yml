@@ -90,3 +90,78 @@ jobs:
         with:
           name: android-test-reports
           path: agents/android/app/build/reports/
+
+  windows:
+    name: Windows agent
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: powershell
+        working-directory: agents/windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Moduli (PSScriptAnalyzer, Pester 5)
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          Install-Module Pester -MinimumVersion 5.5.0 -Scope CurrentUser -Force -SkipPublisherCheck
+          $PSVersionTable.PSVersion
+      - name: PSScriptAnalyzer
+        run: |
+          $files = Get-ChildItem -Path . -Include *.ps1, *.psm1 -Recurse
+          $issues = $files | ForEach-Object { Invoke-ScriptAnalyzer -Path $_.FullName -Settings ./PSScriptAnalyzerSettings.psd1 }
+          $issues | Format-Table -AutoSize RuleName, Severity, ScriptName, Line, Message | Out-String -Width 250 | Write-Output
+          $errors = @($issues | Where-Object Severity -EQ 'Error')
+          if ($errors.Count -gt 0) { throw "PSScriptAnalyzer: $($errors.Count) grešaka" }
+      - name: Pester (Windows PowerShell 5.1)
+        run: |
+          Import-Module Pester -MinimumVersion 5.5.0
+          $cfg = New-PesterConfiguration
+          $cfg.Run.Path = './tests/WmsAgent.Tests.ps1'
+          $cfg.Run.Exit = $true
+          $cfg.Output.Verbosity = 'Detailed'
+          $cfg.TestResult.Enabled = $true
+          $cfg.TestResult.OutputPath = 'pester-results.xml'
+          Invoke-Pester -Configuration $cfg
+      - name: Dimni test s lažnim poslužiteljem
+        run: ./tests/Smoke.ps1 -Port 18080
+      - name: Instalacija i deinstalacija (zakazani zadaci, ACL)
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./install.ps1 -Server 'http://127.0.0.1:18081' -Token 'ci-token' -NoStart
+          $t = Get-ScheduledTask -TaskName 'ERPWMS Agent'
+          if ($t.Principal.UserId -notmatch 'SYSTEM|S-1-5-18') { throw "Zadatak ne radi kao SYSTEM: $($t.Principal.UserId)" }
+          Get-ScheduledTask -TaskName 'ERPWMS Agent (korisnik)' | Out-Null
+          $acl = Get-Acl "$env:ProgramData\ERPWMS\agent.json"
+          $acl.Access | Format-Table IdentityReference, FileSystemRights, AccessControlType | Out-String | Write-Output
+          if ($acl.Access | Where-Object { $_.IdentityReference -match 'Users|Everyone|Authenticated' }) { throw 'agent.json je dostupan običnim korisnicima' }
+          $cfg = Get-Content -Raw "$env:ProgramData\ERPWMS\agent.json" | ConvertFrom-Json
+          if ($cfg.server -ne 'http://127.0.0.1:18081' -or $cfg.enrollToken -ne 'ci-token') { throw 'agent.json nije ispravan' }
+          if (-not (Test-Path "$env:ProgramFiles\ERPWMS\Agent\WmsAgent.psm1")) { throw 'Datoteke agenta nisu kopirane' }
+          & "$env:ProgramFiles\ERPWMS\Agent\uninstall.ps1"
+          if (Get-ScheduledTask -TaskName 'ERPWMS Agent' -ErrorAction SilentlyContinue) { throw 'Zadatak nije uklonjen' }
+          if (Test-Path "$env:ProgramFiles\ERPWMS\Agent") { throw 'Mapa programa nije uklonjena' }
+          Write-Output 'Instalacija/deinstalacija u redu.'
+      - name: Paket wms-agent.zip
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Compress-Archive -Path WmsAgent.ps1, WmsAgent.psm1, UserAgent.ps1, install.ps1, uninstall.ps1 -DestinationPath out/wms-agent.zip -Force
+          Copy-Item install.ps1 out/install.ps1
+          $h = (Get-FileHash out/wms-agent.zip -Algorithm SHA256).Hash.ToLower()
+          "## Windows agent`n`n| | |`n|---|---|`n| wms-agent.zip SHA-256 | ``$h`` |" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mdm-agent-windows
+          path: |
+            agents/windows/out/wms-agent.zip
+            agents/windows/out/install.ps1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-test-results
+          path: agents/windows/pester-results.xml
+          if-no-files-found: ignore

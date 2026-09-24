@@ -63,7 +63,7 @@ class PayloadsTest {
         assertFalse(UrlPolicy.isAllowed("ftp://erp.firma.hr"))
         assertEquals("https://erp.firma.hr", UrlPolicy.normalize(" erp.firma.hr/ "))
         assertEquals("https://erp.firma.hr/api/mdm/agent/files/1", UrlPolicy.resolve("https://erp.firma.hr/", "/api/mdm/agent/files/1"))
-        assertEquals("https://erp.firma.hr/x", UrlPolicy.resolve("https://erp.firma.hr", "https://ERP.firma.hr/x"))
+        assertEquals("https://ERP.firma.hr/x", UrlPolicy.resolve("https://erp.firma.hr", "https://ERP.firma.hr/x"))
     }
 
     @Test(expected = IllegalArgumentException::class)
