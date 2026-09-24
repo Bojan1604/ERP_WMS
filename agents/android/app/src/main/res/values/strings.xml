@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ERP/WMS MDM</string>
+    <string name="admin_description">Upravljanje uređajem iz ERP/WMS portala (postavke, aplikacije, zaključani način).</string>
+    <string name="setup_title">Postavke agenta</string>
+    <string name="welcome">Welcome!</string>
+    <string name="enroll_hint">Upišite ovaj kod u portalu (MDM → Upis uređaja)</string>
+    <string name="channel_service">Agent (u pozadini)</string>
+    <string name="channel_messages">Poruke administratora</string>
+    <string name="service_running">Agent je aktivan</string>
+</resources>
