@@ -6,7 +6,7 @@ import { transaction } from '@/server/db';
 import { assert } from '@/server/errors';
 import { zId } from '@/server/zod';
 import {
-  addDevices, createContract, removeFromContract, setContractStatus, terminateContract, updateContractItems, updateContractTerms,
+  addDevices, createContract, removeFromContract, setContractStatus, setPausedPeriod, terminateContract, updateContractItems, updateContractTerms,
 } from '@/server/services/rentals';
 import { deviceCandidates, type Candidate } from '@/server/queries/rentals';
 import { validatePlan } from '@/domain/plan';
@@ -70,6 +70,15 @@ export const itemsPatchAction = action({ module: 'rentals', level: 'edit' }, ite
   await transaction((tx) => updateContractItems(tx, user, input.contractId, input.ids, patch));
   return { message: `Izmijenjeno uređaja: ${input.ids.length}.` };
 });
+
+export const pausePeriodAction = action(
+  { module: 'rentals', level: 'edit' },
+  z.object({ contractId: zId, itemId: zId, period: z.string().regex(/^\d{4}-\d{2}$/), paused: z.boolean() }),
+  async ({ contractId, itemId, period, paused }, user) => {
+    await transaction((tx) => setPausedPeriod(tx, user, contractId, itemId, period, paused));
+    return { message: paused ? 'Naplata pauzirana za to razdoblje.' : 'Naplata vraćena.' };
+  },
+);
 
 export const removeItemsAction = action(
   { module: 'rentals', level: 'edit' },

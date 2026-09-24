@@ -1,8 +1,8 @@
 import 'server-only';
-import { Prisma } from '@prisma/client';
+import { Prisma, type ContractStatus } from '@prisma/client';
 import { db } from '@/server/db';
-import { toDevice, toTerms } from '@/server/services/rentals';
-import { devicePlan, deviceChargesInYear } from '@/domain/billing';
+import { toTerms } from '@/server/services/rentals';
+import { devicePlan, deviceChargesInYear, type ContractDevice, type PlanPeriodInput } from '@/domain/billing';
 import { today, toISO } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 
@@ -101,7 +101,12 @@ async function cellsFor(companyId: string, ids: string[], f: OverviewFilters) {
   const cy = Number(now.slice(0, 4));
   const lastShown = f.year < cy ? 11 : f.year > cy ? -1 : Number(now.slice(5, 7)) - 1;
   const [cis, overrides, sales] = await Promise.all([
-    db.contractItem.findMany({ where: { itemId: { in: ids } }, include: { contract: true } }),
+    // samo stupci za izračun (bez ugovora u svakom retku); ugovori se čitaju jednom ispod
+    ids.length
+      ? db.$queryRaw<{ contractId: string; itemId: string; monthly: number; plan: unknown; status: ContractStatus | null; skipped: string[]; paused: string[] }[]>`
+          SELECT ci."contractId", ci."itemId", ci.monthly::float8 AS monthly, ci.plan, ci.status, ci.skipped, ci.paused
+          FROM "ContractItem" ci WHERE ci."itemId" = ANY(${ids})`
+      : Promise.resolve([]),
     db.rentOverride.findMany({ where: { companyId, year: f.year, itemId: { in: ids } }, select: { itemId: true, month: true, amount: true } }),
     f.sold
       ? db.invoiceLine.findMany({
@@ -126,17 +131,27 @@ async function cellsFor(companyId: string, ids: string[], f: OverviewFilters) {
     const m = Number(toISO(s.invoice.date).slice(5, 7)) - 1;
     get(s.itemId!).cells[m].auto = r2(get(s.itemId!).cells[m].auto + num(s.netAmount));
   }
+  const contracts = await db.contract.findMany({ where: { companyId, id: { in: [...new Set(cis.map((c) => c.contractId))] } } });
+  const termsOf = new Map(contracts.map((c) => [c.id, toTerms(c)]));
+  // uređaji istog ugovora s istom cijenom i planom daju iste rate — računaju se jednom
+  const memo = new Map<string, { first: string | null; charges: { m: number; amount: number }[] }>();
   for (const ci of cis) {
-    const terms = toTerms(ci.contract);
-    const d = toDevice(ci);
+    const terms = termsOf.get(ci.contractId);
+    if (!terms) continue;
+    const d: ContractDevice = { itemId: ci.itemId, monthly: ci.monthly, plan: (ci.plan as PlanPeriodInput[] | null) ?? [], status: ci.status, skipped: ci.skipped, paused: ci.paused };
     const r = get(ci.itemId);
-    r.monthly = num(ci.monthly);
-    const first = devicePlan(terms, d)[0]?.from;
-    if (first && first > now) r.from = first;
-    for (const ch of deviceChargesInYear(terms, d, f.year)) {
-      const m = Number(ch.period.slice(5, 7)) - 1;
-      r.cells[m].auto = r2(r.cells[m].auto + ch.amount);
+    r.monthly = d.monthly;
+    const key = `${ci.contractId}|${d.monthly}|${d.status ?? ''}|${JSON.stringify(d.plan)}|${(d.skipped ?? []).join(',')}|${(d.paused ?? []).join(',')}`;
+    let calc = memo.get(key);
+    if (!calc) {
+      calc = {
+        first: devicePlan(terms, d)[0]?.from ?? null,
+        charges: deviceChargesInYear(terms, d, f.year).map((ch) => ({ m: Number(ch.period.slice(5, 7)) - 1, amount: ch.amount })),
+      };
+      memo.set(key, calc);
     }
+    if (calc.first && calc.first > now) r.from = calc.first;
+    for (const ch of calc.charges) r.cells[ch.m].auto = r2(r.cells[ch.m].auto + ch.amount);
   }
   for (const id of ids) {
     const r = get(id);

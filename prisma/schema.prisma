@@ -191,6 +191,17 @@ enum FiscalStatus {
   FAILED
 }
 
+enum SupplierInvoiceSource {
+  MANUAL
+  EINVOICE
+}
+
+enum SupplierInvoiceStatus {
+  RECEIVED
+  ACCEPTED
+  REJECTED
+}
+
 enum StocktakeStatus {
   OPEN
   CLOSED
@@ -957,6 +968,8 @@ model ContractItem {
   status     ContractStatus?
   /// Razdoblja (YYYY-MM) koja se ne fakturiraju — izdana izvan programa.
   skipped    String[]        @default([])
+  /// Pauzirana razdoblja (YYYY-MM): rata se ne naplaćuje.
+  paused     String[]        @default([])
   addedAt    DateTime        @default(now())
 
   contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
@@ -1055,31 +1068,48 @@ model GoodsReceipt {
 
 /// Ulazni račun dobavljača (knjiga URA).
 model SupplierInvoice {
-  id               String    @id @default(cuid())
+  id               String                @id @default(cuid())
   companyId        String
   internalNo       String
   number           String // broj računa dobavljača
   supplierId       String
-  issueDate        DateTime  @db.Date
-  dueDate          DateTime? @db.Date
-  netAmount        Decimal   @default(0) @db.Decimal(14, 2)
-  vatAmount        Decimal   @default(0) @db.Decimal(14, 2)
-  total            Decimal   @default(0) @db.Decimal(14, 2)
-  paidDate         DateTime? @db.Date
+  issueDate        DateTime              @db.Date
+  dueDate          DateTime?             @db.Date
+  netAmount        Decimal               @default(0) @db.Decimal(14, 2)
+  vatAmount        Decimal               @default(0) @db.Decimal(14, 2)
+  total            Decimal               @default(0) @db.Decimal(14, 2)
+  paidDate         DateTime?             @db.Date
   category         String?
   note             String?
   /// Kada je račun predan knjigovođi (stranica Knjigovođa); null = nije poslan.
   accountantSentAt DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  /// Upisan ručno ili preuzet kao eRačun od informacijskog posrednika (Fiskalizacija 2.0).
+  source           SupplierInvoiceSource @default(MANUAL)
+  /// Poslovni status kupca. Zadano ACCEPTED: ručni i postojeći računi su već „prihvaćeni" upisom;
+  /// samo preuzeti eRačun počinje kao RECEIVED i čeka odluku (prihvati / odbij).
+  status           SupplierInvoiceStatus @default(ACCEPTED)
+  statusAt         DateTime?
+  statusBy         String?
+  rejectReason     String?
+  /// Id dokumenta kod posrednika (samo eRačun); jedinstven po firmi.
+  eInvoiceId       String?
+  /// Okruženje posrednika iz kojeg je dokument preuzet (TEST | PROD).
+  eInvoiceEnv      String?
+  /// Zadnji status koji je posrednik javio (sirovi tekst, za prikaz).
+  providerStatus   String?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
 
   company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   supplier Partner  @relation(fields: [supplierId], references: [id])
   expense  Expense?
 
   @@unique([companyId, internalNo])
+  // više NULL-ova je dopušteno (ručni računi), a eRačun se ne može upisati dvaput
+  @@unique([companyId, eInvoiceId])
   @@index([companyId, issueDate])
   @@index([companyId, accountantSentAt])
+  @@index([companyId, status])
   // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
   @@index([supplierId])
 }

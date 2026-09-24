@@ -4,7 +4,7 @@ import { contractHistory } from '@/server/queries/rentals';
 import { dateTime } from '@/lib/format';
 
 const ACTION_LABEL: Record<string, string> = {
-  create: 'Otvoren', update: 'Uvjeti', status: 'Status', terminate: 'Otkaz', items: 'Uređaji', remove: 'Povrat',
+  create: 'Otvoren', update: 'Uvjeti', status: 'Status', terminate: 'Otkaz', items: 'Uređaji', remove: 'Povrat', pause: 'Pauza naplate', resume: 'Naplata vraćena',
   add: 'Dodavanje', issue: 'Račun', draft: 'Nacrt', skip: 'Preskočeno',
 };
 

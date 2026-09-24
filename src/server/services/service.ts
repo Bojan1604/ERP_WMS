@@ -45,7 +45,7 @@ const itemSelect = {
   issueDate: true,
   warrantyStart: true,
   warrantyMonths: true,
-  contractItem: { select: { id: true, contractId: true, monthly: true, plan: true, skipped: true, status: true } },
+  contractItem: { select: { id: true, contractId: true, monthly: true, plan: true, skipped: true, paused: true, status: true } },
 } satisfies Prisma.ItemSelect;
 
 type ServiceItem = Prisma.ItemGetPayload<{ select: typeof itemSelect }>;
@@ -56,7 +56,7 @@ function snapshot(item: ServiceItem): PrevSnapshot {
     state: item.state,
     partnerId: item.partnerId,
     warehouseId: item.warehouseId,
-    contract: ci ? { contractId: ci.contractId, monthly: num(ci.monthly), plan: ci.plan, skipped: ci.skipped, status: ci.status } : null,
+    contract: ci ? { contractId: ci.contractId, monthly: num(ci.monthly), plan: ci.plan, skipped: ci.skipped, paused: ci.paused, status: ci.status } : null,
   };
 }
 
@@ -244,6 +244,7 @@ export async function returnDevice(tx: Tx, actor: Actor, id: string, target: Ret
           monthly: c.monthly,
           plan: (c.plan ?? []) as Prisma.InputJsonValue,
           skipped: c.skipped ?? [],
+          paused: c.paused ?? [],
           status: (c.status as ContractStatus | null) ?? null,
         },
       });
@@ -299,7 +300,7 @@ export async function replaceDevice(
   const partnerId = orig.partnerId ?? prev?.partnerId ?? o.partnerId;
   assert(partnerId, 'Izvorni uređaj nije kod klijenta — zamjena nije potrebna.');
   const contract = orig.contractItem
-    ? { contractId: orig.contractItem.contractId, monthly: num(orig.contractItem.monthly), plan: orig.contractItem.plan, skipped: orig.contractItem.skipped, status: orig.contractItem.status }
+    ? { contractId: orig.contractItem.contractId, monthly: num(orig.contractItem.monthly), plan: orig.contractItem.plan, skipped: orig.contractItem.skipped, paused: orig.contractItem.paused, status: orig.contractItem.status }
     : (prev?.contract ?? null);
   // bez poznatog ugovora uređaj iz najma ne smije postati „prodan"
   assert(contract || prev?.state !== 'RENTED', 'Uređaj je bio u najmu, ali ugovor nije poznat — zamjenski uređaj dodajte na ugovor ručno (Najam → Ugovori).');
@@ -334,6 +335,7 @@ export async function replaceDevice(
           monthly: contract.monthly,
           plan: (contract.plan ?? []) as Prisma.InputJsonValue,
           skipped: contract.skipped ?? [],
+          paused: contract.paused ?? [],
           status: (contract.status as ContractStatus | null) ?? null,
         },
       });

@@ -1,7 +1,7 @@
 import 'server-only';
 import { db } from '../db';
 import { buildUbl, type UblKind } from '@/domain/ubl';
-import type { ChargeInput } from '@/domain/invoice';
+import { groupLines, type ChargeInput } from '@/domain/invoice';
 import { UBL_PAYMENT_MEANS } from '@/domain/fiscal';
 import { toISO } from '@/domain/dates';
 import { num } from '@/domain/money';
@@ -72,16 +72,22 @@ export async function invoiceUbl(companyId: string, id: string) {
     paymentReference: inv.paymentRef,
     paymentMeansCode: UBL_PAYMENT_MEANS[inv.paymentMethod],
     billingReference: inv.refInvoice?.number ? { number: inv.refInvoice.number, date: toISO(inv.refInvoice.date), kind: inv.refInvoice.kind as UblKind } : null,
-    lines: inv.lines.map((l) => ({
-      description: l.description,
-      serial: l.item?.serial ?? null,
-      code: l.model?.code ?? null,
-      kpd: l.kpd ?? l.model?.kpd ?? l.service?.kpd ?? null,
-      unit: l.unit,
-      qty: num(l.qty),
-      unitPrice: num(l.unitPrice),
-      discountPct: num(l.discountPct),
-    })),
+    // uređaji istog modela i cijene idu kao jedna stavka s količinom i popisom serijskih
+    lines: groupLines(
+      inv.lines.map((l) => ({
+        description: l.description,
+        serial: l.item?.serial ?? null,
+        code: l.model?.code ?? null,
+        kpd: l.kpd ?? l.model?.kpd ?? l.service?.kpd ?? null,
+        unit: l.unit,
+        qty: num(l.qty),
+        unitPrice: num(l.unitPrice),
+        discountPct: num(l.discountPct),
+      })),
+      (l) => (l.serial ? [l.description, l.code ?? '', l.kpd ?? '', l.unit, l.unitPrice, l.discountPct].join('|') : null),
+    ).map(({ lines: g }) =>
+      g.length === 1 ? g[0] : { ...g[0], serial: null, serials: g.flatMap((x) => (x.serial ? [x.serial] : [])), qty: g.reduce((a, x) => a + x.qty, 0) },
+    ),
   });
   return { inv, xml, fileName };
 }

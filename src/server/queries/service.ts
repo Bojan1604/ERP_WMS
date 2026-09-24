@@ -98,7 +98,7 @@ export async function getServiceOrder(companyId: string, id: string) {
           status: { select: { name: true, color: true } },
           warehouse: { select: { name: true } },
           model: { select: { brand: true, name: true, code: true } },
-          contractItem: { select: { id: true, contractId: true, monthly: true, plan: true, skipped: true, status: true, contract: { select: { number: true } } } },
+          contractItem: { select: { id: true, contractId: true, monthly: true, plan: true, skipped: true, paused: true, status: true, contract: { select: { number: true } } } },
         },
       },
     },

@@ -1,6 +1,11 @@
 import 'server-only';
 import { randomUUID } from 'node:crypto';
 import { amsRegistered } from '@/domain/company-lookup';
+import {
+  BUSINESS_STATUS, alreadyInStatus, changedOnCandidates, extractXml, incomingList, normalizeIncoming, shapeError,
+  type BusinessStatus, type IncomingDoc,
+} from '@/domain/einvoice-inbound';
+import { demoIncoming } from './einvoice-demo';
 
 /**
  * Informacijski posrednik za eRačun (Fiskalizacija 2.0). Program zna samo za
@@ -41,6 +46,20 @@ export interface PaymentReport {
   paymentType: string;
 }
 
+export interface StatusChange {
+  status: BusinessStatus;
+  note?: string;
+  /** Datum promjene (YYYY-MM-DD); zadano danas. */
+  date?: string | null;
+  partialPaymentAmount?: number;
+}
+
+export interface RejectReport {
+  documentId: string;
+  note: string;
+  rejectionDate: string;
+}
+
 export interface EInvoiceProvider {
   readonly code: string;
   send(xml: string, meta: SendMeta): Promise<ProviderResult>;
@@ -49,6 +68,16 @@ export interface EInvoiceProvider {
   ping(): Promise<ProviderResult>;
   /** AMS (adresar primatelja eRačuna): može li primatelj s tim OIB-om primati eRačune. */
   amsCheck?(oib: string): Promise<ProviderResult & { registered?: boolean }>;
+
+  // ---- ulazni eRačuni (kupac)
+  /** Primljeni dokumenti (najnoviji prvi, koliko posrednik vrati). */
+  incoming?(opts?: { limit?: number; offset?: number }): Promise<ProviderResult & { docs?: IncomingDoc[] }>;
+  /** Izvorni UBL XML primljenog dokumenta. */
+  documentXml?(id: string): Promise<ProviderResult & { xml?: string }>;
+  /** Poslovni status kupca (prihvaćen, odbijen, plaćen). `already` = dokument je već bio u tom statusu. */
+  changeStatus?(id: string, s: StatusChange): Promise<ProviderResult & { already?: boolean; body?: unknown }>;
+  /** eIzvještavanje o odbijanju ulaznog računa (Porezna uprava). */
+  reportRejected?(r: RejectReport): Promise<ProviderResult>;
 }
 
 // ---------------------------------------------------------------- demo
@@ -72,6 +101,20 @@ export const demoProvider: EInvoiceProvider = {
   async amsCheck(oib) {
     return { ok: true, registered: true, demo: true, raw: JSON.stringify({ demo: true, oib, registered: true }) };
   },
+  async incoming() {
+    const docs = demoIncoming().map((d) => d.doc);
+    return { ok: true, demo: true, docs, raw: JSON.stringify({ demo: true, count: docs.length }) };
+  },
+  async documentXml(id) {
+    const d = demoIncoming().find((x) => x.doc.id === id);
+    return d ? { ok: true, demo: true, id, xml: d.xml } : { ok: false, demo: true, id, error: `Dokument ${id} ne postoji (demo).` };
+  },
+  async changeStatus(id, s) {
+    return { ok: true, demo: true, id, status: s.status, raw: JSON.stringify({ demo: true, id, status: BUSINESS_STATUS[s.status], note: s.note ?? '' }) };
+  },
+  async reportRejected(r) {
+    return { ok: true, demo: true, id: r.documentId, status: 'REPORTED', raw: JSON.stringify({ demo: true, ...r }) };
+  },
 };
 
 // ---------------------------------------------------------------- ePoslovanje.hr (API v2)
@@ -85,14 +128,19 @@ export const demoProvider: EInvoiceProvider = {
  *   POST ereporting/paid/{id}     eIzvještavanje o naplati
  *   GET  document/outgoing?limit=1  (provjera veze i ključa)
  *   POST ams/check                { schema: '9934', identifier: OIB } → prima li eRačune
- * Ostalo što posrednik nudi (document/validate, ereporting/reportdocument,
- * document/incoming) dodaje se ovdje, iza istog sučelja.
+ *   GET  document/incoming?limit=&offset=   primljeni dokumenti (bez insertedFrom/To — s njima
+ *                                 posrednik ne vrati ništa, iskustvo starog programa)
+ *   GET  document/get/{id}        izvorni XML (čisti XML, JSON s poljem ili base64)
+ *   POST document/changestatus/{id}  { status: 5|6|7|8, note, changedOn, partialPaymentAmount? }
+ *   POST ereporting/rejected/{id}    { documentId, note, rejectionDate } — odbijanje u eIzvještavanje
+ * Ostalo što posrednik nudi (document/validate, ereporting/reportdocument)
+ * dodaje se ovdje, iza istog sučelja.
  */
 export function eposlovanjeProvider(apiKey: string, env: 'TEST' | 'PROD', timeoutMs = 30_000): EInvoiceProvider {
   const base = env === 'PROD' ? 'https://eracun.eposlovanje.hr/api/v2/' : 'https://test.eposlovanje.hr/api/v2/';
   const softwareId = process.env.EINVOICE_SOFTWARE_ID || 'erp-wms';
 
-  async function call(method: 'GET' | 'POST', path: string, body?: unknown): Promise<ProviderResult & { data?: Record<string, unknown> }> {
+  async function call(method: 'GET' | 'POST', path: string, body?: unknown): Promise<ProviderResult & { data?: Record<string, unknown>; httpStatus?: number }> {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), timeoutMs);
     try {
@@ -109,8 +157,8 @@ export function eposlovanjeProvider(apiKey: string, env: 'TEST' | 'PROD', timeou
       } catch {
         data = { raw };
       }
-      if (!res.ok) return { ok: false, error: errorText(data) || `HTTP ${res.status}`, raw, data };
-      return { ok: true, raw, data };
+      if (!res.ok) return { ok: false, error: errorText(data) || `HTTP ${res.status}`, raw, data, httpStatus: res.status };
+      return { ok: true, raw, data, httpStatus: res.status };
     } catch (e) {
       const aborted = e instanceof Error && e.name === 'AbortError';
       // veza nije ni uspostavljena → zahtjev sigurno nije stigao; inače (istek, prekid) ishod nije poznat
@@ -158,8 +206,46 @@ export function eposlovanjeProvider(apiKey: string, env: 'TEST' | 'PROD', timeou
       const r = await call('POST', 'ams/check', { schema: '9934', identifier: oib });
       return { ...r, registered: r.ok ? amsRegistered(200, r.data) : undefined };
     },
+    async incoming(opts = {}) {
+      const q = new URLSearchParams({ limit: String(opts.limit ?? 50), offset: String(opts.offset ?? 0) });
+      const r = await call('GET', `document/incoming?${q}`);
+      if (!r.ok) return r;
+      // odgovor je goli niz ili objekt s nizom (items, documents, data…)
+      const docs = incomingList(r.data)
+        .map(normalizeIncoming)
+        .filter((d) => d.id);
+      return { ...r, docs };
+    },
+    async documentXml(id) {
+      const r = await call('GET', `document/get/${encodeURIComponent(id)}`);
+      if (!r.ok) return { ...r, id };
+      // odgovor može biti goli XML (nije JSON → data = { raw }), JSON s poljem ili base64
+      const xml = extractXml(r.data) || extractXml(r.raw);
+      return xml ? { ...r, id, xml } : { ...r, id, ok: false, error: 'Posrednik nije vratio XML dokumenta.' };
+    },
+    async changeStatus(id, s) {
+      const extra = s.partialPaymentAmount != null ? { partialPaymentAmount: s.partialPaymentAmount } : {};
+      let last: ProviderResult | null = null;
+      for (const date of changedOnCandidates(s.date)) {
+        const body = { status: BUSINESS_STATUS[s.status], note: s.note ?? '', ...date, ...extra };
+        const r = await call('POST', `document/changestatus/${encodeURIComponent(id)}`, body);
+        if (r.ok) return { ...r, id, status: s.status, body };
+        // „Dokument se već nalazi u statusu kojeg pokušavate postaviti" — raniji pokušaj je prošao
+        if (alreadyInStatus(r.error)) return { ...r, ok: true, error: undefined, id, status: s.status, already: true, body };
+        last = r;
+        // mreža, ili greška koja nije o obliku tijela (dokument ne postoji, nije dopušteno) — dalje nema smisla
+        if (r.unreachable || !shapeError(r.error, httpStatus(r))) break;
+      }
+      return { ...(last ?? { ok: false, error: 'Promjena statusa nije uspjela.' }), id };
+    },
+    async reportRejected(p) {
+      const r = await call('POST', `ereporting/rejected/${encodeURIComponent(p.documentId)}`, { documentId: p.documentId, note: p.note, rejectionDate: p.rejectionDate });
+      return { ...r, id: p.documentId };
+    },
   };
 }
+
+const httpStatus = (r: ProviderResult & { httpStatus?: number }) => r.httpStatus;
 
 function errorText(data: unknown): string {
   const out: string[] = [];
@@ -179,7 +265,7 @@ function errorText(data: unknown): string {
 
 const failing = (code: string, error: string): EInvoiceProvider => {
   const no = async (): Promise<ProviderResult> => ({ ok: false, error });
-  return { code, send: no, status: no, reportPayment: no, ping: no };
+  return { code, send: no, status: no, reportPayment: no, ping: no, incoming: no, documentXml: no, changeStatus: no, reportRejected: no };
 };
 
 /** Posrednik prema postavkama firme (ključ je već dešifriran). */

@@ -6,12 +6,20 @@ import { Dialog } from '@/components/ui/dialog';
 import { Field, Input } from '@/components/ui/field';
 import { SelectionBar } from '@/components/ui/selection';
 import { useAction, type ServerAction } from '@/components/ui/action';
+import { useToast } from '@/components/ui/toast';
 
 /** Skupno označavanje plaćenosti označenih redaka (ulazni računi). */
-export function PaidBar({ action, today }: { action: ServerAction<{ ids: string[]; paidDate: string | null }>; today: string }) {
+export function PaidBar({ action, today }: { action: ServerAction<{ ids: string[]; paidDate: string | null }, unknown>; today: string }) {
   const [ask, setAsk] = useState<{ ids: string[]; clear: () => void } | null>(null);
   const [d, setD] = useState(today);
-  const { run, pending } = useAction(action);
+  const toast = useToast();
+  // upozorenje: plaćanje je upisano, ali posrednik nije primio status „plaćen" (eRačuni)
+  const { run, pending } = useAction(action, {
+    onSuccess: (data) => {
+      const w = (data as { warning?: string | null } | undefined)?.warning;
+      if (w) toast('bad', w);
+    },
+  });
   return (
     <>
       {/* na mobitelu traka označenih stoji pri dnu ekrana, iznad donjeg izbornika */}

@@ -240,6 +240,7 @@ export function backupToPlan(raw: Row): ImportPlan {
     items: (cItems.get(String(r.id)) ?? []).map((ci) => ({
       itemKey: s(ci.itemId)!, monthly: n(ci.monthly), plan: Array.isArray(ci.plan) ? (ci.plan as never) : [], status: (s(ci.status) as never) ?? null,
       skipped: Array.isArray(ci.skipped) ? (ci.skipped as string[]) : [],
+      paused: Array.isArray(ci.paused) ? (ci.paused as string[]) : [],
     })),
   }));
   plan.rentOverrides = arr(raw, 'rentOverrides').map((r) => ({ itemKey: s(r.itemId)!, year: n(r.year), month: n(r.month), amount: n(r.amount) }));
@@ -278,6 +279,12 @@ export function backupToPlan(raw: Row): ImportPlan {
   plan.supplierInvoices = arr(raw, 'supplierInvoices').map((r) => ({
     key: s(r.id)!, internalNo: s(r.internalNo)!, number: s(r.number) ?? '', supplierKey: s(r.supplierId)!, issueDate: day(r.issueDate)!, dueDate: day(r.dueDate),
     netAmount: n(r.netAmount), vatAmount: n(r.vatAmount), total: n(r.total), paidDate: day(r.paidDate), category: s(r.category), note: s(r.note), createdAt: s(r.createdAt),
+    inbound: {
+      source: s(r.source) === 'EINVOICE' ? 'EINVOICE' : 'MANUAL',
+      status: s(r.status) === 'RECEIVED' || s(r.status) === 'REJECTED' ? (s(r.status) as 'RECEIVED' | 'REJECTED') : 'ACCEPTED',
+      statusAt: s(r.statusAt), statusBy: s(r.statusBy), rejectReason: s(r.rejectReason),
+      eInvoiceId: s(r.eInvoiceId), eInvoiceEnv: s(r.eInvoiceEnv), providerStatus: s(r.providerStatus),
+    },
   }));
   plan.expenses = arr(raw, 'expenses').map((r) => ({
     key: s(r.id)!, date: day(r.date)!, categoryKey: s(r.categoryId), description: s(r.description) ?? '', partnerKey: s(r.partnerId), netAmount: n(r.netAmount),

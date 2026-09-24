@@ -37,7 +37,7 @@ export default async function ReceiptsPage({ searchParams }: { searchParams: Pro
       </FilterBar>
       <TableWrap>
         {list.rows.length ? (
-          <table className="data-table min-w-[1000px]">
+          <table className="data-table sm:min-w-[1000px]">
             <thead>
               <tr>
                 <th>Broj</th>

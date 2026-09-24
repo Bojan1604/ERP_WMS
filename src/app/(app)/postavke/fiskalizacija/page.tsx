@@ -10,7 +10,7 @@ import { dateTime } from '@/lib/format';
 
 export const metadata = { title: 'Fiskalizacija' };
 
-const KIND_LABEL: Record<string, string> = { FISCAL: 'CIS', EINVOICE: 'eRačun', PAYMENT_REPORT: 'Naplata' };
+const KIND_LABEL: Record<string, string> = { FISCAL: 'CIS', EINVOICE: 'eRačun', PAYMENT_REPORT: 'Naplata', INBOUND: 'Ulazni eRačun' };
 
 export default async function FiscalSettingsPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const user = await pageAccess('settings');

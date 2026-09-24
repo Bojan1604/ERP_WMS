@@ -29,7 +29,7 @@ export interface PrevSnapshot {
   state: string;
   partnerId: string | null;
   warehouseId: string | null;
-  contract?: { contractId: string; monthly: number; plan: unknown; skipped: string[]; status: string | null } | null;
+  contract?: { contractId: string; monthly: number; plan: unknown; skipped: string[]; paused?: string[]; status: string | null } | null;
 }
 
 /** Nalog se smatra „dugim" nakon ovoliko dana. */

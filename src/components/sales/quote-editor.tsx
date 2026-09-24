@@ -9,7 +9,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { useAction } from '@/components/ui/action';
 import { useToast } from '@/components/ui/toast';
 import { eur } from '@/lib/format';
-import { documentTotals } from '@/domain/invoice';
+import { documentTotals, unifyDevicePrices } from '@/domain/invoice';
 import { customerVat } from '@/domain/tax';
 import { addDays } from '@/domain/dates';
 import { modelQuotePrice, saveQuoteAction } from '@/app/(app)/prodaja/ponude/actions';
@@ -210,7 +210,7 @@ export function QuoteEditor({ initial, lookups, stock: initialStock }: { initial
           set({
             lines: [
               ...v.lines,
-              ...ds.map((d): EditorLine => ({
+              ...unifyDevicePrices(v.lines, ds.map((d): EditorLine => ({
                 key: lineKey(),
                 kind: 'DEVICE',
                 itemId: d.id,
@@ -225,7 +225,7 @@ export function QuoteEditor({ initial, lookups, stock: initialStock }: { initial
                 agreedPrice: d.priceSource === 'agreed',
                 serial: d.serial,
                 cost: d.cost,
-              })),
+              }))),
             ],
           })
         }

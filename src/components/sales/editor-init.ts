@@ -1,6 +1,7 @@
 import type { InvoiceEditorValue } from './invoice-editor';
 import type { DeviceOpt, EditorLine, SalesLookups } from './types';
 import { customerVat } from '@/domain/tax';
+import { unifyDevicePrices } from '@/domain/invoice';
 import { addDays, today } from '@/domain/dates';
 
 /**
@@ -30,7 +31,7 @@ export function newInvoiceValue(lookups: SalesLookups, partnerId: string | null,
     paymentMethod: 'TRANSFER',
     description: '',
     note: '',
-    lines: devices.map((d, i): EditorLine => ({
+    lines: unifyDevicePrices([], devices.map((d, i): EditorLine => ({
       key: `p${i}`,
       kind: 'DEVICE',
       itemId: d.id,
@@ -45,6 +46,6 @@ export function newInvoiceValue(lookups: SalesLookups, partnerId: string | null,
       agreedPrice: d.priceSource === 'agreed',
       serial: d.serial,
       cost: d.cost,
-    })),
+    }))),
   };
 }

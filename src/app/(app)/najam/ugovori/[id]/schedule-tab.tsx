@@ -2,28 +2,43 @@ import Link from 'next/link';
 import type { Contract } from '@prisma/client';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { TableWrap } from '@/components/ui/misc';
-import { contractAccrual, contractBilling, deviceChargesInYear } from '@/domain/billing';
-import { MONTHS_SHORT, today } from '@/domain/dates';
+import { contractAccrual, contractBilling, scheduledCharges } from '@/domain/billing';
+import { MONTHS_SHORT, periodLabel, today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import { toDevice, toTerms } from '@/server/services/rentals';
 import type { contractItems } from '@/server/queries/rentals';
 import { amount, eur } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { db } from '@/server/db';
+import { coveredPeriods } from '@/server/services/invoices';
+import { PauseCell } from '@/components/rentals/pause-cell';
+import { pausePeriodAction } from '../actions';
 
 type Items = Awaited<ReturnType<typeof contractItems>>;
 
 /** Raspored naplate kroz godinu: rata po uređaju i mjesecu, uz obračun i naplatu ugovora. */
-export function ScheduleTab({ contract: c, items, year: y }: { contract: Contract; items: Items; year?: number }) {
+export async function ScheduleTab({ contract: c, items, year: y, canEdit }: { contract: Contract; items: Items; year?: number; canEdit: boolean }) {
   const now = today();
   const cy = Number(now.slice(0, 4));
   const year = y && y > 1990 && y < 2200 ? y : cy;
   const cm = year === cy ? Number(now.slice(5, 7)) - 1 : -1;
   const terms = toTerms(c);
   const devices = items.map(toDevice);
+  const covered = (await coveredPeriods(db, [c.id])).get(c.id) ?? new Set<string>();
+  // ćelija = rata u mjesecu naplate; pauzirane se prikazuju precrtane i ne ulaze u zbroj
   const rows = items.map((i, k) => {
-    const cells = Array<number>(12).fill(0);
-    for (const ch of deviceChargesInYear(terms, devices[k], year)) cells[Number(ch.period.slice(5, 7)) - 1] += ch.amount;
-    return { id: i.id, serial: i.item.serial, itemId: i.item.id, monthly: num(i.monthly), cells: cells.map(r2), total: r2(cells.reduce((a, b) => a + b, 0)) };
+    const d = devices[k];
+    const paused = new Set(d.paused ?? []);
+    const cells = Array.from({ length: 12 }, () => ({ v: 0, period: '', paused: false, invoiced: false }));
+    for (const ch of scheduledCharges(terms, d, `${year}-01`, `${year}-12`)) {
+      const cell = cells[Number(ch.period.slice(5, 7)) - 1];
+      cell.v = r2(cell.v + ch.amount);
+      cell.period = ch.period;
+      cell.paused = paused.has(ch.period);
+      cell.invoiced = covered.has(`${d.itemId}|${ch.period}`);
+    }
+    const total = r2(cells.reduce((a, x) => a + (x.paused ? 0 : x.v), 0));
+    return { id: i.id, serial: i.item.serial, itemId: i.item.id, monthly: num(i.monthly), cells, total };
   });
   const billing = contractBilling(terms, devices, year);
   const accrual = contractAccrual(terms, devices, year);
@@ -45,6 +60,7 @@ export function ScheduleTab({ contract: c, items, year: y }: { contract: Contrac
         </div>
         <p className="text-sm text-fg-3">
           U ćelijama je <b>iznos rate</b> u mjesecu naplate. Obračun je mjesečni iznos uređaja koji su taj mjesec u najmu.
+          {canEdit && <> Klik na iznos <b>pauzira naplatu</b> tog uređaja u tom mjesecu (precrtano = ne naplaćuje se); podebljano = fakturirano.</>}
         </p>
       </div>
       <TableWrap>
@@ -70,9 +86,15 @@ export function ScheduleTab({ contract: c, items, year: y }: { contract: Contrac
                   </Link>
                 </td>
                 <td className="num">{amount(r.monthly)}</td>
-                {r.cells.map((v, i) => (
-                  <td key={i} className={cn('num', hl(i), !v && 'text-fg-4')}>
-                    {v ? amount(v) : '·'}
+                {r.cells.map((x, i) => (
+                  <td key={i} className={cn('num', hl(i), !x.v && 'text-fg-4', canEdit && x.v && !x.invoiced && 'p-0')} title={x.invoiced ? 'Fakturirano' : undefined}>
+                    {!x.v ? (
+                      '·'
+                    ) : canEdit && !x.invoiced ? (
+                      <PauseCell action={pausePeriodAction} contractId={c.id} itemId={r.itemId} serial={r.serial} period={x.period} label={periodLabel(x.period)} value={x.v} paused={x.paused} />
+                    ) : (
+                      <span className={cn(x.paused && 'text-warn line-through', x.invoiced && 'font-medium')}>{amount(x.v)}</span>
+                    )}
                   </td>
                 ))}
                 <td className="num font-medium">{amount(r.total)}</td>

@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { Download, Inbox, Plus } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { listSupplierInvoices, supplierInvoiceYears, supplierOptions } from '@/server/queries/purchasing';
+import { getCompany } from '@/server/queries/lookups';
 import { can } from '@/domain/permissions';
 import { num } from '@/domain/money';
 import { today } from '@/domain/dates';
@@ -11,19 +12,22 @@ import { Pagination, readPage } from '@/components/ui/pagination';
 import { LinkButton, buttonClass } from '@/components/ui/button';
 import { SelectAll, SelectRow, SelectableTr, SelectionProvider } from '@/components/ui/selection';
 import { PaidBar } from '@/components/purchasing/paid-bar';
+import { FetchEInvoicesButton } from '@/components/purchasing/inbound-actions';
+import { SupplierInvoiceSourceBadge, SupplierInvoiceStatusBadge } from '@/components/purchasing/supplier-invoice-badges';
 import { date, eur, integer } from '@/lib/format';
-import { supplierInvoicesPaidAction } from './actions';
+import { fetchEInvoicesAction, supplierInvoicesPaidAction } from './actions';
 
 type Params = Record<string, string | string[] | undefined>;
-const FILTERS = ['q', 'supplier', 'year', 'paid'];
+const FILTERS = ['q', 'supplier', 'year', 'paid', 'status', 'source'];
 
 export default async function SupplierInvoicesPage({ searchParams }: { searchParams: Promise<Params> }) {
   const user = await pageAccess('purchasing', 'view');
   const sp = await searchParams;
   const pg = readPage(sp, 50);
   const c = user.companyId;
-  const [list, years, suppliers] = await Promise.all([listSupplierInvoices(c, sp, pg), supplierInvoiceYears(c), supplierOptions(c)]);
+  const [list, years, suppliers, company] = await Promise.all([listSupplierInvoices(c, sp, pg), supplierInvoiceYears(c), supplierOptions(c), getCompany(c)]);
   const canEdit = can(user.perms, 'purchasing', 'edit');
+  const hasProvider = !!company.eInvoiceProvider && company.eInvoiceProvider !== 'none';
   const filtered = FILTERS.some((k) => typeof sp[k] === 'string' && sp[k]);
   const t = today();
   const qs = new URLSearchParams();
@@ -33,9 +37,10 @@ export default async function SupplierInvoicesPage({ searchParams }: { searchPar
     <>
       <PageHeader
         title="Ulazni računi"
-        subtitle="Knjiga ulaznih računa (URA)"
+        subtitle="Knjiga ulaznih računa (URA) · eRačuni od posrednika"
         actions={
           <>
+            {canEdit && hasProvider && <FetchEInvoicesButton action={fetchEInvoicesAction} />}
             <a href={`/api/nabava/ulazni?${qs}`} className={buttonClass('secondary')}>
               <Download className="size-4" /> Izvoz CSV
             </a>
@@ -51,6 +56,24 @@ export default async function SupplierInvoicesPage({ searchParams }: { searchPar
         <SearchFilter placeholder="Broj, dobavljač, kategorija…" />
         <SelectFilter name="supplier" placeholder="Svi dobavljači" options={suppliers.map((s) => ({ value: s.id, label: s.name }))} />
         <SelectFilter name="year" placeholder="Sve godine" options={years.map((y) => ({ value: String(y), label: `${y}.` }))} />
+        <SelectFilter
+          name="status"
+          placeholder="Svi statusi"
+          options={[
+            { value: 'received', label: 'Zaprimljen' },
+            { value: 'accepted', label: 'Prihvaćen' },
+            { value: 'rejected', label: 'Odbijen' },
+            { value: 'paid', label: 'Plaćen' },
+          ]}
+        />
+        <SelectFilter
+          name="source"
+          placeholder="Svi izvori"
+          options={[
+            { value: 'einvoice', label: 'eRačun' },
+            { value: 'manual', label: 'Ručno' },
+          ]}
+        />
         <SegmentFilter
           name="paid"
           options={[
@@ -70,7 +93,7 @@ export default async function SupplierInvoicesPage({ searchParams }: { searchPar
         {canEdit && <PaidBar action={supplierInvoicesPaidAction} today={t} />}
         <TableWrap>
           {list.rows.length ? (
-            <table className="data-table min-w-[1100px]">
+            <table className="data-table sm:min-w-[1200px]">
               <thead>
                 <tr>
                   <th className="w-8">{canEdit && <SelectAll />}</th>
@@ -83,6 +106,7 @@ export default async function SupplierInvoicesPage({ searchParams }: { searchPar
                   <th className="num">Osnovica</th>
                   <th className="num">PDV</th>
                   <th className="num">Ukupno</th>
+                  <th>Status</th>
                   <th>Plaćeno</th>
                   <th>Trošak</th>
                 </tr>
@@ -90,7 +114,8 @@ export default async function SupplierInvoicesPage({ searchParams }: { searchPar
               <tbody>
                 {list.rows.map((r) => {
                   const due = r.dueDate ? r.dueDate.toISOString().slice(0, 10) : null;
-                  const overdue = !r.paidDate && due && due < t;
+                  const rejected = r.status === 'REJECTED';
+                  const overdue = !rejected && !r.paidDate && due && due < t;
                   return (
                     <SelectableTr key={r.id} id={r.id}>
                       <td>{canEdit && <SelectRow id={r.id} />}</td>
@@ -99,15 +124,31 @@ export default async function SupplierInvoicesPage({ searchParams }: { searchPar
                           {r.internalNo}
                         </Link>
                       </td>
-                      <td>{r.number}</td>
+                      <td>
+                        <span className="flex items-center gap-1.5">
+                          {r.number}
+                          <SupplierInvoiceSourceBadge source={r.source} />
+                        </span>
+                      </td>
                       <td>{r.supplier.name}</td>
                       <td className="whitespace-nowrap">{date(r.issueDate)}</td>
                       <td className={overdue ? 'whitespace-nowrap font-medium text-bad-strong' : 'whitespace-nowrap'}>{date(r.dueDate)}</td>
                       <td className="text-fg-3">{r.category ?? '—'}</td>
                       <td className="num">{eur(num(r.netAmount))}</td>
                       <td className="num">{eur(num(r.vatAmount))}</td>
-                      <td className="num font-medium">{eur(num(r.total))}</td>
-                      <td>{r.paidDate ? <Badge tone="ok">{date(r.paidDate)}</Badge> : <Badge tone={overdue ? 'bad' : 'warn'}>{overdue ? 'dospjelo' : 'nije plaćeno'}</Badge>}</td>
+                      <td className={rejected ? 'num font-medium text-fg-4 line-through' : 'num font-medium'}>{eur(num(r.total))}</td>
+                      <td>
+                        <SupplierInvoiceStatusBadge status={r.status} paid={!!r.paidDate} />
+                      </td>
+                      <td>
+                        {rejected ? (
+                          <span className="text-fg-4">—</span>
+                        ) : r.paidDate ? (
+                          <Badge tone="ok">{date(r.paidDate)}</Badge>
+                        ) : (
+                          <Badge tone={overdue ? 'bad' : 'warn'}>{overdue ? 'dospjelo' : 'nije plaćeno'}</Badge>
+                        )}
+                      </td>
                       <td>{r.expense ? <Badge tone="info">knjižen</Badge> : <span className="text-fg-4">—</span>}</td>
                     </SelectableTr>
                   );
@@ -118,11 +159,12 @@ export default async function SupplierInvoicesPage({ searchParams }: { searchPar
                   <td />
                   <td colSpan={6}>
                     {integer(list.total)} računa · neplaćeno {eur(list.sums.unpaid)}
+                    {sp.status !== 'rejected' && <span className="text-fg-3"> · zbrojevi bez odbijenih</span>}
                   </td>
                   <td className="num">{eur(list.sums.net)}</td>
                   <td className="num">{eur(list.sums.vat)}</td>
                   <td className="num">{eur(list.sums.total)}</td>
-                  <td colSpan={2} />
+                  <td colSpan={3} />
                 </tr>
               </tfoot>
             </table>

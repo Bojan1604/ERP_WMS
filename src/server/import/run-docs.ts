@@ -146,7 +146,7 @@ export async function insertDocuments(c: RunCtx, plan: ImportPlan) {
     for (const ci of k.items) {
       const itemId = c.id('items', ci.itemKey);
       if (!itemId) continue;
-      contractItems.push({ id: newId(), contractId, itemId, monthly: ci.monthly, plan: json(ci.plan), status: ci.status, skipped: ci.skipped });
+      contractItems.push({ id: newId(), contractId, itemId, monthly: ci.monthly, plan: json(ci.plan), status: ci.status, skipped: ci.skipped, paused: ci.paused ?? [] });
     }
   }
   const ciCount = await bulkInsert(tx, 'ContractItem', contractItems, { skipDuplicates: true });
@@ -259,9 +259,10 @@ async function insertOther(c: RunCtx, plan: ImportPlan) {
   c.step('quotes+transfers+service', quoteRows.length + transfers.length + so.length);
 
   // ulazni računi: dobavljač + broj; interni broj u postojećoj firmi iz brojača
-  const haveSi = c.existing
-    ? new Set((await tx.supplierInvoice.findMany({ where: { companyId }, select: { supplierId: true, number: true } })).map((s) => `${s.supplierId}|${low(s.number)}`))
-    : new Set<string>();
+  const haveSiRows = c.existing ? await tx.supplierInvoice.findMany({ where: { companyId }, select: { supplierId: true, number: true, eInvoiceId: true } }) : [];
+  const haveSi = new Set(haveSiRows.map((s) => `${s.supplierId}|${low(s.number)}`));
+  // id eRačuna kod posrednika je jedinstven po firmi
+  const haveEId = new Set(haveSiRows.map((s) => s.eInvoiceId).filter(Boolean));
   const siRows: Prisma.SupplierInvoiceCreateManyInput[] = [];
   for (const s of plan.supplierInvoices) {
     const supplierId = c.id('partners', s.supplierKey)!;
@@ -273,6 +274,11 @@ async function insertOther(c: RunCtx, plan: ImportPlan) {
     siRows.push({
       id: c.assign('supplierInvoices', s.key), companyId, internalNo, number: s.number, supplierId, issueDate: d(s.issueDate)!, dueDate: d(s.dueDate),
       netAmount: s.netAmount, vatAmount: s.vatAmount, total: s.total, paidDate: d(s.paidDate), category: s.category, note: s.note, createdAt: ts(s.createdAt),
+      // stupci ulaznog eRačuna uvijek imaju vrijednost (bulkInsert bi izostavljeni NOT NULL stupac upisao kao NULL)
+      source: s.inbound?.source ?? 'MANUAL', status: s.inbound?.status ?? 'ACCEPTED', statusAt: s.inbound?.statusAt ? ts(s.inbound.statusAt) : null,
+      statusBy: s.inbound?.statusBy ?? null, rejectReason: s.inbound?.rejectReason ?? null, eInvoiceEnv: s.inbound?.eInvoiceEnv ?? null,
+      providerStatus: s.inbound?.providerStatus ?? null,
+      eInvoiceId: s.inbound?.eInvoiceId && !haveEId.has(s.inbound.eInvoiceId) ? (haveEId.add(s.inbound.eInvoiceId), s.inbound.eInvoiceId) : null,
     });
   }
   await bulkInsert(tx, 'SupplierInvoice', siRows);

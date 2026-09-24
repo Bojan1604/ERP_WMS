@@ -4,7 +4,10 @@ import { z } from 'zod';
 import { action } from '@/server/action';
 import { transaction } from '@/server/db';
 import { zBool, zDate, zId, zIds, zMoney, zOptDate, zOptId, zOptMoney, zOptText, zReq } from '@/server/zod';
-import { deleteSupplierInvoice, saveSupplierInvoice, setSupplierInvoicesPaid } from '@/server/services/expenses';
+import { deleteSupplierInvoice, saveSupplierInvoice } from '@/server/services/expenses';
+import { acceptSupplierInvoice, markSupplierInvoicesPaid, rejectSupplierInvoice, reportPaid } from '@/server/services/inbound';
+import { fetchIncoming } from '@/server/services/inbound-fetch';
+import { today } from '@/domain/dates';
 
 const schema = z.object({
   id: zOptId,
@@ -21,21 +24,52 @@ const schema = z.object({
   book: zBool,
 });
 
-export const saveSupplierInvoiceAction = action({ module: 'purchasing', level: 'edit' }, schema, async ({ id, ...input }, user) =>
-  transaction(async (tx) => {
-    const si = await saveSupplierInvoice(tx, user, id, input);
-    return { message: `Ulazni račun ${si.internalNo} spremljen.`, redirect: '/nabava/ulazni' };
-  }),
-);
+export const saveSupplierInvoiceAction = action({ module: 'purchasing', level: 'edit' }, schema, async ({ id, ...input }, user) => {
+  const si = await transaction((tx) => saveSupplierInvoice(tx, user, id, input));
+  // eRačun koji je upravo plaćen: status „plaćen" posredniku (neuspjeh ne poništava spremanje)
+  const warning = si.newlyPaid && input.paidDate ? await reportPaid(user, [{ id: si.id, source: 'EINVOICE', eInvoiceId: si.eInvoiceId }], input.paidDate) : null;
+  return { message: `Ulazni račun ${si.internalNo} spremljen.`, redirect: '/nabava/ulazni', data: { warning } };
+});
 
 export const supplierInvoicesPaidAction = action(
   { module: 'purchasing', level: 'edit' },
   z.object({ ids: zIds, paidDate: zOptDate }),
-  async ({ ids, paidDate }, user) =>
-    transaction(async (tx) => {
-      const n = await setSupplierInvoicesPaid(tx, user, ids, paidDate);
-      return { message: `${n} računa označeno kao ${paidDate ? 'plaćeno' : 'neplaćeno'}.` };
-    }),
+  async ({ ids, paidDate }, user) => {
+    const r = await markSupplierInvoicesPaid(user, ids, paidDate);
+    return { message: `${r.count} računa označeno kao ${paidDate ? 'plaćeno' : 'neplaćeno'}.`, data: { warning: r.warning } };
+  },
+);
+
+/** „Plaćeno danas" na stranici računa. */
+export const supplierInvoicePaidTodayAction = action({ module: 'purchasing', level: 'edit' }, z.object({ id: zId }), async ({ id }, user) => {
+  const r = await markSupplierInvoicesPaid(user, [id], today());
+  return { message: 'Označeno kao plaćeno.', data: { warning: r.warning } };
+});
+
+export const fetchEInvoicesAction = action({ module: 'purchasing', level: 'edit' }, z.object({}), async (_input, user) => {
+  const r = await fetchIncoming(user);
+  const parts = [`novih ${r.created}`, `već upisanih ${r.existing}`];
+  if (r.failed) parts.push(`neuspjelih ${r.failed}`);
+  return {
+    message: r.found ? `Preuzeti eRačuni${r.demo ? ' (demo)' : ''}: ${parts.join(', ')}.` : `Posrednik nema primljenih računa${r.demo ? ' (demo)' : ''}.`,
+    data: { ...r, warning: r.errors.length ? r.errors.slice(0, 3).join(' · ') : null },
+  };
+});
+
+export const acceptSupplierInvoiceAction = action({ module: 'purchasing', level: 'edit' }, z.object({ id: zId }), async ({ id }, user) => {
+  const r = await acceptSupplierInvoice(user, id);
+  return {
+    message: r.reported ? (r.already ? 'Račun prihvaćen (posrednik ga je već imao kao prihvaćen) i knjižen kao trošak.' : 'Račun prihvaćen, javljen posredniku i knjižen kao trošak.') : 'Račun prihvaćen i knjižen kao trošak.',
+  };
+});
+
+export const rejectSupplierInvoiceAction = action(
+  { module: 'purchasing', level: 'edit' },
+  z.object({ id: zId, reason: zReq('Razlog odbijanja') }),
+  async ({ id, reason }, user) => {
+    const r = await rejectSupplierInvoice(user, id, reason);
+    return { message: r.reported ? 'Račun odbijen — odbijanje je javljeno dobavljaču i Poreznoj upravi.' : 'Račun označen kao odbijen (ručni račun — nije nikome javljeno).' };
+  },
 );
 
 export const deleteSupplierInvoiceAction = action({ module: 'purchasing', level: 'edit' }, z.object({ id: zId }), async ({ id }, user) =>

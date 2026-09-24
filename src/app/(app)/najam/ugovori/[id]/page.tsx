@@ -73,7 +73,7 @@ export default async function ContractPage({ params, searchParams }: Props) {
       {tab === 'uredaji' ? (
         <DevicesTab contract={c} items={items} canEdit={canEdit && editable} companyId={user.companyId} prefill={typeof sp.dodaj === 'string' ? sp.dodaj : ''} />
       ) : tab === 'raspored' ? (
-        <ScheduleTab contract={c} items={items} year={Number(sp.godina) || undefined} />
+        <ScheduleTab contract={c} items={items} year={Number(sp.godina) || undefined} canEdit={canEdit && editable} />
       ) : tab === 'racuni' ? (
         <InvoicesTab contract={c} companyId={user.companyId} params={sp} />
       ) : tab === 'povijest' ? (

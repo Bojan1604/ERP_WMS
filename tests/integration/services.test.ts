@@ -9,7 +9,7 @@ import { db, transaction } from '../../src/server/db';
 import { bootstrapCompany } from '../../src/server/services/company';
 import { changeItemStatus, statusFor, type Actor } from '../../src/server/services/items';
 import { createDraft, issueInvoice, stornoInvoice, addPayment, creditNote, markPaid, markUnpaid } from '../../src/server/services/invoices';
-import { attachItems, pendingForCompany, issueInstallments, skipInstallment } from '../../src/server/services/rentals';
+import { attachItems, pendingForCompany, issueInstallments, skipInstallment, setPausedPeriod } from '../../src/server/services/rentals';
 import { fromISO, today, addMonths } from '../../src/domain/dates';
 
 assert.match(process.env.DATABASE_URL ?? '', /wms_test/, 'Integracijski testovi smiju raditi samo nad testnom bazom (wms_test).');
@@ -211,4 +211,34 @@ test('kvar uređaja u najmu pamti ugovor u servisnom nalogu', async () => {
   assert.equal(prev?.state, 'RENTED');
   assert.equal(prev?.contract?.contractId, contract.id);
   assert.equal(prev?.contract?.monthly, 25);
+});
+
+test('najam: pauza naplate jednog uređaja u mjesecu; fakturirano se ne može pauzirati', async () => {
+  const s = await setup();
+  const start = addMonths(today(), -2).slice(0, 7) + '-01';
+  const contract = await db.contract.create({
+    data: { companyId: s.companyId, number: 'UG-T-P', partnerId: s.partner.id, startDate: fromISO(start), billing: 'MONTHLY' },
+  });
+  await transaction((tx) => attachItems(tx, s.actor, contract.id, [{ itemId: s.items[0].id, monthly: 20 }, { itemId: s.items[1].id, monthly: 30 }], { issueDate: start }));
+  const pending = await transaction((tx) => pendingForCompany(tx, s.companyId));
+  const [first, second] = pending.map((p) => p.period);
+
+  await transaction((tx) => setPausedPeriod(tx, s.actor, contract.id, s.items[0].id, first, true));
+  let now = await transaction((tx) => pendingForCompany(tx, s.companyId));
+  assert.equal(now.find((p) => p.period === first)!.amount, 30, 'pauzirani uređaj se taj mjesec ne naplaćuje');
+  assert.equal(now.find((p) => p.period === second)!.amount, 50, 'drugi mjeseci normalno');
+
+  // ponovni klik vraća naplatu
+  await transaction((tx) => setPausedPeriod(tx, s.actor, contract.id, s.items[0].id, first, false));
+  now = await transaction((tx) => pendingForCompany(tx, s.companyId));
+  assert.equal(now.find((p) => p.period === first)!.amount, 50);
+
+  // fakturirano razdoblje se ne pauzira
+  await transaction((tx) => issueInstallments(tx, s.actor, [{ contractId: contract.id, period: second }], { paid: true }));
+  await assert.rejects(transaction((tx) => setPausedPeriod(tx, s.actor, contract.id, s.items[0].id, second, true)), /već fakturirano/);
+  // uređaj druge firme / tuđi ugovor
+  const other = await setup();
+  await assert.rejects(transaction((tx) => setPausedPeriod(tx, other.actor, contract.id, s.items[0].id, first, true)), /nije na ovom ugovoru/);
+  const audit = await db.auditLog.count({ where: { companyId: s.companyId, action: { in: ['pause', 'resume'] } } });
+  assert.equal(audit, 2);
 });

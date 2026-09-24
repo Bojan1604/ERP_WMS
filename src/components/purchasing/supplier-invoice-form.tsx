@@ -6,6 +6,7 @@ import { Checkbox, Field, FormGrid, Input, Select, Textarea } from '@/components
 import { Combobox } from '@/components/ui/combobox';
 import { FormError, useAction, type ServerAction } from '@/components/ui/action';
 import { Card } from '@/components/ui/misc';
+import { useToast } from '@/components/ui/toast';
 import { supplierVat } from '@/domain/tax';
 import { r2 } from '@/domain/money';
 
@@ -27,25 +28,39 @@ export interface SupplierInvoiceValue {
 
 type SaveInput = Omit<SupplierInvoiceValue, 'internalNo' | 'supplierId'> & { supplierId: string };
 
-/** Unos i izmjena ulaznog računa; PDV se predlaže po državi dobavljača. */
+/**
+ * Unos i izmjena ulaznog računa; PDV se predlaže po državi dobavljača.
+ * eRačun: dobavljač, broj, datum i iznosi dolaze iz XML-a i ne mijenjaju se
+ * (`lockDocument`); odbijeni račun se ne plaća ni knjiži (`rejected`).
+ */
 export function SupplierInvoiceForm({
   initial,
   suppliers,
   categories,
   company,
   action,
+  lockDocument = false,
+  rejected = false,
 }: {
   initial: SupplierInvoiceValue;
   suppliers: Array<{ value: string; label: string; country: string }>;
   categories: string[];
   company: { vatRate: number; country: string };
-  action: ServerAction<SaveInput>;
+  action: ServerAction<SaveInput, { warning?: string | null } | unknown>;
+  lockDocument?: boolean;
+  rejected?: boolean;
 }) {
   const [v, setV] = useState(initial);
   const [vatTouched, setVatTouched] = useState(!!initial.id);
   const [totalTouched, setTotalTouched] = useState(!!initial.id && r2(initial.netAmount + initial.vatAmount) !== initial.total);
   const [localError, setLocalError] = useState<string | null>(null);
-  const { run, pending, error } = useAction(action);
+  const toast = useToast();
+  const { run, pending, error } = useAction(action, {
+    onSuccess: (d) => {
+      const w = (d as { warning?: string | null } | undefined)?.warning;
+      if (w) toast('bad', w);
+    },
+  });
 
   const supplier = suppliers.find((s) => s.value === v.supplierId);
   const vatInfo = supplierVat(supplier?.country, company);
@@ -78,16 +93,17 @@ export function SupplierInvoiceForm({
                 recompute({ supplierId: id }, v, c);
               }}
               placeholder="Odaberite dobavljača…"
+              disabled={lockDocument}
             />
           </Field>
           <Field label="Broj računa dobavljača" required>
-            <Input value={v.number} onChange={(e) => setV({ ...v, number: e.target.value })} />
+            <Input value={v.number} disabled={lockDocument} onChange={(e) => setV({ ...v, number: e.target.value })} />
           </Field>
           <Field label="Interni broj" hint={v.internalNo ? undefined : 'Dodjeljuje se pri spremanju'}>
             <Input value={v.internalNo ?? ''} disabled placeholder="URA-…" />
           </Field>
           <Field label="Datum računa" required>
-            <Input type="date" value={v.issueDate} onChange={(e) => setV({ ...v, issueDate: e.target.value })} />
+            <Input type="date" value={v.issueDate} disabled={lockDocument} onChange={(e) => setV({ ...v, issueDate: e.target.value })} />
           </Field>
           <Field label="Dospijeće">
             <Input type="date" value={v.dueDate ?? ''} onChange={(e) => setV({ ...v, dueDate: e.target.value || null })} />
@@ -96,13 +112,14 @@ export function SupplierInvoiceForm({
             <Select placeholder="— bez kategorije —" options={categories.map((c) => ({ value: c, label: c }))} value={v.category ?? ''} onChange={(e) => setV({ ...v, category: e.target.value || null })} />
           </Field>
           <Field label="Osnovica (bez PDV-a)" required>
-            <Input type="number" step="0.01" value={v.netAmount} onChange={(e) => recompute({ netAmount: Number(e.target.value) })} />
+            <Input type="number" step="0.01" value={v.netAmount} disabled={lockDocument} onChange={(e) => recompute({ netAmount: Number(e.target.value) })} />
           </Field>
           <Field label="PDV" hint={vatTouched ? 'Upisano ručno' : vatInfo.label}>
             <Input
               type="number"
               step="0.01"
               value={v.vatAmount}
+              disabled={lockDocument}
               onChange={(e) => {
                 setVatTouched(true);
                 const vat = Number(e.target.value);
@@ -115,6 +132,7 @@ export function SupplierInvoiceForm({
               type="number"
               step="0.01"
               value={v.total}
+              disabled={lockDocument}
               onChange={(e) => {
                 setTotalTouched(true);
                 setV({ ...v, total: Number(e.target.value) });
@@ -122,17 +140,18 @@ export function SupplierInvoiceForm({
             />
           </Field>
           <Field label="Plaćeno dana" hint="Prazno = nije plaćeno">
-            <Input type="date" value={v.paidDate ?? ''} onChange={(e) => setV({ ...v, paidDate: e.target.value || null })} />
+            <Input type="date" value={v.paidDate ?? ''} disabled={rejected} onChange={(e) => setV({ ...v, paidDate: e.target.value || null })} />
           </Field>
           <Field label="Napomena" className="sm:col-span-4">
             <Textarea rows={2} value={v.note ?? ''} onChange={(e) => setV({ ...v, note: e.target.value })} />
           </Field>
         </FormGrid>
         <div className="mt-3">
-          <Checkbox label="Knjiži kao trošak" checked={v.book} onChange={(e) => setV({ ...v, book: e.target.checked })} />
+          <Checkbox label="Knjiži kao trošak" checked={v.book} disabled={rejected} onChange={(e) => setV({ ...v, book: e.target.checked })} />
           <p className="mt-1 text-xs text-fg-3">
             Za račun robe koja je zaprimljena primkom trošak je već knjižen primkom — isključite knjiženje da se trošak ne zbroji dvaput.
           </p>
+          {lockDocument && <p className="mt-1 text-xs text-fg-3">Dobavljač, broj, datum i iznosi eRačuna preuzeti su iz XML-a i ne mijenjaju se.</p>}
         </div>
       </Card>
       <FormError error={localError ?? error} />

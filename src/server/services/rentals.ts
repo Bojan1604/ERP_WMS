@@ -7,7 +7,7 @@ import { nextDocNumber } from '../numbering';
 import { changeItemStatus, itemEvents, type Actor } from './items';
 import { coveredPeriods, createDraft, issueInvoice, markPaid, type LineInput } from './invoices';
 import {
-  pendingInstallments, installmentDate, planSummary, BILLING_LABEL,
+  pendingInstallments, installmentDate, planSummary, scheduledCharges, BILLING_LABEL,
   type BillingCode, type BillingModeCode, type ContractDevice, type ContractTerms, type PendingInstallment, type PlanPeriodInput,
 } from '@/domain/billing';
 import { formatDate, fromISO, periodLabel, toISO, today } from '@/domain/dates';
@@ -37,6 +37,7 @@ export function toDevice(ci: ContractItem): ContractDevice {
     plan: (ci.plan as unknown as PlanPeriodInput[]) ?? [],
     status: ci.status,
     skipped: ci.skipped,
+    paused: ci.paused,
   };
 }
 
@@ -118,7 +119,8 @@ export async function draftInstallment(tx: Tx, actor: Actor, contractId: string,
       kind: 'DEVICE',
       itemId: l.itemId,
       modelId: item.modelId,
-      description: `Najam ${name}, SN ${item.serial} — ${BILLING_LABEL[l.billing].toLowerCase()}`,
+      // serijski broj se ispisuje iz uređaja — bez njega u opisu isti modeli idu kao jedna stavka
+      description: `Najam ${name} — ${BILLING_LABEL[l.billing].toLowerCase()}`,
       unit: 'mj',
       kpd: item.model.kpd,
       qty: 1,
@@ -164,6 +166,38 @@ export async function issueInstallments(tx: Tx, actor: Actor, rows: Array<{ cont
     if (opts.paid) await markPaid(tx, actor, d.id, toISO(d.date));
   }
   return numbers;
+}
+
+/**
+ * Pauza naplate jednog uređaja u jednom razdoblju (ili ukidanje pauze). Pauzirano
+ * razdoblje se ne naplaćuje i ne ulazi u rate ni u pregled najma. Već fakturirano
+ * razdoblje (ili ono s nacrtom računa) ne može se pauzirati.
+ */
+export async function setPausedPeriod(tx: Tx, actor: Actor, contractId: string, itemId: string, period: string, paused: boolean) {
+  assert(/^\d{4}-(0[1-9]|1[0-2])$/.test(period), 'Neispravno razdoblje.');
+  const ci = await tx.contractItem.findFirst({
+    where: { contractId, itemId, contract: { companyId: actor.companyId } },
+    include: { contract: true, item: { select: { serial: true } } },
+  });
+  assert(ci, 'Uređaj nije na ovom ugovoru.');
+  const has = ci.paused.includes(period);
+  if (has === paused) return;
+  if (paused) {
+    const d = { ...toDevice(ci), paused: [] };
+    assert(scheduledCharges(toTerms(ci.contract), d, period, period).length > 0, `Uređaj ${ci.item.serial} nema rate u razdoblju ${periodLabel(period)}.`);
+    const covered = (await coveredPeriods(tx, [contractId])).get(contractId);
+    assert(!covered?.has(`${itemId}|${period}`), `Razdoblje ${periodLabel(period)} je već fakturirano za ${ci.item.serial} — za povrat novca izdajte odobrenje ili stornirajte račun.`);
+    const draft = await tx.invoice.findFirst({ where: { contractId, period, status: 'DRAFT', type: 'RENT', lines: { some: { itemId } } }, select: { number: true } });
+    assert(!draft, `Za razdoblje ${periodLabel(period)} postoji nacrt računa s ovim uređajem — prvo ga obrišite ili maknite stavku.`);
+  }
+  const next = paused ? [...ci.paused, period].sort() : ci.paused.filter((p) => p !== period);
+  await tx.contractItem.update({ where: { id: ci.id }, data: { paused: next } });
+  await audit(tx, actor, {
+    entity: 'contract',
+    entityId: contractId,
+    action: paused ? 'pause' : 'resume',
+    summary: `Ugovor ${ci.contract.number}: ${ci.item.serial} — ${paused ? 'pauza naplate' : 'naplata vraćena'} za ${periodLabel(period)}`,
+  });
 }
 
 /** Razdoblje se trajno označava kao izdano izvan programa — ne traži račun. */

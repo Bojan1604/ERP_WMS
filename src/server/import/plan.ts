@@ -75,7 +75,7 @@ export interface InvoiceTotals {
   openAmount: number; costTotal: number; paidDate: string | null; lineNets: number[];
 }
 
-export interface PlanContractItem { itemKey: Key; monthly: number; plan: PlanPeriodInput[]; status: ContractStatus | null; skipped: string[] }
+export interface PlanContractItem { itemKey: Key; monthly: number; plan: PlanPeriodInput[]; status: ContractStatus | null; skipped: string[]; paused?: string[] }
 export interface PlanContract {
   key: Key; number: string; generatedNumber?: boolean; partnerKey: Key; status: ContractStatus; startDate: string; endDate: D;
   firstBillingDate: D; billingDay: number | null; billing: Billing; billingMode: BillingMode; seasonFrom: number | null; seasonTo: number | null;
@@ -114,6 +114,11 @@ export interface PlanServiceOrder {
 export interface PlanSupplierInvoice {
   key: Key; internalNo: string; generatedNumber?: boolean; number: string; supplierKey: Key; issueDate: string; dueDate: D;
   netAmount: number; vatAmount: number; total: number; paidDate: D; category: string | null; note: string | null; createdAt: string | null;
+  /** Fiskalizacija 2.0 (sigurnosna kopija ovog programa); izostavljeno = ručni, prihvaćen. */
+  inbound?: {
+    source: 'MANUAL' | 'EINVOICE'; status: 'RECEIVED' | 'ACCEPTED' | 'REJECTED'; statusAt: string | null; statusBy: string | null; rejectReason: string | null;
+    eInvoiceId: string | null; eInvoiceEnv: string | null; providerStatus: string | null;
+  };
 }
 export interface PlanExpense {
   key: Key; date: string; categoryKey: Key | null; description: string; partnerKey: Key | null; netAmount: number; vatAmount: number;

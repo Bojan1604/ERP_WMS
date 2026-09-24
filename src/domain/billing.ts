@@ -79,6 +79,8 @@ export interface ContractDevice {
   plan?: PlanPeriodInput[] | null;
   status?: ContractStatusCode | null;
   skipped?: Period[] | null;
+  /** Pauzirana razdoblja: rata se ne naplaćuje (za razliku od `skipped` = izdano izvan programa). */
+  paused?: Period[] | null;
 }
 
 export interface PlanPeriod {
@@ -156,8 +158,16 @@ export function devicePlan(c: ContractTerms, d: ContractDevice): PlanPeriod[] {
     .filter((p) => !p.to || p.to >= p.from);
 }
 
-/** Sva zaduženja uređaja u rasponu razdoblja (uključivo). */
+/** Sva zaduženja uređaja u rasponu razdoblja (uključivo), bez pauziranih razdoblja. */
 export function deviceCharges(c: ContractTerms, d: ContractDevice, fromPeriod: Period, toPeriod: Period): Charge[] {
+  const all = scheduledCharges(c, d, fromPeriod, toPeriod);
+  if (!d.paused?.length) return all;
+  const paused = new Set(d.paused);
+  return all.filter((ch) => !paused.has(ch.period));
+}
+
+/** Zaduženja prema planu, uključujući pauzirana (za prikaz rasporeda i provjeru pauze). */
+export function scheduledCharges(c: ContractTerms, d: ContractDevice, fromPeriod: Period, toPeriod: Period): Charge[] {
   if (!billable(deviceStatus(c, d))) return [];
   const out: Charge[] = [];
   for (const s of devicePlan(c, d)) {
@@ -204,9 +214,22 @@ export function deviceActiveIn(c: ContractTerms, d: ContractDevice, p: Period): 
 export function contractAccrual(c: ContractTerms, devices: ContractDevice[], year: number): number[] {
   const out = Array<number>(12).fill(0);
   for (const d of devices) {
-    for (let m = 0; m < 12; m++) out[m] += deviceActiveIn(c, d, mkPeriod(year, m))?.price ?? 0;
+    const paused = pausedMonths(c, d, year);
+    for (let m = 0; m < 12; m++) if (!paused.has(mkPeriod(year, m))) out[m] += deviceActiveIn(c, d, mkPeriod(year, m))?.price ?? 0;
   }
   return out.map(r2);
+}
+
+/** Mjeseci koje pokrivaju pauzirane rate (kvartalna rata pokriva tri mjeseca). */
+export function pausedMonths(c: ContractTerms, d: ContractDevice, year: number): Set<Period> {
+  const out = new Set<Period>();
+  if (!d.paused?.length) return out;
+  const paused = new Set(d.paused);
+  for (const ch of scheduledCharges(c, d, `${year - 1}-01`, `${year}-12`)) {
+    if (!paused.has(ch.period)) continue;
+    for (let k = 0; k < Math.max(1, ch.months); k++) out.add(addMonths(`${ch.period}-01`, k).slice(0, 7));
+  }
+  return out;
 }
 
 /** Naplata (rate) po mjesecima godine. */

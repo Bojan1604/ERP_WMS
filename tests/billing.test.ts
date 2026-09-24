@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   contractBilling, contractAccrual, deviceCharges, devicePlan, installmentDate, nextBillingDate,
-  pendingInstallments, planSummary, returnReason, type ContractTerms, type ContractDevice,
+  pendingInstallments, planSummary, returnReason, scheduledCharges, type ContractTerms, type ContractDevice,
 } from '../src/domain/billing';
 
 const c = (over: Partial<ContractTerms> = {}): ContractTerms => ({
@@ -70,4 +70,29 @@ test('razdoblje iza kraja ugovora se ne naplaćuje', () => {
   const k = c({ startDate: '2026-01-01', endDate: '2026-06-30' });
   const ch = deviceCharges(k, d({ monthly: 10, plan: [{ from: '2026-01-01' }, { from: '2026-09-01', billing: 'ONCE' }] }), '2026-01', '2026-12');
   assert.deepEqual(ch.map((x) => x.period), ['2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06']);
+});
+
+test('pauza naplate: pauzirani mjesec se ne naplaćuje, ne traži račun i ne ulazi u obračun', () => {
+  const k = c({ startDate: '2026-01-01', billing: 'MONTHLY' });
+  const d: ContractDevice = { itemId: 'a', monthly: 20, paused: ['2026-03'] };
+  const periods = deviceCharges(k, d, '2026-01', '2026-05').map((x) => x.period);
+  assert.deepEqual(periods, ['2026-01', '2026-02', '2026-04', '2026-05']);
+  assert.equal(scheduledCharges(k, d, '2026-01', '2026-05').length, 5, 'raspored i dalje zna za pauzirani mjesec');
+  const pend = pendingInstallments(k, [d, { itemId: 'b', monthly: 10 }], new Set(), '2026-05-15');
+  const march = pend.find((p) => p.period === '2026-03')!;
+  assert.deepEqual(march.lines.map((l) => l.itemId), ['b'], 'u ožujku se naplaćuje samo drugi uređaj');
+  assert.equal(march.amount, 10);
+  const acc = contractAccrual(k, [d], 2026);
+  assert.equal(acc[1], 20);
+  assert.equal(acc[2], 0);
+});
+
+test('pauza kvartalne rate pokriva sva tri mjeseca obračuna', () => {
+  const k = c({ startDate: '2026-01-01', billing: 'QUARTERLY' });
+  const d: ContractDevice = { itemId: 'a', monthly: 10, paused: ['2026-04'] };
+  assert.deepEqual(deviceCharges(k, d, '2026-01', '2026-12').map((x) => x.period), ['2026-01', '2026-07', '2026-10']);
+  const acc = contractAccrual(k, [d], 2026);
+  assert.deepEqual(acc.slice(3, 6), [0, 0, 0]);
+  assert.equal(acc[2], 10);
+  assert.equal(acc[6], 10);
 });

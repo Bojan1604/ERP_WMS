@@ -58,6 +58,8 @@ src/components/<modul>/  klijentske komponente pojedinog modula
 11. **Svaki strani ključ ima indeks** (`@@index([stupac])`); tekstualna pretraga ide na stupce s trigram (GIN) indeksom,
      a pretraga po povezanoj tablici se razrješava unaprijed u id-eve (vidi `resolveSearch` u queries/warehouse.ts).
 12. Nazivi ruta i sučelja na hrvatskom, kod (identifikatori) na engleskom, komentari na hrvatskom.
+13. **Nema `loading.tsx` u `(app)`** — u Next 15.5 s prefetchom zaglavi navigaciju unutar iste stranice
+     (kartice `?tab=`, straničenje, filtri: URL se ne promijeni). Odziv daje `LinkPending` (`useLinkStatus`).
 
 ## Naredbe
 

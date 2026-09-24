@@ -1,5 +1,5 @@
 import { DocumentShell, DocTable, DocTotals, type DocCompany, type DocParty } from '@/components/doc/document';
-import { CHARGE_KINDS, INVOICE_KIND_LABEL, type ChargeInput } from '@/domain/invoice';
+import { CHARGE_KINDS, INVOICE_KIND_LABEL, groupLines, type ChargeInput } from '@/domain/invoice';
 import { formatDate } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import { amount, decimal, eur } from '@/lib/format';
@@ -36,7 +36,8 @@ export interface InvoiceDocData {
   operator: { name: string; oib: string | null } | null;
   zki: string | null;
   jir: string | null;
-  lines: Array<{ description: string; serial: string | null; code: string | null; kpd: string | null; unit: string; qty: number; unitPrice: number; discountPct: number; netAmount: number }>;
+  /** Uređaji istog modela i cijene spojeni u jednu stavku (količina, popis serijskih). */
+  lines: Array<{ description: string; serials: string[]; code: string | null; kpd: string | null; unit: string; qty: number; unitPrice: number; discountPct: number; netAmount: number }>;
 }
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -77,7 +78,7 @@ export function InvoiceDocument({ inv, company, party, currency = '€' }: { inv
     ...(hasCode ? [l.code ?? ''] : []),
     <div key="d">
       {l.description}
-      {l.serial && <div className="font-mono text-[10.5px] text-black/60">SN: {l.serial}</div>}
+      {l.serials.length > 0 && <div className="font-mono text-[10.5px] text-black/60">SN: {l.serials.join(', ')}</div>}
     </div>,
     ...(hasKpd ? [l.kpd ?? ''] : []),
     l.unit,
@@ -267,16 +268,24 @@ export function toDocData(inv: {
     operator: operatorOf(inv.eInvoice, inv.issuedBy),
     zki: inv.zki,
     jir: inv.jir,
-    lines: inv.lines.map((l) => ({
-      description: l.description,
-      serial: l.item?.serial ?? null,
-      code: l.model?.code ?? null,
-      kpd: l.kpd ?? l.model?.kpd ?? l.service?.kpd ?? null,
-      unit: l.unit,
-      qty: n(l.qty),
-      unitPrice: n(l.unitPrice),
-      discountPct: n(l.discountPct),
-      netAmount: n(l.netAmount),
+    lines: groupLines(
+      inv.lines.map((l) => ({
+        description: l.description,
+        serial: l.item?.serial ?? null,
+        code: l.model?.code ?? null,
+        kpd: l.kpd ?? l.model?.kpd ?? l.service?.kpd ?? null,
+        unit: l.unit,
+        qty: n(l.qty),
+        unitPrice: n(l.unitPrice),
+        discountPct: n(l.discountPct),
+        netAmount: n(l.netAmount),
+      })),
+      (l) => (l.serial ? [l.description, l.code ?? '', l.kpd ?? '', l.unit, l.unitPrice, l.discountPct].join('|') : null),
+    ).map(({ lines: g }) => ({
+      ...g[0],
+      serials: g.flatMap((x) => (x.serial ? [x.serial] : [])),
+      qty: g.reduce((a, x) => a + x.qty, 0),
+      netAmount: r2(g.reduce((a, x) => a + x.netAmount, 0)),
     })),
   };
 }

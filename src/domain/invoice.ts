@@ -169,3 +169,82 @@ export const INVOICE_KIND_LABEL: Record<InvoiceKindCode, string> = {
   STORNO: 'Storno računa',
   CREDIT_NOTE: 'Knjižno odobrenje',
 };
+
+// ---------------------------------------------------------------- grupiranje stavki
+
+/**
+ * Uređaji istog modela, cijene, popusta, jedinice, KPD-a i jamstva prikazuju se kao
+ * jedna stavka s količinom i popisom serijskih brojeva (u bazi ostaje redak po
+ * uređaju — skladište, jamstvo i marža vode se po komadu). Grupiraju se samo ako
+ * zbroj redaka daje isti iznos kao jedna stavka (bez razlike u zaokruživanju).
+ */
+export function groupLines<T extends { qty: number; unitPrice: number; discountPct: number }>(
+  lines: T[],
+  keyOf: (l: T) => string | null,
+): { key: string; lines: T[] }[] {
+  const out: { key: string; lines: T[] }[] = [];
+  const open = new Map<string, { key: string; lines: T[] }>();
+  lines.forEach((l, i) => {
+    const k = keyOf(l);
+    const g = k === null ? undefined : open.get(k);
+    if (g) {
+      const merged = lineNet({ qty: g.lines.reduce((a, x) => a + x.qty, 0) + l.qty, unitPrice: l.unitPrice, discountPct: l.discountPct });
+      const summed = r2([...g.lines, l].reduce((a, x) => a + lineNet(x), 0));
+      if (merged === summed) {
+        g.lines.push(l);
+        return;
+      }
+    }
+    const ng = { key: k ?? `#${i}`, lines: [l] };
+    out.push(ng);
+    if (k !== null) open.set(k, ng);
+  });
+  return out;
+}
+
+/** Ključ grupiranja uređaja (null = stavka se ne grupira). */
+export function deviceLineKey(l: {
+  kind: string;
+  itemId?: string | null;
+  modelId?: string | null;
+  description: string;
+  unit: string;
+  kpd?: string | null;
+  unitPrice: number;
+  discountPct: number;
+  warrantyMonths?: number | null;
+}): string | null {
+  if (l.kind !== 'DEVICE' || !l.itemId) return null;
+  return [l.modelId ?? '', l.description.trim(), l.unit, l.kpd ?? '', l.unitPrice, l.discountPct, l.warrantyMonths ?? ''].join('|');
+}
+
+/**
+ * Isti model na računu ide po istoj cijeni — inače bi se (cijena iz marže je po
+ * komadu) dva ista uređaja prikazala kao dvije stavke. Novi uređaj preuzima cijenu,
+ * popust, jamstvo i KPD stavke istog modela koja je već na računu; komadi istog
+ * modela dodani zajedno dobivaju prosječnu cijenu (ukupni iznos ostaje isti).
+ */
+export function unifyDevicePrices<
+  T extends { kind: string; modelId?: string | null; description: string; unitPrice: number; discountPct: number; warrantyMonths?: number | null; kpd?: string | null; agreedPrice?: boolean },
+>(existing: readonly T[], added: T[]): T[] {
+  const modelKey = (l: T) => (l.kind === 'DEVICE' && l.modelId ? `${l.modelId}|${l.description.trim()}` : null);
+  const onInvoice = new Map<string, T>();
+  for (const l of existing) {
+    const k = modelKey(l);
+    if (k && !onInvoice.has(k)) onInvoice.set(k, l);
+  }
+  const avg = new Map<string, number>();
+  const buckets = new Map<string, number[]>();
+  for (const l of added) {
+    const k = modelKey(l);
+    if (k && !onInvoice.has(k)) buckets.set(k, [...(buckets.get(k) ?? []), l.unitPrice]);
+  }
+  for (const [k, ps] of buckets) avg.set(k, Math.round((ps.reduce((s, p) => s + p, 0) / ps.length) * 100) / 100);
+  return added.map((l) => {
+    const k = modelKey(l);
+    if (!k) return l;
+    const ref = onInvoice.get(k);
+    if (ref) return { ...l, unitPrice: ref.unitPrice, discountPct: ref.discountPct, warrantyMonths: ref.warrantyMonths, kpd: ref.kpd, agreedPrice: ref.agreedPrice };
+    return { ...l, unitPrice: avg.get(k) ?? l.unitPrice };
+  });
+}

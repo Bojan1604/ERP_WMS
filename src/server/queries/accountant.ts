@@ -67,7 +67,8 @@ export function outboundWhere(companyId: string, f: AccountantFilters, partnerId
 }
 
 export function inboundWhere(companyId: string, f: AccountantFilters, partnerIds: string[]): Prisma.SupplierInvoiceWhereInput {
-  const and: Prisma.SupplierInvoiceWhereInput[] = [{ companyId, issueDate: { gte: fromISO(f.from), lte: fromISO(f.to) } }, sentWhere(f.sent)];
+  // odbijeni ulazni račun (Fiskalizacija 2.0) nije knjigovodstvena isprava
+  const and: Prisma.SupplierInvoiceWhereInput[] = [{ companyId, status: { not: 'REJECTED' }, issueDate: { gte: fromISO(f.from), lte: fromISO(f.to) } }, sentWhere(f.sent)];
   if (f.q) {
     const c = { contains: f.q, mode: 'insensitive' as const };
     and.push({ OR: [{ number: c }, { internalNo: c }, ...(partnerIds.length ? [{ supplierId: { in: partnerIds } }] : [])] });

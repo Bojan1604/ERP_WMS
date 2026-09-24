@@ -38,6 +38,8 @@ export interface UblParty {
 export interface UblLine {
   description: string;
   serial?: string | null;
+  /** Više uređaja u jednoj stavci (količina > 1). */
+  serials?: string[] | null;
   code?: string | null;
   kpd?: string | null;
   unit?: string | null;
@@ -273,7 +275,8 @@ export function buildUbl(input: UblInput): { xml: string; root: 'Invoice' | 'Cre
       const gross = Math.abs(l.unitPrice);
       const disc = l.discountPct ? (gross * l.discountPct) / 100 : 0;
       const unit = unitCode(l.unit);
-      const sellersId = l.code || l.serial;
+      const sns = l.serials?.length ? l.serials : l.serial ? [l.serial] : [];
+      const sellersId = l.code || (sns.length === 1 ? sns[0] : null);
       const klas = withKpd && l.kpd
         ? `\n      <cac:CommodityClassification><cbc:ItemClassificationCode listID="${KPD_LIST_ID}">${esc(l.kpd)}</cbc:ItemClassificationCode></cac:CommodityClassification>`
         : '';
@@ -281,7 +284,7 @@ export function buildUbl(input: UblInput): { xml: string; root: 'Invoice' | 'Cre
     <cbc:ID>${i + 1}</cbc:ID>
     <cbc:${qtyTag} unitCode="${unit}">${qty3(q)}</cbc:${qtyTag}>
     <cbc:LineExtensionAmount currencyID="${cur}">${amt(lineAmount)}</cbc:LineExtensionAmount>
-    <cac:Item>${l.serial ? `\n      <cbc:Description>${esc(`SN: ${l.serial}`)}</cbc:Description>` : ''}
+    <cac:Item>${sns.length ? `\n      <cbc:Description>${esc(`SN: ${sns.join(', ')}`)}</cbc:Description>` : ''}
       <cbc:Name>${esc(l.description)}</cbc:Name>${sellersId ? `\n      <cac:SellersItemIdentification><cbc:ID>${esc(sellersId)}</cbc:ID></cac:SellersItemIdentification>` : ''}${klas}
       ${taxCategoryXml(t, 'ClassifiedTaxCategory', true)}
     </cac:Item>

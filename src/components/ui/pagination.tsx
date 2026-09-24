@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { LinkPending } from './link-pending';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { integer } from '@/lib/format';
@@ -37,7 +38,9 @@ export function Pagination({
         <div className="flex items-center gap-1.5">
           {page > 1 ? (
             <Link href={href(page - 1)} className={cn(btn, 'hover:bg-muted')} aria-label="Prethodna">
-              <ChevronLeft className="size-4" />
+              <LinkPending>
+                <ChevronLeft className="size-4" />
+              </LinkPending>
             </Link>
           ) : (
             <span className={cn(btn, 'opacity-40')}>
@@ -49,7 +52,9 @@ export function Pagination({
           </span>
           {page < pages ? (
             <Link href={href(page + 1)} className={cn(btn, 'hover:bg-muted')} aria-label="Sljedeća">
-              <ChevronRight className="size-4" />
+              <LinkPending>
+                <ChevronRight className="size-4" />
+              </LinkPending>
             </Link>
           ) : (
             <span className={cn(btn, 'opacity-40')}>

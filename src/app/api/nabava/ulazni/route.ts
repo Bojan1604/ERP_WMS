@@ -1,6 +1,7 @@
 import { requireAccess } from '@/server/auth';
 import { listSupplierInvoices } from '@/server/queries/purchasing';
 import { toISO } from '@/domain/dates';
+import { SUPPLIER_INVOICE_STATUS_LABEL } from '@/domain/einvoice-inbound';
 import { num } from '@/domain/money';
 import { csvResponse, toCsv } from '@/lib/csv';
 import { date } from '@/lib/format';
@@ -27,6 +28,8 @@ export async function GET(req: Request) {
     { label: 'Ukupno', value: (r) => num(r.total) },
     { label: 'Plaćeno', value: (r) => (r.paidDate ? date(r.paidDate) : '') },
     { label: 'Knjižen trošak', value: (r) => (r.expense ? 'da' : 'ne') },
+    { label: 'Status', value: (r) => SUPPLIER_INVOICE_STATUS_LABEL[r.status] },
+    { label: 'Izvor', value: (r) => (r.source === 'EINVOICE' ? 'eRačun' : 'ručno') },
   ]);
   return csvResponse(csv, `ulazni-racuni-${toISO(new Date())}.csv`);
 }

@@ -22,10 +22,11 @@ const ACTION_LABEL: Record<string, string> = {
   create: 'novo', update: 'izmjena', delete: 'brisanje', issue: 'izdavanje', storno: 'storno', payment: 'uplata',
   'payment-delete': 'brisanje uplate', unpaid: 'neplaćeno', price: 'cijena', 'price-delete': 'brisanje cijene', logout: 'odjava',
   terminate: 'raskid', add: 'dodavanje', remove: 'uklanjanje', items: 'uređaji', approve: 'odobreno', reject: 'odbijeno',
-  'rent-apply': 'najam na uređaje', 'rent-override': 'ručni najam', status: 'status', transfer: 'premještanje',
+  'rent-apply': 'najam na uređaje', 'rent-override': 'ručni najam', status: 'status', transfer: 'premještanje', pause: 'pauza naplate', resume: 'naplata vraćena',
   sent: 'poslano knjigovođi', unsent: 'nije poslano knjigovođi',
+  fetch: 'preuzimanje eRačuna', receive: 'zaprimljen eRačun', accept: 'prihvaćeno', paid: 'plaćeno',
 };
-const ACTION_TONE: Record<string, 'ok' | 'bad' | 'info' | 'neutral' | 'warn'> = { create: 'ok', delete: 'bad', update: 'info', issue: 'ok', storno: 'warn' };
+const ACTION_TONE: Record<string, 'ok' | 'bad' | 'info' | 'neutral' | 'warn'> = { create: 'ok', delete: 'bad', update: 'info', issue: 'ok', storno: 'warn', accept: 'ok', reject: 'bad' };
 const isoDay = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
 
 export default async function AuditLogPage({ searchParams }: { searchParams: Promise<Params> }) {

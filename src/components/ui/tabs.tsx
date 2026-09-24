@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { cn } from '@/lib/cn';
+import { LinkPending } from './link-pending';
 
 /** Kartice kao poveznice. `param` = kartice preko query parametra umjesto putanje. */
 export function Tabs({ tabs, param }: { tabs: { href: string; label: string; count?: number }[]; param?: string }) {
@@ -21,6 +22,7 @@ export function Tabs({ tabs, param }: { tabs: { href: string; label: string; cou
         <Link
           key={t.href}
           href={t.href}
+          prefetch={false}
           scroll={false}
           className={cn(
             '-mb-px flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-base',
@@ -29,6 +31,7 @@ export function Tabs({ tabs, param }: { tabs: { href: string; label: string; cou
         >
           {t.label}
           {t.count !== undefined && <span className="rounded-full bg-muted px-1.5 text-xs text-fg-2">{t.count}</span>}
+          <LinkPending />
         </Link>
       ))}
     </nav>

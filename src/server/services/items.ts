@@ -50,7 +50,7 @@ export async function changeItemStatus(tx: Tx, actor: Actor, itemIds: string[], 
     where: { id: { in: itemIds }, companyId: actor.companyId },
     select: {
       id: true, serial: true, state: true, partnerId: true, invoiceId: true, warehouseId: true,
-      contractItem: { select: { contractId: true, monthly: true, plan: true, skipped: true, status: true } },
+      contractItem: { select: { contractId: true, monthly: true, plan: true, skipped: true, paused: true, status: true } },
     },
   });
   if (items.length !== new Set(itemIds).size) throw new DomainError('Neki od odabranih uređaja ne postoje.');
@@ -107,7 +107,7 @@ type OpeningItem = {
   partnerId: string | null;
   invoiceId: string | null;
   warehouseId: string | null;
-  contractItem: { contractId: string; monthly: Prisma.Decimal; plan: Prisma.JsonValue; skipped: string[]; status: string | null } | null;
+  contractItem: { contractId: string; monthly: Prisma.Decimal; plan: Prisma.JsonValue; skipped: string[]; paused: string[]; status: string | null } | null;
 };
 
 /**
@@ -149,7 +149,7 @@ async function openServiceOrders(tx: Tx, actor: Actor, items: OpeningItem[], sta
               partnerId: i.partnerId,
               warehouseId: i.warehouseId,
               contract: i.contractItem
-                ? { contractId: i.contractItem.contractId, monthly: i.contractItem.monthly.toNumber(), plan: i.contractItem.plan, skipped: i.contractItem.skipped, status: i.contractItem.status }
+                ? { contractId: i.contractItem.contractId, monthly: i.contractItem.monthly.toNumber(), plan: i.contractItem.plan, skipped: i.contractItem.skipped, paused: i.contractItem.paused, status: i.contractItem.status }
                 : null,
             },
           },

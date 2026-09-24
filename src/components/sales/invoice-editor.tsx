@@ -9,7 +9,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { Dialog } from '@/components/ui/dialog';
 import { useAction } from '@/components/ui/action';
 import { eur } from '@/lib/format';
-import { documentTotals } from '@/domain/invoice';
+import { deviceLineKey, documentTotals, groupLines, unifyDevicePrices } from '@/domain/invoice';
 import { customerVat } from '@/domain/tax';
 import { addDays } from '@/domain/dates';
 import { PAYMENT_METHOD_LABEL, PAYMENT_METHODS, type PaymentMethodCode } from '@/domain/fiscal';
@@ -266,7 +266,7 @@ export function InvoiceEditor({ initial, lookups }: { initial: InvoiceEditorValu
       <div className="no-print sticky bottom-[calc(3.75rem+env(safe-area-inset-bottom))] z-30 -mx-3 mt-4 border-t border-line bg-panel/95 px-3 py-2.5 backdrop-blur sm:-mx-5 sm:px-5 lg:bottom-0 lg:-mb-5">
         <div className="flex flex-wrap items-center justify-end gap-2">
           <span className="mr-auto text-sm text-fg-3 max-sm:w-full">
-            {v.lines.length} stavki · ukupno <b className="text-fg tnum">{eur(totals.total)}</b>
+            {groupLines(v.lines, deviceLineKey).length} stavki · ukupno <b className="text-fg tnum">{eur(totals.total)}</b>
           </span>
           <Button icon={<Save className="size-4" />} loading={pending} disabled={!v.partnerId} onClick={() => save(false)} className="max-sm:flex-1">
             Spremi nacrt
@@ -315,7 +315,7 @@ export function InvoiceEditor({ initial, lookups }: { initial: InvoiceEditorValu
       <DevicePicker
         open={picker === 'devices'}
         onClose={() => setPicker(null)}
-        onPick={(ds) => addLines(ds.map(deviceToLine))}
+        onPick={(ds) => addLines(unifyDevicePrices(v.lines, ds.map(deviceToLine)))}
         partnerId={v.partnerId}
         models={lookups.models}
         categories={lookups.categories}

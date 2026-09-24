@@ -211,15 +211,30 @@ export async function getReceipt(companyId: string, id: string) {
 
 // ---------------------------------------------------------------- ulazni računi
 
+/** Odbijeni ulazni račun nije obveza, trošak ni stavka izvještaja. */
+export const NOT_REJECTED: Prisma.SupplierInvoiceWhereInput = { status: { not: 'REJECTED' } };
+
+/** Filtar statusa na popisu: zaprimljen / prihvaćen (neplaćen) / odbijen / plaćen. */
+const SUPPLIER_INVOICE_STATUS_WHERE: Record<string, Prisma.SupplierInvoiceWhereInput> = {
+  received: { status: 'RECEIVED', paidDate: null },
+  accepted: { status: 'ACCEPTED', paidDate: null },
+  rejected: { status: 'REJECTED' },
+  paid: { status: { not: 'REJECTED' }, paidDate: { not: null } },
+};
+
 export async function listSupplierInvoices(companyId: string, sp: Params, pg: { skip: number; take: number }) {
   const q = str(sp.q);
   const supplierId = str(sp.supplier);
   const paid = str(sp.paid);
+  const status = str(sp.status);
+  const source = str(sp.source);
   const year = yearOf(sp.year);
   const where: Prisma.SupplierInvoiceWhereInput = {
     companyId,
     ...(supplierId ? { supplierId } : {}),
     ...(paid === 'yes' ? { paidDate: { not: null } } : paid === 'no' ? { paidDate: null } : {}),
+    ...(status ? SUPPLIER_INVOICE_STATUS_WHERE[status] ?? {} : {}),
+    ...(source === 'einvoice' ? { source: 'EINVOICE' as const } : source === 'manual' ? { source: 'MANUAL' as const } : {}),
     ...(year ? { issueDate: yearRange(year) } : {}),
     ...(q ? { OR: [{ number: ci(q) }, { internalNo: ci(q) }, { note: ci(q) }, { category: ci(q) }, { supplier: { name: ci(q) } }] } : {}),
   };
@@ -240,14 +255,17 @@ export async function listSupplierInvoices(companyId: string, sp: Params, pg: { 
         total: true,
         paidDate: true,
         category: true,
+        source: true,
+        status: true,
         supplier: { select: { id: true, name: true } },
         expense: { select: { id: true } },
       },
     }),
     db.supplierInvoice.count({ where }),
-    db.supplierInvoice.aggregate({ where, _sum: { netAmount: true, vatAmount: true, total: true } }),
+    // odbijeni računi nisu obveza ni trošak — ne ulaze u zbrojeve (osim kad se gledaju samo odbijeni)
+    db.supplierInvoice.aggregate({ where: status === 'rejected' ? where : { AND: [where, NOT_REJECTED] }, _sum: { netAmount: true, vatAmount: true, total: true } }),
   ]);
-  const unpaid = await db.supplierInvoice.aggregate({ where: { ...where, paidDate: null }, _sum: { total: true } });
+  const unpaid = await db.supplierInvoice.aggregate({ where: { AND: [where, NOT_REJECTED, { paidDate: null }] }, _sum: { total: true } });
   return {
     rows,
     total,
@@ -262,10 +280,17 @@ export async function supplierInvoiceYears(companyId: string) {
 }
 
 export async function getSupplierInvoice(companyId: string, id: string) {
-  return db.supplierInvoice.findFirst({
+  const si = await db.supplierInvoice.findFirst({
     where: { id, companyId },
-    include: { supplier: { select: { id: true, name: true, country: true } }, expense: { select: { id: true } } },
+    include: { supplier: { select: { id: true, name: true, country: true, oib: true } }, expense: { select: { id: true } } },
   });
+  if (!si) return null;
+  const attachments = await db.attachment.findMany({
+    where: { companyId, entity: 'supplierInvoice', entityId: id },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, fileName: true, mime: true, size: true },
+  });
+  return { ...si, attachments };
 }
 
 /** Dobavljači za odabir: partneri označeni kao dobavljači (+ trenutni, ako to više nije). */
