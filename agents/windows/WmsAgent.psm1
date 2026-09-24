@@ -972,6 +972,7 @@ function Invoke-MdmScript {
     }
     try {
         $pr = Start-Process -FilePath $exe -ArgumentList $argList -RedirectStandardOutput $out -RedirectStandardError $err -PassThru -NoNewWindow
+        $null = $pr.Handle  # bez ovoga je ExitCode prazan (poznata osobina Start-Process -PassThru)
         $done = $pr.WaitForExit($TimeoutSec * 1000)
         if (-not $done) {
             try { & taskkill.exe /PID $pr.Id /T /F | Out-Null } catch { $pr.Kill() }
