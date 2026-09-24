@@ -8,7 +8,7 @@ import { db } from './db';
 import { env } from './env';
 import { AuthError } from './errors';
 import { SESSION_COOKIE } from '@/lib/session-cookie';
-import { can, resolvePermissions, type Level, type Module, type PermissionMap, type RoleCode } from '@/domain/permissions';
+import { can, isExternalRole, resolvePermissions, type Level, type Module, type PermissionMap, type RoleCode } from '@/domain/permissions';
 
 export interface SessionUser {
   id: string;
@@ -18,6 +18,10 @@ export interface SessionUser {
   companyId: string;
   companyName: string;
   perms: PermissionMap;
+  /** Vanjski korisnik MDM-a (distributer/klijent) — pripada ovoj MDM organizaciji. */
+  mdmOrgId: string | null;
+  /** Naziv vanjske organizacije (prikazuje se umjesto firme vlasnika). */
+  mdmOrgName: string | null;
 }
 
 const hash = (t: string) => createHash('sha256').update(t).digest('hex');
@@ -65,10 +69,13 @@ export const getUser = cache(async (): Promise<SessionUser | null> => {
   if (!token) return null;
   const s = await db.session.findUnique({
     where: { tokenHash: hash(token) },
-    include: { user: { include: { company: { select: { name: true } } } } },
+    include: { user: { include: { company: { select: { name: true } }, mdmOrg: { select: { name: true, active: true } } } } },
   });
   if (!s || s.revokedAt || s.expiresAt < new Date() || !s.user.active) return null;
   const u = s.user;
+  const external = isExternalRole(u.role);
+  // vanjski korisnik bez (aktivne) organizacije nema pristup ničemu
+  if (external && (!u.mdmOrgId || !u.mdmOrg?.active)) return null;
   return {
     id: u.id,
     name: u.name,
@@ -77,6 +84,8 @@ export const getUser = cache(async (): Promise<SessionUser | null> => {
     companyId: u.companyId,
     companyName: u.company.name,
     perms: resolvePermissions(u.role, u.permissions as Record<string, Level>),
+    mdmOrgId: external ? u.mdmOrgId : null,
+    mdmOrgName: external ? (u.mdmOrg?.name ?? null) : null,
   };
 });
 
@@ -96,7 +105,11 @@ export async function requireAccess(module: Module, level: Exclude<Level, 'none'
 export async function pageAccess(module: Module, level: Exclude<Level, 'none'> = 'view'): Promise<SessionUser> {
   const u = await getUser();
   if (!u) redirect('/login');
-  if (!can(u.perms, module, level)) redirect(`/zabranjeno?modul=${module}`);
+  if (!can(u.perms, module, level)) {
+    // tko nema nadzornu ploču, a ima MDM (distributeri, klijenti), početnu stranicu ima u MDM-u
+    if (module === 'dashboard' && can(u.perms, 'mdm')) redirect('/mdm');
+    redirect(`/zabranjeno?modul=${module}`);
+  }
   return u;
 }
 

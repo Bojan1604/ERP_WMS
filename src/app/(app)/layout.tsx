@@ -13,18 +13,21 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (!user) redirect('/login');
 
   const c = user.companyId;
-  const [approvals, reserved, returning] = await Promise.all([
-    db.approvalRequest.count({ where: { companyId: c, status: 'PENDING' } }),
-    db.item.count({ where: { companyId: c, state: 'RESERVED' } }),
-    db.item.count({ where: { companyId: c, state: 'RETURNING' } }),
-  ]);
+  // vanjski korisnici MDM-a ne vide ERP brojače
+  const [approvals, reserved, returning] = user.mdmOrgId
+    ? [0, 0, 0]
+    : await Promise.all([
+        db.approvalRequest.count({ where: { companyId: c, status: 'PENDING' } }),
+        db.item.count({ where: { companyId: c, state: 'RESERVED' } }),
+        db.item.count({ where: { companyId: c, state: 'RETURNING' } }),
+      ]);
 
   return (
     <ToastProvider>
       <div className="flex h-dvh overflow-hidden">
         <Sidebar
           perms={user.perms}
-          company={user.companyName}
+          company={user.mdmOrgName ?? user.companyName}
           badges={{ '/skladiste/odobrenja': approvals, '/skladiste/izlaz': reserved + returning }}
         />
         <div className="flex min-w-0 flex-1 flex-col">

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Boxes, LayoutDashboard, Menu, Receipt, ScanLine } from 'lucide-react';
+import { Boxes, LayoutDashboard, Menu, Receipt, ScanLine, Smartphone } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { can, type PermissionMap } from '@/domain/permissions';
 
@@ -17,6 +17,9 @@ export function MobileNav({ perms }: { perms: PermissionMap }) {
     { href: '/skladiste', label: 'Skladište', icon: Boxes, show: can(perms, 'warehouse') },
     { href: '/skladiste/skeniranje', label: 'Skeniraj', icon: ScanLine, show: can(perms, 'warehouse'), primary: true },
     { href: '/prodaja/racuni', label: 'Računi', icon: Receipt, show: can(perms, 'sales') },
+    // vanjski korisnici (bez ERP-a): MDM na dohvat palca
+    { href: '/mdm', label: 'Pregled', icon: LayoutDashboard, show: !can(perms, 'dashboard') && can(perms, 'mdm') },
+    { href: '/mdm/uredaji', label: 'Uređaji', icon: Smartphone, show: !can(perms, 'warehouse') && can(perms, 'mdm') },
   ].filter((i) => i.show);
   const active = (href: string) => (href === '/' ? pathname === '/' : pathname === href || (pathname.startsWith(`${href}/`) && !items.some((o) => o.href !== href && o.href.startsWith(href) && pathname.startsWith(o.href))));
 

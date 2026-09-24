@@ -4,7 +4,7 @@
  * skladišta, bez uređivanja i brisanja; promjena statusa ide na odobrenje.
  * Iznimka zadana na korisniku ima prednost pred ulogom.
  */
-export type RoleCode = 'ADMIN' | 'MANAGER' | 'SALES' | 'WAREHOUSE' | 'ACCOUNTANT';
+export type RoleCode = 'ADMIN' | 'MANAGER' | 'SALES' | 'WAREHOUSE' | 'ACCOUNTANT' | 'DISTRIBUTOR' | 'CLIENT';
 export type Level = 'none' | 'view' | 'ops' | 'edit';
 
 export const MODULES = {
@@ -19,6 +19,7 @@ export const MODULES = {
   reports: 'Izvještaji',
   settings: 'Postavke i šifrarnici',
   users: 'Korisnici',
+  mdm: 'MDM — upravljanje uređajima',
 } as const;
 
 export type Module = keyof typeof MODULES;
@@ -31,7 +32,13 @@ export const ROLE_LABEL: Record<RoleCode, string> = {
   SALES: 'Prodaja',
   WAREHOUSE: 'Skladište',
   ACCOUNTANT: 'Knjigovodstvo',
+  DISTRIBUTOR: 'Distributer (MDM)',
+  CLIENT: 'Klijent (MDM)',
 };
+
+/** Vanjski korisnici — vide samo MDM svoje organizacije, nikad ERP. */
+export const EXTERNAL_ROLES: RoleCode[] = ['DISTRIBUTOR', 'CLIENT'];
+export const isExternalRole = (r: RoleCode) => EXTERNAL_ROLES.includes(r);
 
 const all = (level: Level) => Object.fromEntries(Object.keys(MODULES).map((m) => [m, level])) as Record<Module, Level>;
 
@@ -40,6 +47,7 @@ export const ROLE_DEFAULTS: Record<RoleCode, Record<Module, Level>> = {
   MANAGER: { ...all('edit'), users: 'none' },
   SALES: {
     ...all('none'),
+    mdm: 'view',
     dashboard: 'view',
     warehouse: 'view',
     sales: 'edit',
@@ -55,6 +63,7 @@ export const ROLE_DEFAULTS: Record<RoleCode, Record<Module, Level>> = {
     sales: 'view',
     service: 'edit',
     partners: 'view',
+    mdm: 'view',
   },
   ACCOUNTANT: {
     ...all('view'),
@@ -63,7 +72,11 @@ export const ROLE_DEFAULTS: Record<RoleCode, Record<Module, Level>> = {
     purchasing: 'edit',
     users: 'none',
     settings: 'none',
+    mdm: 'none',
   },
+  // distributer upravlja uređajima svojih klijenata; klijent ih vidi i radi osnovne radnje
+  DISTRIBUTOR: { ...all('none'), mdm: 'edit' },
+  CLIENT: { ...all('none'), mdm: 'ops' },
 };
 
 export type PermissionMap = Record<Module, Level>;
@@ -71,6 +84,12 @@ export type PermissionMap = Record<Module, Level>;
 export function resolvePermissions(role: RoleCode, overrides: Partial<Record<string, Level>> | null | undefined): PermissionMap {
   const base = { ...ROLE_DEFAULTS[role] };
   if (role === 'ADMIN') return base;
+  // vanjskim korisnicima iznimke ne mogu otvoriti ERP module
+  if (isExternalRole(role)) {
+    const mdm = overrides?.mdm;
+    if (mdm && mdm in RANK) base.mdm = mdm;
+    return base;
+  }
   for (const [k, v] of Object.entries(overrides ?? {})) {
     if (k in base && v && v in RANK) base[k as Module] = v;
   }

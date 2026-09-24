@@ -71,3 +71,18 @@ npm run test:db        # integracijski testovi servisa (baza wms_test)
 npm run db:seed        # demo firma (admin@demo.hr / admin123)
 node scripts/smoke.mjs http://localhost:3000 / /skladiste …   # prolaz kroz stranice u pregledniku
 ```
+
+## MDM (upravljanje uređajima)
+
+- Hijerarhija: firma vlasnik (njeni korisnici = SuperUser, vide sve) → `MdmOrg` DISTRIBUTOR → `MdmOrg` CUSTOMER
+  (parentId) → `MdmSite` → `MdmDevice`. Vanjski korisnici imaju ulogu `DISTRIBUTOR`/`CLIENT` i `User.mdmOrgId`;
+  vide samo modul `mdm` (`src/domain/permissions.ts`).
+- **Svaki MDM upit ide kroz opseg** `getMdmScope(user)` (`src/server/mdm/scope.ts`): `deviceWhere`, `orgWhere`,
+  `sharedWhere`, `assertOrgInScope`, `loadDeviceInScope`. Nikad `companyId` samostalno za vanjske korisnike.
+- Naredbe uređajima: samo kroz `queueCommands` (`src/server/mdm/commands.ts`) — provjerava prava po naredbi
+  (`COMMANDS` u `src/domain/mdm.ts`: razina, `ownerOnly`, platforma).
+- Konfiguracija: `buildEffectiveConfig` / `bumpConfig` (`src/server/mdm/config.ts`); svaka promjena profila,
+  lokacije ili izmjene uređaja podiže `configVersion` pogođenih uređaja.
+- Protokol agenta (v1) je u `src/domain/mdm.ts` (Agent*Request/Response); API `/api/mdm/agent/*`, autentikacija
+  zaglavljem `Authorization: Device <token>` (u bazi samo sha256 tokena).
+- Datoteke (APK/MSI/snimke/zapisnici) na disku kroz `src/server/mdm/storage.ts` (MDM_STORAGE_DIR), nikad u bazi.

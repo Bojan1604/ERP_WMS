@@ -32,6 +32,35 @@ enum Role {
   SALES
   WAREHOUSE
   ACCOUNTANT
+  DISTRIBUTOR // vanjski korisnik: vidi samo MDM svoje organizacije i njenih klijenata
+  CLIENT // vanjski korisnik: vidi samo MDM uređaje svoje firme
+}
+
+// ---------------------------------------------------------------- MDM enumeracije
+
+enum MdmOrgType {
+  DISTRIBUTOR
+  CUSTOMER
+}
+
+enum MdmPlatform {
+  ANDROID
+  WINDOWS
+}
+
+enum MdmDeviceStatus {
+  PENDING // agent se javio, čeka upis koda
+  ENROLLED
+  RETIRED // odjavljen („Forget")
+}
+
+enum MdmCommandStatus {
+  PENDING
+  SENT
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  EXPIRED
 }
 
 /// Uloga statusa u logici programa. Naziv i boju statusa firma bira sama,
@@ -213,20 +242,26 @@ model Company {
   statusChangeNeedsApproval Boolean @default(true)
 
   // fiskalizacija i eRačun (priprema — adapteri u src/server/fiscal)
-  fiscalEnabled      Boolean     @default(false)
+  fiscalEnabled      Boolean          @default(false)
   /// TEST (demo okolina CIS-a / posrednika) ili PROD
-  fiscalEnv          String      @default("TEST")
+  fiscalEnv          String           @default("TEST")
   /// Fiskalizacijski certifikat (FINA .p12) i lozinka (šifrirana s AUTH_SECRET).
   fiscalCert         Bytes?
   fiscalCertPassword String?
   /// Sažetak certifikata: { subject, issuer, validTo, oib }
   fiscalCertInfo     Json?
   /// U sustavu PDV-a za potrebe fiskalizacije (USustPdv).
-  fiscalSequenceMode String      @default("P") // P = na razini poslovnog prostora, N = na razini uređaja
-  eInvoiceProvider   String      @default("none") // none | demo | eposlovanje | moj-eracun
+  fiscalSequenceMode String           @default("P") // P = na razini poslovnog prostora, N = na razini uređaja
+  eInvoiceProvider   String           @default("none") // none | demo | eposlovanje | moj-eracun
   eInvoiceApiKey     String? // šifrirano
   fiscalLogs         FiscalLog[]
   stocktakes         Stocktake[]
+  mdmOrgs            MdmOrg[]
+  mdmDevices         MdmDevice[]
+  mdmProfiles        MdmProfile[]
+  mdmApps            MdmApp[]
+  mdmFiles           MdmFile[]
+  mdmEnrollTokens    MdmEnrollToken[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -324,15 +359,19 @@ model User {
   permissions  Json      @default("{}")
   /// OIB operatera — obavezan na fiskaliziranom računu (OibOper).
   oib          String?
+  /// Vanjski korisnici MDM-a (DISTRIBUTOR, CLIENT) pripadaju jednoj MDM organizaciji.
+  mdmOrgId     String?
   active       Boolean   @default(true)
   lastLoginAt  DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
   company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  mdmOrg   MdmOrg?   @relation(fields: [mdmOrgId], references: [id], onDelete: SetNull)
   sessions Session[]
 
   @@index([companyId])
+  @@index([mdmOrgId])
 }
 
 model Session {
@@ -506,6 +545,7 @@ model Partner {
   serviceOrders    ServiceOrder[]
   expenses         Expense[]
   priceAgreements  PriceAgreement[]
+  mdmOrgs          MdmOrg[]
 
   @@index([companyId, name])
   @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "Partner_name_trgm_idx")
@@ -583,6 +623,7 @@ model Item {
   replacements  ServiceOrder[] @relation("ServiceReplacement")
   transferItems TransferItem[]
   rentOverrides RentOverride[]
+  mdmDevices    MdmDevice[]
 
   @@index([companyId, serial])
   @@index([serial(ops: raw("gin_trgm_ops"))], type: Gin, map: "Item_serial_trgm_idx")
@@ -1152,4 +1193,290 @@ model AuditLog {
 
   @@index([companyId, at])
   @@index([companyId, entity, entityId])
+}
+
+// =============================================================================
+//  MDM — upravljanje uređajima (Android računala, Android handheldi, Windows)
+//
+//  Hijerarhija: firma vlasnik (SuperUser) → distributer → klijent → lokacija →
+//  uređaji. Agent na uređaju se javlja preko /api/mdm/agent/* (prijava, javljanje
+//  stanja, naredbe, rezultati, prijenos datoteka).
+// =============================================================================
+
+model MdmOrg {
+  id        String     @id @default(cuid())
+  companyId String
+  parentId  String? // klijent distributera; null = izravno pod vlasnikom
+  type      MdmOrgType
+  name      String
+  oib       String?
+  email     String?
+  phone     String?
+  address   String?
+  city      String?
+  /// Veza na partnera u ERP-u (vidi samo vlasnik).
+  partnerId String?
+  active    Boolean    @default(true)
+  note      String?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  company      Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  parent       MdmOrg?          @relation("MdmOrgTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children     MdmOrg[]         @relation("MdmOrgTree")
+  partner      Partner?         @relation(fields: [partnerId], references: [id], onDelete: SetNull)
+  sites        MdmSite[]
+  devices      MdmDevice[]
+  users        User[]
+  profiles     MdmProfile[]
+  apps         MdmApp[]
+  files        MdmFile[]
+  enrollTokens MdmEnrollToken[]
+
+  @@index([companyId, type])
+  @@index([parentId])
+  @@index([partnerId])
+}
+
+model MdmSite {
+  id        String   @id @default(cuid())
+  orgId     String
+  name      String
+  address   String?
+  timezone  String   @default("Europe/Zagreb")
+  /// Zadani profil za uređaje na lokaciji.
+  profileId String?
+  note      String?
+  createdAt DateTime @default(now())
+
+  org          MdmOrg           @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  profile      MdmProfile?      @relation(fields: [profileId], references: [id], onDelete: SetNull)
+  devices      MdmDevice[]
+  enrollTokens MdmEnrollToken[]
+
+  @@index([orgId])
+  @@index([profileId])
+}
+
+model MdmDevice {
+  id                   String          @id @default(cuid())
+  companyId            String
+  orgId                String?
+  siteId               String?
+  platform             MdmPlatform
+  status               MdmDeviceStatus @default(PENDING)
+  name                 String
+  /// Šesteroznamenkasti kod koji agent prikazuje dok čeka upis.
+  enrollCode           String?
+  /// Sažetak tajnog ključa kojim se agent predstavlja.
+  tokenHash            String          @unique
+  serial               String?
+  hardwareId           String? // Android ID / Windows UUID
+  manufacturer         String?
+  model                String?
+  osVersion            String?
+  agentVersion         String?
+  imei                 String?
+  macAddress           String?
+  ipAddress            String?
+  publicIp             String?
+  wifiSsid             String?
+  wifiSignal           Int? // dBm
+  batteryLevel         Int?
+  charging             Boolean?
+  storageFreeMb        Int?
+  storageTotalMb       Int?
+  ramTotalMb           Int?
+  uptimeSec            Int?
+  /// Posljednje cjelovito stanje s uređaja (instalirane aplikacije, mreža…).
+  telemetry            Json            @default("{}")
+  lastSeenAt           DateTime?
+  onlineSince          DateTime?
+  enrolledAt           DateTime?
+  profileId            String?
+  /// Verzija konfiguracije koju je uređaj potvrdio; razlika = treba primijeniti.
+  appliedConfigVersion Int             @default(0)
+  configVersion        Int             @default(0)
+  /// Konfiguracija samo za ovaj uređaj (nadjačava profil): kao MdmProfile.settings/apps.
+  overrides            Json            @default("{}")
+  maintenancePin       String?
+  notes                String?
+  itemId               String? // veza na uređaj u ERP skladištu
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  company  Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  org      MdmOrg?      @relation(fields: [orgId], references: [id], onDelete: SetNull)
+  site     MdmSite?     @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  profile  MdmProfile?  @relation(fields: [profileId], references: [id], onDelete: SetNull)
+  item     Item?        @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  commands MdmCommand[]
+  events   MdmEvent[]
+  uploads  MdmUpload[]
+
+  @@index([companyId, status])
+  @@index([orgId])
+  @@index([siteId])
+  @@index([profileId])
+  @@index([itemId])
+  @@index([companyId, serial])
+  @@index([companyId, lastSeenAt])
+  @@index([companyId, enrollCode])
+}
+
+/// Konfiguracija lokacije / skupine uređaja („Site Configuration").
+model MdmProfile {
+  id        String      @id @default(cuid())
+  companyId String
+  /// Vlasnik profila (distributer ili klijent); null = profil vlasnika sustava.
+  orgId     String?
+  name      String
+  platform  MdmPlatform
+  /// Postavke: { kiosk, restrictions{…}, adb, startApp, wifi[], pin, screenTimeoutSec, timezone, updatePolicy, … }
+  settings  Json        @default("{}")
+  /// Aplikacije: [{ appId, versionId?, config{k:v}, hidden, autoStart }]
+  apps      Json        @default("[]")
+  version   Int         @default(1)
+  note      String?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  company Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  org     MdmOrg?     @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  sites   MdmSite[]
+  devices MdmDevice[]
+
+  @@index([companyId, orgId])
+}
+
+model MdmApp {
+  id          String      @id @default(cuid())
+  companyId   String
+  orgId       String? // null = dostupna svima
+  platform    MdmPlatform
+  name        String
+  packageName String // Android paket ili Windows ProductCode / naziv
+  description String?
+  /// Windows: argumenti tihe instalacije (npr. /qn za MSI).
+  installArgs String?
+  createdAt   DateTime    @default(now())
+
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  org      MdmOrg?         @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  versions MdmAppVersion[]
+
+  @@unique([companyId, platform, packageName, orgId])
+  @@index([companyId, orgId])
+}
+
+model MdmAppVersion {
+  id          String   @id @default(cuid())
+  appId       String
+  version     String
+  versionCode Int?
+  fileId      String
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  app  MdmApp  @relation(fields: [appId], references: [id], onDelete: Cascade)
+  file MdmFile @relation(fields: [fileId], references: [id], onDelete: Restrict)
+
+  @@unique([appId, version])
+  @@index([fileId])
+}
+
+/// Datoteke (APK, MSI, EXE, dokumenti, snimke zaslona, zapisnici) — sadržaj na disku.
+model MdmFile {
+  id         String   @id @default(cuid())
+  companyId  String
+  orgId      String?
+  kind       String // APP, FILE, DOC, SCREENSHOT, LOGS
+  name       String
+  mime       String
+  size       Int
+  sha256     String
+  storageKey String   @unique
+  createdBy  String?
+  createdAt  DateTime @default(now())
+
+  company     Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  org         MdmOrg?         @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  appVersions MdmAppVersion[]
+  uploads     MdmUpload[]
+
+  @@index([companyId, kind])
+  @@index([orgId])
+}
+
+model MdmCommand {
+  id        String           @id @default(cuid())
+  deviceId  String
+  /// REBOOT, FORGET, APPLY_CONFIG, INSTALL_APP, UNINSTALL_APP, SCREENSHOT, UPLOAD_LOGS,
+  /// LOCK, WIPE, MESSAGE, PUSH_FILE, RUN_SCRIPT, SET_KIOSK
+  type      String
+  payload   Json             @default("{}")
+  status    MdmCommandStatus @default(PENDING)
+  result    Json?
+  error     String?
+  createdBy String?
+  createdAt DateTime         @default(now())
+  sentAt    DateTime?
+  doneAt    DateTime?
+  expiresAt DateTime?
+
+  device MdmDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId, status])
+  @@index([deviceId, createdAt])
+}
+
+/// Povijest uređaja: javljanja, promjene stanja, upozorenja, zapisi agenta.
+model MdmEvent {
+  id       String   @id @default(cuid())
+  deviceId String
+  at       DateTime @default(now())
+  level    String   @default("info") // info, warn, error
+  type     String
+  message  String
+  data     Json?
+
+  device MdmDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId, at])
+}
+
+model MdmUpload {
+  id       String   @id @default(cuid())
+  deviceId String
+  kind     String // SCREENSHOT, LOGS
+  fileId   String
+  at       DateTime @default(now())
+
+  device MdmDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  file   MdmFile   @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId, kind, at])
+  @@index([fileId])
+}
+
+/// Ključ za automatski upis (QR za Android, parametar instalacije za Windows).
+model MdmEnrollToken {
+  id        String    @id @default(cuid())
+  companyId String
+  orgId     String
+  siteId    String?
+  token     String    @unique
+  label     String?
+  maxUses   Int?
+  uses      Int       @default(0)
+  expiresAt DateTime?
+  createdBy String?
+  createdAt DateTime  @default(now())
+
+  company Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  org     MdmOrg   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  site    MdmSite? @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+  @@index([siteId])
 }

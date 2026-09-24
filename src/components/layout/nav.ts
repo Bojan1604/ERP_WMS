@@ -1,6 +1,7 @@
 import {
   ArrowLeftRight, BarChart3, Boxes, Building2, CalendarClock, ClipboardList, FileSignature, FileText, History, Inbox, LayoutDashboard, ListTree, PackageCheck, PackagePlus, Receipt, ShieldCheck, Table2, Truck, UserCog, Users, Wallet, Wrench,
   ScanLine, ClipboardCheck, Stamp, DatabaseBackup,
+  MonitorSmartphone, Smartphone, QrCode, SlidersHorizontal, AppWindow, FolderOpen, Network, BookOpen,
   type LucideIcon,
 } from 'lucide-react';
 import type { Module } from '@/domain/permissions';
@@ -66,6 +67,19 @@ export const NAV: NavGroup[] = [
       { href: '/troskovi', label: 'Troškovi', icon: Wallet, module: 'expenses' },
       { href: '/partneri', label: 'Partneri', icon: Users, module: 'partners' },
       { href: '/izvjestaji', label: 'Izvještaji', icon: BarChart3, module: 'reports' },
+    ],
+  },
+  {
+    label: 'MDM',
+    items: [
+      { href: '/mdm', label: 'Pregled uređaja', icon: MonitorSmartphone, module: 'mdm' },
+      { href: '/mdm/uredaji', label: 'Uređaji', icon: Smartphone, module: 'mdm' },
+      { href: '/mdm/upis', label: 'Upis uređaja', icon: QrCode, module: 'mdm', level: 'edit' },
+      { href: '/mdm/profili', label: 'Konfiguracije', icon: SlidersHorizontal, module: 'mdm' },
+      { href: '/mdm/aplikacije', label: 'Aplikacije', icon: AppWindow, module: 'mdm' },
+      { href: '/mdm/datoteke', label: 'Datoteke', icon: FolderOpen, module: 'mdm' },
+      { href: '/mdm/organizacije', label: 'Distributeri i klijenti', icon: Network, module: 'mdm', level: 'edit' },
+      { href: '/mdm/dokumenti', label: 'Dokumenti i mreža', icon: BookOpen, module: 'mdm' },
     ],
   },
   {
