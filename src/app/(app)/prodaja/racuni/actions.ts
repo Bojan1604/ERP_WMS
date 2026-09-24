@@ -31,7 +31,7 @@ const zLine = z.object({
   kpd: zOptText,
   qty: zMoney,
   unitPrice: zMoney,
-  discountPct: zMoney,
+  discountPct: zMoney.refine((v) => v >= 0 && v <= 100, 'Popust stavke mora biti između 0 i 100 %'),
   monthly: zOptMoney,
   months: zOptInt,
   warrantyMonths: zOptInt,
@@ -94,7 +94,8 @@ export const saveInvoice = action({ module: 'sales', level: 'edit' }, zInvoice, 
       date: input.date,
       dueDate: input.dueDate,
       deliveryDate: input.deliveryDate,
-      vatRate: input.vatRate,
+      // stopa PDV-a vrijedi samo za kategoriju S; ostale su 0 % (i u zbrojevima i u eRačunu)
+      vatRate: input.taxCategory === 'S' ? input.vatRate : 0,
       taxCategory: input.taxCategory,
       taxExemptReason: input.taxCategory === 'S' ? null : input.taxExemptReason,
       discountPct: input.discountPct,
@@ -106,7 +107,8 @@ export const saveInvoice = action({ module: 'sales', level: 'edit' }, zInvoice, 
       description: input.description,
       note: input.note,
       paymentMethod: input.paymentMethod,
-      lines: input.lines.map((l) => ({ ...l, qty: l.qty || 1 })),
+      // količina 0 se ne pretvara u 1 — servis je odbija s porukom
+      lines: input.lines,
     };
     let id = input.id;
     if (id) await updateDraft(tx, user, id, data);

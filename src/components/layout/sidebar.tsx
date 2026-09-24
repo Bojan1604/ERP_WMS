@@ -15,7 +15,7 @@ function Icon({ icon: I, active }: { icon: LucideIcon; active: boolean }) {
   return <I className={cn('size-4 shrink-0', active ? 'text-white' : 'text-nav-fg-2')} />;
 }
 
-export function Sidebar({ perms, company, badges }: { perms: PermissionMap; company: string; badges: Record<string, number> }) {
+export function Sidebar({ perms, isAdmin, company, badges }: { perms: PermissionMap; isAdmin: boolean; company: string; badges: Record<string, number> }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   // donja traka na mobitelu otvara isti izbornik
@@ -24,7 +24,7 @@ export function Sidebar({ perms, company, badges }: { perms: PermissionMap; comp
     window.addEventListener('open-nav', onOpen);
     return () => window.removeEventListener('open-nav', onOpen);
   }, []);
-  const groups = NAV.map((g) => ({ ...g, items: g.items.filter((i) => can(perms, i.module, i.level ?? 'view')) })).filter((g) => g.items.length);
+  const groups = NAV.map((g) => ({ ...g, items: g.items.filter((i) => can(perms, i.module, i.level ?? 'view') && (!i.adminOnly || isAdmin)) })).filter((g) => g.items.length);
 
   // najdulja poklapajuća putanja je aktivna (/skladiste ne smije biti aktivan na /skladiste/izlaz)
   const all = groups.flatMap((g) => g.items.map((i) => i.href));

@@ -172,9 +172,10 @@ export interface ReceiveInput {
  * Serijski broj koji firma već ima se odbija.
  */
 export async function receiveGoods(tx: Tx, actor: Actor, input: ReceiveInput) {
-  const serials = input.lines.flatMap((l) => l.serials.map((s) => s.trim()).filter(Boolean));
+  const lines = input.lines.map((l) => ({ ...l, serials: l.serials.map((s) => s.trim()).filter(Boolean) }));
+  const serials = lines.flatMap((l) => l.serials);
   assert(serials.length > 0, 'Upišite barem jedan serijski broj.');
-  assert(input.lines.every((l) => l.unitCost >= 0), 'Nabavna cijena ne može biti negativna.');
+  assert(lines.every((l) => l.unitCost >= 0), 'Nabavna cijena ne može biti negativna.');
   const seen = new Set<string>();
   const repeated = new Set<string>();
   for (const s of serials) (seen.has(s) ? repeated : seen).add(s);
@@ -190,29 +191,38 @@ export async function receiveGoods(tx: Tx, actor: Actor, input: ReceiveInput) {
     ? await tx.partner.findFirst({ where: { id: input.supplierId, companyId: actor.companyId }, select: { id: true, name: true, country: true } })
     : null;
   assert(!input.supplierId || supplier, 'Dobavljač ne postoji.');
-  const modelIds = [...new Set(input.lines.map((l) => l.modelId))];
+  const modelIds = [...new Set(lines.map((l) => l.modelId))];
   assert((await tx.deviceModel.count({ where: { id: { in: modelIds }, companyId: actor.companyId } })) === modelIds.length, 'Neki modeli ne postoje.');
 
   const order = input.orderId
-    ? await tx.purchaseOrder.findFirst({ where: { id: input.orderId, companyId: actor.companyId }, include: { lines: true } })
+    ? await tx.purchaseOrder.findFirst({
+        where: { id: input.orderId, companyId: actor.companyId },
+        include: { lines: true, supplier: { select: { id: true, name: true, country: true } } },
+      })
     : null;
+  // koliko se zaprima po stavci narudžbenice (ista stavka može doći u više redaka)
+  const perLine = new Map<string, number>();
   if (input.orderId) {
     assert(order, 'Narudžbenica ne postoji.');
     assert(order.status === 'ORDERED' || order.status === 'PARTIAL', 'Roba se zaprima samo po poslanoj narudžbenici (status „Naručeno" ili „Djelomično").');
-    for (const l of input.lines) {
+    for (const l of lines) {
       if (!l.orderLineId) continue;
       const ol = order.lines.find((x) => x.id === l.orderLineId);
       assert(ol, 'Stavka narudžbenice ne postoji.');
       assert(ol.modelId === l.modelId, 'Model ne odgovara stavci narudžbenice.');
+      const n = (perLine.get(ol.id) ?? 0) + l.serials.length;
+      perLine.set(ol.id, n);
       const left = ol.qty - ol.received;
-      assert(l.serials.length <= left, `Na stavci je preostalo ${left} kom, a upisano je ${l.serials.length} serijskih brojeva.`);
+      assert(n <= left, `Na stavci je preostalo ${left} kom, a upisano je ${n} serijskih brojeva.`);
     }
   }
+  // dobavljač robe po narudžbenici je dobavljač narudžbenice (o njegovoj zemlji ovisi PDV troška)
+  const vendor = order?.supplier ?? supplier;
 
   const year = Number(input.date.slice(0, 4));
   const number = await nextDocNumber(tx, actor.companyId, 'RECEIPT', year);
-  const total = r2(input.lines.reduce((a, l) => a + l.serials.length * r2(l.unitCost), 0));
-  const supplierId = supplier?.id ?? order?.supplierId ?? null;
+  const total = r2(lines.reduce((a, l) => a + l.serials.length * r2(l.unitCost), 0));
+  const supplierId = vendor?.id ?? null;
   const receipt = await tx.goodsReceipt.create({
     data: {
       companyId: actor.companyId,
@@ -230,10 +240,10 @@ export async function receiveGoods(tx: Tx, actor: Actor, input: ReceiveInput) {
   });
 
   const status = await statusFor(tx, actor.companyId, 'IN_STOCK');
-  const rows: Prisma.ItemCreateManyInput[] = input.lines.flatMap((l) =>
+  const rows: Prisma.ItemCreateManyInput[] = lines.flatMap((l) =>
     l.serials.map((s) => ({
       companyId: actor.companyId,
-      serial: s.trim(),
+      serial: s,
       modelId: l.modelId,
       statusId: status.id,
       state: 'IN_STOCK' as const,
@@ -258,32 +268,39 @@ export async function receiveGoods(tx: Tx, actor: Actor, input: ReceiveInput) {
   });
 
   if (order) {
-    for (const l of input.lines) {
-      if (l.orderLineId) await tx.purchaseOrderLine.update({ where: { id: l.orderLineId }, data: { received: { increment: l.serials.length } } });
+    for (const [lineId, n] of perLine) {
+      // uvjetno povećanje: istovremena primka na istu stavku ne smije zaprimiti više od naručenog
+      const done = await tx.$executeRaw`
+        UPDATE "PurchaseOrderLine" SET "received" = "received" + ${n}
+        WHERE "id" = ${lineId} AND "orderId" = ${order.id} AND "received" + ${n} <= "qty"`;
+      if (!done) throw new DomainError('Stavka narudžbenice je u međuvremenu zaprimljena — osvježite stranicu i provjerite preostalu količinu.');
     }
     await recalcOrderStatus(tx, order.id);
   }
 
-  await tx.expense.create({
-    data: {
-      companyId: actor.companyId,
-      date: fromISO(input.date),
-      categoryId: await expenseCategoryId(tx, actor.companyId, PURCHASE_CATEGORY),
-      description: `Nabava robe — primka ${number}${order ? ` (${order.number})` : ''}`,
-      partnerId: supplierId,
-      netAmount: total,
-      vatAmount: await vatFor(tx, actor.companyId, supplier?.country, total),
-      source: 'RECEIPT',
-      receiptId: receipt.id,
-      createdBy: actor.name,
-    },
-  });
+  // primka bez vrijednosti ne knjiži trošak od 0 €
+  if (total > 0) {
+    await tx.expense.create({
+      data: {
+        companyId: actor.companyId,
+        date: fromISO(input.date),
+        categoryId: await expenseCategoryId(tx, actor.companyId, PURCHASE_CATEGORY),
+        description: `Nabava robe — primka ${number}${order ? ` (${order.number})` : ''}`,
+        partnerId: supplierId,
+        netAmount: total,
+        vatAmount: await vatFor(tx, actor.companyId, vendor?.country, total),
+        source: 'RECEIPT',
+        receiptId: receipt.id,
+        createdBy: actor.name,
+      },
+    });
+  }
 
   await audit(tx, actor, {
     entity: 'receipt',
     entityId: receipt.id,
     action: 'create',
-    summary: `Primka ${number}: ${created.length} kom${supplier ? ` od ${supplier.name}` : ''}`,
+    summary: `Primka ${number}: ${created.length} kom${vendor ? ` od ${vendor.name}` : ''}`,
   });
   return { id: receipt.id, number, count: created.length };
 }
@@ -304,23 +321,29 @@ export async function cancelReceipt(tx: Tx, actor: Actor, id: string, reason?: s
       serial: true,
       state: true,
       modelId: true,
+      warehouseId: true,
       model: { select: { brand: true, name: true } },
       contractItem: { select: { id: true } },
       invoiceLines: { select: { id: true }, take: 1 },
+      transferItems: { select: { transferId: true }, take: 1 },
     },
     orderBy: { serial: 'asc' },
   });
+  const list = (rows: typeof items) => `(${rows.length}): ${rows.slice(0, 30).map((i) => i.serial).join(', ')}`;
   const bad = items.filter((i) => i.state !== 'IN_STOCK' || i.contractItem || i.invoiceLines.length);
   if (bad.length) {
-    throw new DomainError(
-      `Primka se ne može stornirati — uređaji nisu više slobodni na skladištu ili su na računu/ugovoru (${bad.length}): ${bad
-        .slice(0, 30)
-        .map((i) => i.serial)
-        .join(', ')}`,
-    );
+    throw new DomainError(`Primka se ne može stornirati — uređaji nisu više slobodni na skladištu ili su na računu/ugovoru ${list(bad)}`);
+  }
+  // premješteni uređaj ima međuskladišnicu — brisanje bi je ispraznilo i obrisalo povijest
+  const moved = items.filter((i) => i.transferItems.length || i.warehouseId !== receipt.warehouseId);
+  if (moved.length) {
+    throw new DomainError(`Primka se ne može stornirati — uređaji su premješteni u drugo skladište (međuskladišnica) ${list(moved)}`);
   }
 
-  await tx.item.deleteMany({ where: { id: { in: items.map((i) => i.id) } } });
+  const itemIds = items.map((i) => i.id);
+  // prilozi uređaja nisu vezani stranim ključem — brišu se s uređajima
+  if (itemIds.length) await tx.attachment.deleteMany({ where: { companyId: actor.companyId, entity: 'item', entityId: { in: itemIds } } });
+  await tx.item.deleteMany({ where: { id: { in: itemIds } } });
   await tx.expense.deleteMany({ where: { receiptId: id, companyId: actor.companyId } });
 
   if (receipt.orderId) {

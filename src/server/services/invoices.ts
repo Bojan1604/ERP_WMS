@@ -128,9 +128,11 @@ async function writeLines(tx: Tx, actor: Actor, invoiceId: string, type: Invoice
       assert(l.description?.trim(), `Stavka ${sort + 1}: opis je obavezan.`);
       assert(l.qty !== 0, `Stavka ${sort + 1}: količina ne može biti 0.`);
       const item = l.itemId ? byId.get(l.itemId) : undefined;
-      const monthly = l.monthly ?? null;
       const months = l.months ?? null;
-      const unitPrice = monthly !== null && months ? r2(monthly * months) : r2(l.unitPrice);
+      const unitPrice = r2(l.unitPrice);
+      // najam: cijena sa stavke je mjerodavna — ručno promijenjena cijena preračunava mjesečnu
+      let monthly = l.monthly ?? null;
+      if (monthly !== null && months && Math.abs(r2(monthly * months) - unitPrice) > 0.005) monthly = r2(unitPrice / months);
       return {
         invoiceId,
         sort,
@@ -164,7 +166,8 @@ function headerData(input: InvoiceInput) {
     year: Number(input.date.slice(0, 4)),
     dueDate: input.dueDate ? fromISO(input.dueDate) : null,
     deliveryDate: input.deliveryDate ? fromISO(input.deliveryDate) : null,
-    vatRate: input.vatRate,
+    // PDV se obračunava samo u kategoriji S (standardna stopa); oslobođenja i prijenos obveze su 0 %
+    vatRate: (input.taxCategory ?? 'S') === 'S' ? input.vatRate : 0,
     taxCategory: input.taxCategory ?? 'S',
     taxExemptReason: input.taxExemptReason ?? null,
     discountPct: input.discountPct ?? 0,
@@ -274,9 +277,13 @@ export async function issueInvoice(tx: Tx, actor: Actor, id: string) {
     action: 'issue',
     summary: `${INVOICE_KIND_LABEL[inv.kind]} ${number} izdan za ${inv.partner.name}`,
   });
-  // gotovina i kartica se naplaćuju pri izdavanju
-  if (inv.kind === 'INVOICE' && (inv.paymentMethod === 'CASH' || inv.paymentMethod === 'CARD') && totals.total > 0) {
-    await addPayment(tx, actor, id, { date, amount: totals.total, method: inv.paymentMethod === 'CASH' ? 'Gotovina' : 'Kartica', note: 'Naplaćeno pri izdavanju' });
+  // gotovina i kartica se naplaćuju pri izdavanju (račun i račun za predujam) — naplaćuje se
+  // otvoreni iznos, tj. ukupno umanjeno za odbijeni predujam
+  if ((inv.kind === 'INVOICE' || inv.kind === 'ADVANCE') && (inv.paymentMethod === 'CASH' || inv.paymentMethod === 'CARD') && totals.total > 0) {
+    const open = num((await tx.invoice.findUniqueOrThrow({ where: { id }, select: { openAmount: true } })).openAmount);
+    if (open > 0.005) {
+      await addPayment(tx, actor, id, { date, amount: open, method: inv.paymentMethod === 'CASH' ? 'Gotovina' : 'Kartica', note: 'Naplaćeno pri izdavanju' });
+    }
   }
   return { number };
 }
@@ -323,15 +330,19 @@ async function applyRent(tx: Tx, actor: Actor, inv: IssuingInvoice) {
   assert(inv.contractId, 'Račun za najam mora biti vezan uz ugovor.');
   assert(inv.period, 'Račun za najam mora imati razdoblje (mjesec) koje pokriva.');
   const devLines = inv.lines.filter((l) => l.kind === 'DEVICE' && l.itemId);
-  const onContract = await tx.contractItem.findMany({
-    where: { contractId: inv.contractId, itemId: { in: devLines.map((l) => l.itemId!) } },
-    select: { itemId: true },
-  });
-  const set = new Set(onContract.map((c) => c.itemId));
+  const ids = devLines.map((l) => l.itemId!);
+  const [onContract, returned] = await Promise.all([
+    tx.contractItem.findMany({ where: { contractId: inv.contractId, itemId: { in: ids } }, select: { itemId: true } }),
+    // skinuti s ugovora: zaostale rate do datuma skidanja
+    tx.returnedContractItem.findMany({ where: { contractId: inv.contractId, itemId: { in: ids } }, select: { itemId: true } }),
+  ]);
+  const current = new Set(onContract.map((c) => c.itemId));
+  const set = new Set([...current, ...returned.map((c) => c.itemId)]);
   const missing = devLines.filter((l) => !set.has(l.itemId!));
   if (missing.length) throw new DomainError('Svi uređaji na računu za najam moraju biti na ugovoru.');
   if (devLines.length) {
-    await tx.item.updateMany({ where: { id: { in: devLines.map((l) => l.itemId!) } }, data: { invoiceId: inv.id } });
+    // veza na zadnji račun samo za uređaje koji su još na ugovoru (vraćeni su možda već na skladištu ili kod drugog kupca)
+    if (current.size) await tx.item.updateMany({ where: { id: { in: [...current] } }, data: { invoiceId: inv.id } });
     await itemEvents(tx, actor, devLines.map((l) => l.itemId!), {
       type: 'RENT_INVOICE',
       message: `Rata najma ${inv.period} fakturirana`,
@@ -341,10 +352,12 @@ async function applyRent(tx: Tx, actor: Actor, inv: IssuingInvoice) {
   }
 }
 
-/** Datum ispravka: danas, ali ne raniji od zadnjeg izdanog računa u godini (redni broj prati datum). */
+/**
+ * Datum ispravka: traženi (ili danas), ali ne raniji od zadnjeg izdanog računa
+ * u toj godini — redni broj prati datum, pa se datum pomiče umjesto da izdavanje padne.
+ */
 async function correctionDate(tx: Tx, companyId: string, requested?: string) {
-  if (requested) return requested;
-  const t = today();
+  const t = requested || today();
   const last = await tx.invoice.findFirst({
     where: { companyId, status: 'ISSUED', year: Number(t.slice(0, 4)) },
     orderBy: { date: 'desc' },
@@ -357,6 +370,8 @@ async function correctionDate(tx: Tx, companyId: string, requested?: string) {
 
 /** Storno poništava cijeli račun: novi dokument s negativnim stavkama. */
 export async function stornoInvoice(tx: Tx, actor: Actor, id: string, opts: { date?: string; reason?: string } = {}) {
+  // zaključavanje izvornog računa: dva istovremena storna (ili storno i odobrenje) ne prolaze oba
+  await tx.$queryRaw`SELECT id FROM "Invoice" WHERE id = ${id} FOR UPDATE`;
   const inv = await tx.invoice.findFirst({ where: { id, companyId: actor.companyId }, include: { lines: { orderBy: { sort: 'asc' } } } });
   assert(inv, 'Račun ne postoji.');
   assert(inv.status === 'ISSUED', 'Nacrt se ne stornira — obrišite ga.');
@@ -441,6 +456,8 @@ export async function creditNote(
   id: string,
   input: { date?: string; description: string; netAmount: number },
 ) {
+  // zaključavanje izvornog računa: istovremena odobrenja ne smiju zajedno premašiti iznos računa
+  await tx.$queryRaw`SELECT id FROM "Invoice" WHERE id = ${id} FOR UPDATE`;
   const inv = await tx.invoice.findFirst({ where: { id, companyId: actor.companyId } });
   assert(inv, 'Račun ne postoji.');
   assert(inv.status === 'ISSUED' && inv.kind === 'INVOICE' && !inv.stornoed, 'Odobrenje se izdaje samo na važeći izdani račun.');
@@ -516,25 +533,4 @@ export async function markUnpaid(tx: Tx, actor: Actor, invoiceId: string) {
 
 // ---------------------------------------------------------------- najam: pokrivenost
 
-/**
- * Što je već fakturirano po ugovoru: ključevi `itemId|YYYY-MM` iz izdanih,
- * nestorniranih računa za najam.
- */
-export async function coveredPeriods(tx: Tx, contractIds: string[]): Promise<Map<string, Set<string>>> {
-  const out = new Map<string, Set<string>>();
-  if (!contractIds.length) return out;
-  const lines = await tx.invoiceLine.findMany({
-    where: {
-      itemId: { not: null },
-      invoice: { contractId: { in: contractIds }, status: 'ISSUED', kind: 'INVOICE', stornoed: false, type: 'RENT' },
-    },
-    select: { itemId: true, invoice: { select: { contractId: true, period: true, date: true } } },
-  });
-  for (const l of lines) {
-    const cid = l.invoice.contractId!;
-    const p = l.invoice.period || toISO(l.invoice.date).slice(0, 7);
-    if (!out.has(cid)) out.set(cid, new Set());
-    out.get(cid)!.add(`${l.itemId}|${p}`);
-  }
-  return out;
-}
+export { coveredPeriods } from './contract-items';

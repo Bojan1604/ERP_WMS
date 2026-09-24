@@ -307,11 +307,76 @@ test('rezultat naredbe: samo vlasnik, idempotentno; FORGET odjavljuje, 410 za od
   assert.equal(gone.status, 410);
   assert.equal(gone.body.status, 'RETIRED');
 
-  // odjavljen uređaj se ponovnom registracijom vraća kao PENDING (isti redak, bez organizacije)
+  // odjavljen uređaj se ponovnom registracijom vraća kao PENDING u novom retku (stari ostaje radi povijesti)
   const back = await register({ hardwareId: 'hw-res-a' });
-  assert.equal(back.body.deviceId, a.body.deviceId);
+  assert.notEqual(back.body.deviceId, a.body.deviceId);
   assert.equal(back.body.status, 'PENDING');
-  assert.equal((await db.mdmDevice.findUniqueOrThrow({ where: { id: a.body.deviceId } })).orgId, null);
+  assert.equal((await db.mdmDevice.findUniqueOrThrow({ where: { id: back.body.deviceId } })).orgId, null);
+  const old = await db.mdmDevice.findUniqueOrThrow({ where: { id: a.body.deviceId } });
+  assert.equal(old.status, 'RETIRED');
+  assert.equal(old.orgId, s.org.id);
+});
+
+test('ponovna registracija odjavljenog uređaja: nova organizacija ne vidi povijest, bilješke, PIN ni vezu na skladište', async () => {
+  const s = await setup();
+  const tok = await enrollToken(s);
+  const a = await register({ hardwareId: 'hw-reuse', enrollToken: tok });
+  const item = await db.item.findFirst({ where: { companyId: s.companyId }, select: { id: true } });
+  await db.mdmDevice.update({ where: { id: a.body.deviceId }, data: { notes: 'tajna bilješka', maintenancePin: '1234', itemId: item?.id ?? null, overrides: { settings: { volumePct: 10 } } } });
+  await queue(s, [a.body.deviceId], 'SCREENSHOT');
+  assert.equal((await upload(a.body.token, 'kind=SCREENSHOT', PNG)).status, 201);
+  // odjava (FORGET)
+  await queue(s, [a.body.deviceId], 'FORGET');
+  const forget = (await checkin(a.body.token)).body.commands.find((c) => c.type === 'FORGET')!;
+  assert.equal((await postResult(a.body.token, forget.id, { ok: true })).body.deviceStatus, 'RETIRED');
+  const oldEvents = await db.mdmEvent.count({ where: { deviceId: a.body.deviceId } });
+  assert.ok(oldEvents > 0);
+
+  // uređaj preuzima druga organizacija
+  const org2 = await db.mdmOrg.create({ data: { companyId: s.companyId, type: 'CUSTOMER', name: 'Drugi klijent' } });
+  const tok2 = `tok2_${Date.now()}`;
+  await db.mdmEnrollToken.create({ data: { companyId: s.companyId, orgId: org2.id, token: tok2 } });
+  const b = await register({ hardwareId: 'hw-reuse', enrollToken: tok2 });
+  assert.equal(b.body.status, 'ENROLLED');
+  assert.notEqual(b.body.deviceId, a.body.deviceId, 'novi zapis');
+  const d = await db.mdmDevice.findUniqueOrThrow({ where: { id: b.body.deviceId } });
+  assert.equal(d.orgId, org2.id);
+  assert.equal(d.notes, null);
+  assert.equal(d.maintenancePin, null);
+  assert.equal(d.itemId, null);
+  assert.deepEqual(d.overrides, {});
+  assert.equal(await db.mdmCommand.count({ where: { deviceId: d.id } }), 0);
+  assert.equal(await db.mdmUpload.count({ where: { deviceId: d.id } }), 0);
+  assert.deepEqual((await db.mdmEvent.findMany({ where: { deviceId: d.id }, select: { type: true } })).map((e) => e.type), ['ENROLLED']);
+  const old = await db.mdmDevice.findUniqueOrThrow({ where: { id: a.body.deviceId } });
+  assert.equal(old.status, 'RETIRED');
+  assert.equal(old.orgId, s.org.id, 'povijest ostaje staroj organizaciji');
+  assert.equal(await db.mdmEvent.count({ where: { deviceId: old.id } }), oldEvents);
+});
+
+test('ponovni upis u drugu organizaciju odjavljuje stari upisani zapis i otkazuje njegove naredbe', async () => {
+  const s = await setup();
+  const tok = await enrollToken(s);
+  const a = await register({ hardwareId: 'hw-move', enrollToken: tok });
+  await queue(s, [a.body.deviceId], 'REBOOT');
+  // druga organizacija pod istim distributerom
+  const dist = await db.mdmOrg.create({ data: { companyId: s.companyId, type: 'DISTRIBUTOR', name: 'Distributer' } });
+  await db.mdmOrg.update({ where: { id: s.org.id }, data: { parentId: dist.id } });
+  const org2 = await db.mdmOrg.create({ data: { companyId: s.companyId, type: 'CUSTOMER', name: 'Novi klijent', parentId: dist.id } });
+  const tok2 = `tok3_${Date.now()}`;
+  await db.mdmEnrollToken.create({ data: { companyId: s.companyId, orgId: org2.id, token: tok2 } });
+  // uređaj istog hardwareId-a u organizaciji izvan stabla se ne dira
+  const foreign = await db.mdmOrg.create({ data: { companyId: s.companyId, type: 'CUSTOMER', name: 'Tuđi' } });
+  const ghost = await db.mdmDevice.create({ data: { companyId: s.companyId, orgId: foreign.id, platform: 'ANDROID', status: 'ENROLLED', name: 'Tuđi', tokenHash: `x${Date.now()}`, hardwareId: 'hw-move' } });
+
+  const b = await register({ hardwareId: 'hw-move', enrollToken: tok2 });
+  assert.equal(b.body.status, 'ENROLLED');
+  assert.notEqual(b.body.deviceId, a.body.deviceId);
+  const old = await db.mdmDevice.findUniqueOrThrow({ where: { id: a.body.deviceId } });
+  assert.equal(old.status, 'RETIRED');
+  assert.equal(await db.mdmCommand.count({ where: { deviceId: old.id, status: { in: ['PENDING', 'SENT'] } } }), 0);
+  assert.equal((await checkin(a.body.token)).status, 401, 'stari ključ poništen');
+  assert.equal((await db.mdmDevice.findUniqueOrThrow({ where: { id: ghost.id } })).status, 'ENROLLED');
 });
 
 test('autentikacija ključem uređaja', async () => {

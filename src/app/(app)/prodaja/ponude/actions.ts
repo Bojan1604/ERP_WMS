@@ -18,7 +18,7 @@ const zLine = z.object({
   unit: zOptText,
   qty: zMoney,
   unitPrice: zMoney,
-  discountPct: zMoney,
+  discountPct: zMoney.refine((v) => v >= 0 && v <= 100, 'Popust stavke mora biti između 0 i 100 %'),
 });
 
 const zQuote = z.object({

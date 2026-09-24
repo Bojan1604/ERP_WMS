@@ -15,7 +15,7 @@ import { CategorySummary, MonthSummary } from '@/components/expenses/summaries';
 import { EXPENSE_SOURCE } from '@/components/expenses/labels';
 import { cn } from '@/lib/cn';
 import { eur } from '@/lib/format';
-import { deleteExpenseAction, saveCategoryAction, saveExpenseAction, saveOccurrenceAction } from './actions';
+import { deleteExpenseAction, expensesPaidAction, saveCategoryAction, saveExpenseAction, saveOccurrenceAction } from './actions';
 
 type Params = Record<string, string | string[] | undefined>;
 const FILTERS = ['month', 'category', 'partner', 'q', 'paid', 'source'];
@@ -117,7 +117,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
       </FilterBar>
 
       <TableWrap>
-        <ExpensesTable rows={data.rows} manual={data.manual} totals={t} options={options} actions={actions} canEdit={canEdit} />
+        <ExpensesTable rows={data.rows} manual={data.manual} totals={t} options={options} actions={actions} paidAction={expensesPaidAction} canEdit={canEdit} />
       </TableWrap>
     </>
   );

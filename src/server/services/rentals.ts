@@ -5,41 +5,18 @@ import { assert } from '../errors';
 import { audit, diff } from '../audit';
 import { nextDocNumber } from '../numbering';
 import { changeItemStatus, itemEvents, type Actor } from './items';
-import { coveredPeriods, createDraft, issueInvoice, markPaid, type LineInput } from './invoices';
+import { createDraft, issueInvoice, markPaid, type LineInput } from './invoices';
+import { addPausedPeriods, coveredPeriods, toDevice, toReturnedDevice, toTerms, type PauseRow } from './contract-items';
 import {
   pendingInstallments, installmentDate, planSummary, scheduledCharges, BILLING_LABEL,
-  type BillingCode, type BillingModeCode, type ContractDevice, type ContractTerms, type PendingInstallment, type PlanPeriodInput,
+  type BillingCode, type BillingModeCode, type PendingInstallment, type PlanPeriodInput,
 } from '@/domain/billing';
-import { formatDate, fromISO, periodLabel, toISO, today } from '@/domain/dates';
+import { addMonths, formatDate, fromISO, periodLabel, toISO, today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import { pastPeriods } from '@/domain/plan';
 import { customerVat } from '@/domain/tax';
 
-/** Ugovor iz baze → uvjeti za motor naplate. */
-export function toTerms(c: Contract): ContractTerms {
-  return {
-    status: c.status,
-    startDate: toISO(c.startDate),
-    endDate: c.endDate ? toISO(c.endDate) : null,
-    firstBillingDate: c.firstBillingDate ? toISO(c.firstBillingDate) : null,
-    billingDay: c.billingDay,
-    billing: c.billing,
-    billingMode: c.billingMode,
-    seasonFrom: c.seasonFrom,
-    seasonTo: c.seasonTo,
-  };
-}
-
-export function toDevice(ci: ContractItem): ContractDevice {
-  return {
-    itemId: ci.itemId,
-    monthly: num(ci.monthly),
-    plan: (ci.plan as unknown as PlanPeriodInput[]) ?? [],
-    status: ci.status,
-    skipped: ci.skipped,
-    paused: ci.paused,
-  };
-}
+export { toDevice, toReturnedDevice, toTerms } from './contract-items';
 
 /** Uređaji idu na ugovor: status „U najmu", kupac i datum izdavanja. */
 export async function attachItems(
@@ -80,16 +57,39 @@ export async function attachItems(
   });
 }
 
+/**
+ * Ugovori koji mogu imati rate za izdati: aktivni i zatvoreni u programu (raskinut
+ * ili istekao) s krajem unutar razdoblja koje motor gleda unatrag.
+ */
+export function billableContractWhere(now: string): Prisma.ContractWhereInput {
+  return {
+    OR: [
+      { status: 'ACTIVE' },
+      { status: { in: ['EXPIRED', 'TERMINATED'] }, closedAt: { not: null }, endDate: { gte: fromISO(addMonths(now, -25)) } },
+    ],
+  };
+}
+
+/** Skinuti uređaji koji još mogu imati neizdane rate (unutar razdoblja gledanja unatrag). */
+export const returnedWhere = (now: string): Prisma.ReturnedContractItemWhereInput => ({ endDate: { gte: fromISO(addMonths(now, -25)) } });
+
+/** Uređaji ugovora za naplatu: trenutni i skinuti (zaostale rate do dana skidanja). */
+export const billingDevices = (c: { items: ContractItem[]; returnedItems: Parameters<typeof toReturnedDevice>[0][] }) => [
+  ...c.items.map(toDevice),
+  ...c.returnedItems.map(toReturnedDevice),
+];
+
 /** Rate za izdati po ugovorima firme (ili jednom ugovoru). */
 export async function pendingForCompany(tx: Tx, companyId: string, opts: { contractId?: string; now?: string } = {}) {
+  const now = opts.now ?? today();
   const contracts = await tx.contract.findMany({
-    where: { companyId, status: 'ACTIVE', ...(opts.contractId ? { id: opts.contractId } : {}), partner: { excluded: false } },
-    include: { items: true, partner: { select: { id: true, name: true } } },
+    where: { companyId, ...billableContractWhere(now), ...(opts.contractId ? { id: opts.contractId } : {}), partner: { excluded: false } },
+    include: { items: true, returnedItems: { where: returnedWhere(now) }, partner: { select: { id: true, name: true } } },
   });
   const covered = await coveredPeriods(tx, contracts.map((c) => c.id));
   const out: Array<PendingInstallment & { contractId: string; contractNumber: string; partner: { id: string; name: string } }> = [];
   for (const c of contracts) {
-    const rows = pendingInstallments(toTerms(c), c.items.map(toDevice), covered.get(c.id) ?? new Set(), opts.now ?? today());
+    const rows = pendingInstallments(toTerms(c), billingDevices(c), covered.get(c.id) ?? new Set(), now);
     for (const r of rows) out.push({ ...r, contractId: c.id, contractNumber: c.number, partner: c.partner });
   }
   return out.sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.contractNumber.localeCompare(b.contractNumber));
@@ -102,15 +102,20 @@ export async function pendingForCompany(tx: Tx, companyId: string, opts: { contr
 export async function draftInstallment(tx: Tx, actor: Actor, contractId: string, period: string) {
   const c = await tx.contract.findFirst({
     where: { id: contractId, companyId: actor.companyId },
-    include: { partner: true, company: true, items: { include: { item: { include: { model: true } } } } },
+    include: {
+      partner: true,
+      company: true,
+      items: { include: { item: { include: { model: true } } } },
+      returnedItems: { include: { item: { include: { model: true } } } },
+    },
   });
   assert(c, 'Ugovor ne postoji.');
   const covered = (await coveredPeriods(tx, [c.id])).get(c.id) ?? new Set();
   const terms = toTerms(c);
-  const pending = pendingInstallments(terms, c.items.map(toDevice), covered, installmentDate(terms, period), 1200).find((p) => p.period === period);
+  const pending = pendingInstallments(terms, billingDevices(c), covered, installmentDate(terms, period), 1200).find((p) => p.period === period);
   assert(pending, `Za razdoblje ${period} nema rate za izdati.`);
 
-  const byItem = new Map(c.items.map((ci) => [ci.itemId, ci.item]));
+  const byItem = new Map([...c.returnedItems, ...c.items].map((ci) => [ci.itemId, ci.item]));
   const lines: LineInput[] = pending.lines.map((l) => {
     const item = byItem.get(l.itemId)!;
     const name = [item.model.brand, item.model.name].filter(Boolean).join(' ');
@@ -130,19 +135,13 @@ export async function draftInstallment(tx: Tx, actor: Actor, contractId: string,
     };
   });
   const vat = customerVat(c.partner.country, { vatRegistered: c.company.vatRegistered, vatRate: num(c.company.vatRate), country: c.company.country });
-  // datum rate, ali ne raniji od zadnjeg izdanog računa (redni broj prati datum) ni kasniji od danas
+  // datum rate, ali ne kasniji od danas ni raniji od zadnjeg izdanog računa
   let date = installmentDate(toTerms(c), period);
   if (date > today()) date = today();
-  const last = await tx.invoice.findFirst({
-    where: { companyId: actor.companyId, status: 'ISSUED', year: Number(date.slice(0, 4)) },
-    orderBy: { date: 'desc' },
-    select: { date: true },
-  });
-  if (last && toISO(last.date) > date) date = toISO(last.date);
   return createDraft(tx, actor, {
     type: 'RENT',
     partnerId: c.partnerId,
-    date,
+    date: await notBeforeLastIssued(tx, actor.companyId, date),
     vatRate: vat.rate,
     taxCategory: vat.category,
     taxExemptReason: vat.exemptReason ?? null,
@@ -151,6 +150,16 @@ export async function draftInstallment(tx: Tx, actor: Actor, contractId: string,
     description: `Najam za ${periodLabel(period)} — ugovor ${c.number}`,
     lines,
   });
+}
+
+/** Datum rate ne smije biti raniji od zadnjeg izdanog računa u godini (redni broj prati datum). */
+async function notBeforeLastIssued(tx: Tx, companyId: string, date: string) {
+  const last = await tx.invoice.findFirst({
+    where: { companyId, status: 'ISSUED', year: Number(date.slice(0, 4)) },
+    orderBy: { date: 'desc' },
+    select: { date: true },
+  });
+  return last && toISO(last.date) > date ? toISO(last.date) : date;
 }
 
 /** Izdavanje jedne ili više rata odjednom (u jednoj transakciji), po želji odmah plaćeno. */
@@ -175,36 +184,54 @@ export async function issueInstallments(tx: Tx, actor: Actor, rows: Array<{ cont
  */
 export async function setPausedPeriod(tx: Tx, actor: Actor, contractId: string, itemId: string, period: string, paused: boolean) {
   assert(/^\d{4}-(0[1-9]|1[0-2])$/.test(period), 'Neispravno razdoblje.');
-  const ci = await tx.contractItem.findFirst({
-    where: { contractId, itemId, contract: { companyId: actor.companyId } },
-    include: { contract: true, item: { select: { serial: true } } },
-  });
-  assert(ci, 'Uređaj nije na ovom ugovoru.');
-  const has = ci.paused.includes(period);
+  const contract = await tx.contract.findFirst({ where: { id: contractId, companyId: actor.companyId } });
+  const item = await tx.item.findFirst({ where: { id: itemId, companyId: actor.companyId }, select: { serial: true } });
+  const [ci, returned] = contract && item
+    ? await Promise.all([
+        tx.contractItem.findFirst({ where: { contractId, itemId } }),
+        tx.returnedContractItem.findMany({ where: { contractId, itemId }, orderBy: { endDate: 'desc' } }),
+      ])
+    : [null, []];
+  assert(contract && item && (ci || returned.length), 'Uređaj nije na ovom ugovoru.');
+  const terms = toTerms(contract);
+  // redak koji ima tu ratu: uređaj na ugovoru, inače snimka skinutog uređaja (zaostala rata)
+  const rows = [
+    ...(ci ? [{ id: ci.id, returned: false, device: toDevice(ci) }] : []),
+    ...returned.map((r) => ({ id: r.id, returned: true, device: toReturnedDevice(r) })),
+  ];
+  const row =
+    rows.find((r) => (r.device.paused ?? []).includes(period) || scheduledCharges(terms, { ...r.device, paused: [] }, period, period).length > 0) ?? rows[0];
+  const has = (row.device.paused ?? []).includes(period);
   if (has === paused) return;
   if (paused) {
-    const d = { ...toDevice(ci), paused: [] };
-    assert(scheduledCharges(toTerms(ci.contract), d, period, period).length > 0, `Uređaj ${ci.item.serial} nema rate u razdoblju ${periodLabel(period)}.`);
+    assert(scheduledCharges(terms, { ...row.device, paused: [] }, period, period).length > 0, `Uređaj ${item.serial} nema rate u razdoblju ${periodLabel(period)}.`);
     const covered = (await coveredPeriods(tx, [contractId])).get(contractId);
-    assert(!covered?.has(`${itemId}|${period}`), `Razdoblje ${periodLabel(period)} je već fakturirano za ${ci.item.serial} — za povrat novca izdajte odobrenje ili stornirajte račun.`);
+    assert(!covered?.has(`${itemId}|${period}`), `Razdoblje ${periodLabel(period)} je već fakturirano za ${item.serial} — za povrat novca izdajte odobrenje ili stornirajte račun.`);
     const draft = await tx.invoice.findFirst({ where: { contractId, period, status: 'DRAFT', type: 'RENT', lines: { some: { itemId } } }, select: { number: true } });
     assert(!draft, `Za razdoblje ${periodLabel(period)} postoji nacrt računa s ovim uređajem — prvo ga obrišite ili maknite stavku.`);
   }
-  const next = paused ? [...ci.paused, period].sort() : ci.paused.filter((p) => p !== period);
-  await tx.contractItem.update({ where: { id: ci.id }, data: { paused: next } });
+  const cur = row.device.paused ?? [];
+  const next = paused ? [...cur, period].sort() : cur.filter((p) => p !== period);
+  if (row.returned) await tx.returnedContractItem.update({ where: { id: row.id }, data: { paused: next } });
+  else await tx.contractItem.update({ where: { id: row.id }, data: { paused: next } });
   await audit(tx, actor, {
     entity: 'contract',
     entityId: contractId,
     action: paused ? 'pause' : 'resume',
-    summary: `Ugovor ${ci.contract.number}: ${ci.item.serial} — ${paused ? 'pauza naplate' : 'naplata vraćena'} za ${periodLabel(period)}`,
+    summary: `Ugovor ${contract.number}: ${item.serial}${row.returned ? ' (vraćen)' : ''} — ${paused ? 'pauza naplate' : 'naplata vraćena'} za ${periodLabel(period)}`,
   });
 }
 
 /** Razdoblje se trajno označava kao izdano izvan programa — ne traži račun. */
 export async function skipInstallment(tx: Tx, actor: Actor, contractId: string, period: string, itemIds: string[]) {
-  const rows = await tx.contractItem.findMany({ where: { contractId, itemId: { in: itemIds }, contract: { companyId: actor.companyId } } });
+  const where = { contractId, itemId: { in: itemIds }, contract: { companyId: actor.companyId } };
+  const [rows, returned] = await Promise.all([tx.contractItem.findMany({ where }), tx.returnedContractItem.findMany({ where })]);
   for (const r of rows) {
     if (!r.skipped.includes(period)) await tx.contractItem.update({ where: { id: r.id }, data: { skipped: [...r.skipped, period] } });
+  }
+  // i uređaji skinuti s ugovora (zaostala rata)
+  for (const r of returned) {
+    if (!r.skipped.includes(period)) await tx.returnedContractItem.update({ where: { id: r.id }, data: { skipped: [...r.skipped, period] } });
   }
 }
 
@@ -285,14 +312,67 @@ const TERM_LABEL: Record<string, string> = {
   billing: 'naplata', billingMode: 'način', seasonFrom: 'sezona od', seasonTo: 'sezona do', note: 'napomena',
 };
 
+/**
+ * Kraj pauze ugovora: rate dospjele od početka pauze do `until` postaju pauzirana
+ * razdoblja svih uređaja (i skinutih) — nakon nastavka se ne traže naknadno.
+ */
+async function endContractPause(tx: Tx, c: Contract, until: string) {
+  if (c.status !== 'PAUSED' || !c.pausedSince) return 0;
+  const since = toISO(c.pausedSince);
+  const [items, returned] = await Promise.all([
+    tx.contractItem.findMany({ where: { contractId: c.id } }),
+    tx.returnedContractItem.findMany({ where: { contractId: c.id, endDate: { gte: c.pausedSince } } }),
+  ]);
+  const rows: PauseRow[] = [
+    ...items.map((ci) => ({ id: ci.id, returned: false, device: toDevice(ci), since })),
+    ...returned.map((r) => ({ id: r.id, returned: true, device: toReturnedDevice(r), since })),
+  ];
+  return addPausedPeriods(tx, c, rows, until);
+}
+
+/** Kraj pauze pojedinih uređaja (status PAUSED s početkom pauze) do `until`. */
+async function endDevicePause(tx: Tx, c: Contract, rows: ContractItem[], until: string) {
+  const paused = rows.filter((r) => r.status === 'PAUSED' && r.pausedSince);
+  return addPausedPeriods(tx, c, paused.map((r) => ({ id: r.id, returned: false, device: toDevice(r), since: toISO(r.pausedSince!) })), until);
+}
+
+/**
+ * Zatvaranje ugovora (raskid ili istek): pauze se zaključuju do danas, a
+ * pauzirani uređaji (s poznatim početkom pauze) vraćaju se na praćenje ugovora —
+ * rate prije pauze koje nisu izdane ostaju za izdati.
+ */
+async function closePauses(tx: Tx, c: Contract, until: string) {
+  await endContractPause(tx, c, until);
+  const items = await tx.contractItem.findMany({ where: { contractId: c.id, status: 'PAUSED', pausedSince: { not: null } } });
+  await endDevicePause(tx, c, items, until);
+  if (items.length) await tx.contractItem.updateMany({ where: { id: { in: items.map((i) => i.id) } }, data: { status: null, pausedSince: null } });
+}
+
 /** Pauza, nastavak ili istek ugovora. */
 export async function setContractStatus(tx: Tx, actor: Actor, id: string, status: 'ACTIVE' | 'PAUSED' | 'EXPIRED') {
   const c = await ownContract(tx, actor, id);
   assert(editable(c.status), 'Raskinut ili istekao ugovor se više ne mijenja.');
   assert(c.status !== status, 'Ugovor je već u tom statusu.');
-  await tx.contract.update({ where: { id }, data: { status } });
+  const t = today();
+  const data: Prisma.ContractUncheckedUpdateInput = { status };
+  let frozen = 0;
+  if (status === 'PAUSED') data.pausedSince = fromISO(t);
+  if (status === 'ACTIVE') {
+    frozen = await endContractPause(tx, c, t);
+    data.pausedSince = null;
+  }
+  if (status === 'EXPIRED') {
+    // stara pauza bez poznatog početka: bez zaostalih rata (inače bi se naplatila cijela pauza)
+    const legacyPause = c.status === 'PAUSED' && !c.pausedSince;
+    await closePauses(tx, c, t);
+    Object.assign(data, { pausedSince: null, closedAt: legacyPause ? null : fromISO(t), endDate: c.endDate && toISO(c.endDate) < t ? c.endDate : fromISO(t) });
+  }
+  await tx.contract.update({ where: { id }, data });
   const label = { ACTIVE: 'nastavljen', PAUSED: 'pauziran', EXPIRED: 'označen kao istekao' }[status];
-  await audit(tx, actor, { entity: 'contract', entityId: id, action: 'status', summary: `Ugovor ${c.number} ${label}` });
+  await audit(tx, actor, {
+    entity: 'contract', entityId: id, action: 'status',
+    summary: `Ugovor ${c.number} ${label}${frozen ? ` — rate iz pauze se ne naplaćuju (${frozen})` : ''}`,
+  });
 }
 
 /**
@@ -305,7 +385,13 @@ export async function terminateContract(tx: Tx, actor: Actor, id: string, opts: 
   assert(editable(c.status), 'Ugovor je već raskinut ili istekao.');
   const t = today();
   const end = c.endDate && toISO(c.endDate) < t ? c.endDate : fromISO(t);
-  await tx.contract.update({ where: { id }, data: { status: 'TERMINATED', terminatedAt: fromISO(t), endDate: end } });
+  // neizdane rate do kraja ugovora i dalje se traže (closedAt); stara pauza bez početka — ne
+  const legacyPause = c.status === 'PAUSED' && !c.pausedSince;
+  await closePauses(tx, c, t);
+  await tx.contract.update({
+    where: { id },
+    data: { status: 'TERMINATED', terminatedAt: fromISO(t), endDate: end, closedAt: legacyPause ? null : fromISO(t), pausedSince: null },
+  });
   let returned = 0;
   if (opts.returnNow) {
     const rented = await tx.contractItem.findMany({ where: { contractId: id, item: { state: 'RENTED' } }, select: { itemId: true } });
@@ -347,6 +433,7 @@ export async function updateContractItems(
   const c = await ownContract(tx, actor, contractId);
   assert(editable(c.status), 'Uređaji raskinutog ili isteklog ugovora se ne mijenjaju.');
   const rows = await ownItems(tx, contractId, ids);
+  const full = patch.status !== undefined ? await tx.contractItem.findMany({ where: { contractId, id: { in: ids } } }) : [];
   const data: Prisma.ContractItemUpdateManyMutationInput = {};
   const what: string[] = [];
   if (patch.monthly !== undefined) {
@@ -363,6 +450,17 @@ export async function updateContractItems(
     what.push(patch.status === 'PAUSED' ? 'pauzirano' : 'nastavljeno');
   }
   assert(what.length, 'Nema promjene.');
+  const t = today();
+  if (patch.status === 'PAUSED') {
+    // početak pauze pamti se samo za uređaje koji još nisu pauzirani
+    const start = full.filter((r) => r.status !== 'PAUSED').map((r) => r.id);
+    if (start.length) await tx.contractItem.updateMany({ where: { id: { in: start } }, data: { pausedSince: fromISO(t) } });
+  } else if (patch.status === null) {
+    // nastavak: rate dospjele u pauzi postaju pauzirana razdoblja
+    const n = await endDevicePause(tx, c, full, t);
+    if (n) what.push(`rate iz pauze se ne naplaćuju (${n})`);
+    data.pausedSince = null;
+  }
   await tx.contractItem.updateMany({ where: { contractId, id: { in: ids } }, data });
   await itemEvents(tx, actor, rows.map((r) => r.itemId), { type: 'CONTRACT', message: `Ugovor ${c.number}: ${what.join(', ')}`, refType: 'contract', refId: contractId });
   await audit(tx, actor, {
@@ -474,16 +572,21 @@ export async function issuePending(tx: Tx, actor: Actor, rows: Array<{ contractI
   }
   drafts.sort((a, b) => a.date.getTime() - b.date.getTime());
   const numbers: string[] = [];
+  const ids: string[] = [];
   for (const d of drafts) {
+    // postojeći nacrt može imati stari datum — ne raniji od zadnjeg izdanog računa (redni broj prati datum)
+    const date = await notBeforeLastIssued(tx, actor.companyId, toISO(d.date));
+    if (date !== toISO(d.date)) await tx.invoice.update({ where: { id: d.id }, data: { date: fromISO(date), year: Number(date.slice(0, 4)) } });
     const { number } = await issueInvoice(tx, actor, d.id);
     numbers.push(number);
-    if (opts.paid) await markPaid(tx, actor, d.id, toISO(d.date));
+    ids.push(d.id);
+    if (opts.paid) await markPaid(tx, actor, d.id, date);
     await audit(tx, actor, {
       entity: 'contract', entityId: d.contractId, action: 'issue',
       summary: `Izdan račun ${number} za ${periodLabel(d.period ?? '')}${opts.paid ? ' — plaćeno' : ''}`,
     });
   }
-  return numbers;
+  return { numbers, ids };
 }
 
 /** „Ne izdaji — već izdano" za uređaje rate, uz zapis u dnevnik. */

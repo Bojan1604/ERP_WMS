@@ -32,7 +32,7 @@ export function ContractStatusActions({
   return (
     <>
       {status === 'ACTIVE' ? (
-        <ActionButton action={contractStatusAction} input={{ id, status: 'PAUSED' as const }} icon={<Pause className="size-4" />} confirm="Pauzirani ugovor ne stvara nove rate dok se ne nastavi." confirmLabel="Pauziraj">
+        <ActionButton action={contractStatusAction} input={{ id, status: 'PAUSED' as const }} icon={<Pause className="size-4" />} confirm="Pauzirani ugovor ne stvara nove rate dok se ne nastavi; rate koje dospiju u pauzi ne naplaćuju se ni nakon nastavka." confirmLabel="Pauziraj">
           Pauziraj
         </ActionButton>
       ) : (
@@ -44,7 +44,7 @@ export function ContractStatusActions({
         action={contractStatusAction}
         input={{ id, status: 'EXPIRED' as const }}
         icon={<CalendarX className="size-4" />}
-        confirm="Ugovor se označava kao istekao: rate se više ne traže, a uvjeti se ne mogu mijenjati. Uređaje vratite kroz „Ukloni s ugovora“."
+        confirm="Ugovor se označava kao istekao s današnjim datumom: nove rate se ne stvaraju (neizdane rate do danas ostaju za izdati), a uvjeti se ne mogu mijenjati. Uređaje vratite kroz „Ukloni s ugovora“."
         confirmLabel="Označi kao istekao"
       >
         Istekao
@@ -69,8 +69,8 @@ export function ContractStatusActions({
         <div className="space-y-3 text-base text-fg-2">
           <p>Ugovor prelazi u status <b>Raskinut</b> s današnjim datumom kao krajem. Izdani računi ostaju nepromijenjeni.</p>
           {pending > 0 && (
-            <p className="rounded-md bg-warn-soft px-3 py-2 text-sm text-warn">
-              Ugovor ima {pending} neizdanih rata — nakon otkaza više se neće tražiti. Izdajte ih prije otkaza ako ih treba naplatiti.
+            <p className="rounded-md bg-info-soft px-3 py-2 text-sm text-info">
+              Ugovor ima {pending} neizdanih rata — i nakon otkaza ostaju u „Rate za izdati“ (kao i rate do danas koje tek dospijevaju).
             </p>
           )}
           {rented > 0 ? (

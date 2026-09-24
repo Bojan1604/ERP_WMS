@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { Plus, Repeat } from 'lucide-react';
 import { Badge, Empty } from '@/components/ui/misc';
 import { Button } from '@/components/ui/button';
+import { ActionButton, type ServerAction } from '@/components/ui/action';
 import { FREQUENCY_LABEL, type FrequencyCode } from '@/domain/expenses';
 import { today } from '@/domain/dates';
 import { date, eur, integer } from '@/lib/format';
@@ -73,6 +74,7 @@ export function ExpensesTable({
   totals,
   options,
   actions,
+  paidAction,
   canEdit,
 }: {
   rows: OccurrenceRow[];
@@ -80,6 +82,8 @@ export function ExpensesTable({
   totals: { net: number; vat: number };
   options: ExpenseOptions;
   actions: ExpenseActions;
+  /** Plaćeno/neplaćeno za troškove primki i otpisa (ulazni račun se plaća na računu, ručni u obrascu). */
+  paidAction: ServerAction<{ ids: string[]; paid: boolean }, unknown>;
   canEdit: boolean;
 }) {
   const [edit, setEdit] = useState<{ value: ExpenseValue; period: string | null } | null>(null);
@@ -128,7 +132,22 @@ export function ExpensesTable({
                 <td className="num">{eur(r.netAmount)}</td>
                 <td className="num">{eur(r.vatAmount)}</td>
                 <td className="num font-medium">{eur(r.total)}</td>
-                <td>{r.paid ? <Badge tone="ok">da</Badge> : <Badge tone="warn">ne</Badge>}</td>
+                <td className="whitespace-nowrap">
+                  {r.paid ? <Badge tone="ok">da</Badge> : <Badge tone="warn">ne</Badge>}
+                  {canEdit && (r.source === 'RECEIPT' || r.source === 'WRITE_OFF') && (
+                    <span className="ml-1.5" onClick={(e) => e.stopPropagation()}>
+                      <ActionButton
+                        action={paidAction}
+                        input={{ ids: [r.expenseId], paid: !r.paid }}
+                        size="sm"
+                        variant="ghost"
+                        title={r.paid ? 'Označi trošak kao neplaćen' : 'Označi trošak kao plaćen (danas)'}
+                      >
+                        {r.paid ? 'poništi' : 'plaćeno'}
+                      </ActionButton>
+                    </span>
+                  )}
+                </td>
                 <td className="whitespace-nowrap">
                   <Badge tone={EXPENSE_SOURCE[r.source].tone}>{EXPENSE_SOURCE[r.source].label}</Badge>
                   {link && (

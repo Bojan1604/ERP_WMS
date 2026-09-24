@@ -1,7 +1,7 @@
 import 'server-only';
 import type { Role } from '@prisma/client';
 import type { Tx } from '../db';
-import { hashPassword } from '../auth';
+import bcrypt from 'bcryptjs';
 import { audit } from '../audit';
 import { DomainError, assert } from '../errors';
 import type { Actor } from './items';
@@ -21,6 +21,9 @@ export interface UserInput {
 }
 
 export const MIN_PASSWORD = 8;
+
+// isto kao hashPassword u auth.ts (bez uvoza next/headers, pa je servis testabilan)
+const hashPassword = (plain: string) => bcrypt.hash(plain, 10);
 
 /** Samo iznimke u odnosu na zadana prava uloge (administrator ih nema). */
 export function permissionOverrides(role: Role, wanted: Partial<Record<string, string>>): Partial<Record<Module, Level>> {
@@ -48,6 +51,11 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
   const oib = input.oib?.trim() || null;
   if (oib) assert(/^\d{11}$/.test(oib), 'OIB mora imati 11 znamenki.');
 
+  // samo administrator dodjeljuje ulogu administratora i uređuje administratore
+  const me = await tx.user.findFirst({ where: { id: actor.id, companyId: actor.companyId }, select: { role: true } });
+  const actorIsAdmin = me?.role === 'ADMIN';
+  if (!actorIsAdmin) assert(input.role !== 'ADMIN', 'Samo administrator može dodijeliti ulogu administratora.');
+
   if (!id) {
     assert(input.password, 'Lozinka je obavezna za novog korisnika.');
     const u = await tx.user.create({
@@ -74,6 +82,7 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
 
   const before = await tx.user.findFirst({ where: { id, companyId: actor.companyId } });
   assert(before, 'Korisnik ne postoji.');
+  if (!actorIsAdmin) assert(before.role !== 'ADMIN', 'Samo administrator može mijenjati podatke administratora.');
   if (id === actor.id) {
     assert(input.active, 'Ne možete deaktivirati sami sebe.');
     assert(!(before.role === 'ADMIN' && input.role !== 'ADMIN'), 'Ne možete sami sebi oduzeti ulogu administratora.');
@@ -122,8 +131,12 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
 
 /** Odjava korisnika sa svih uređaja. */
 export async function revokeUserSessions(tx: Tx, actor: Actor, id: string) {
-  const u = await tx.user.findFirst({ where: { id, companyId: actor.companyId }, select: { name: true } });
+  const u = await tx.user.findFirst({ where: { id, companyId: actor.companyId }, select: { name: true, role: true } });
   if (!u) throw new DomainError('Korisnik ne postoji.');
+  if (u.role === 'ADMIN' && id !== actor.id) {
+    const me = await tx.user.findFirst({ where: { id: actor.id, companyId: actor.companyId }, select: { role: true } });
+    assert(me?.role === 'ADMIN', 'Samo administrator može odjaviti administratora.');
+  }
   await revokeSessions(tx, id);
   await audit(tx, actor, { entity: 'user', entityId: id, action: 'logout', summary: `Korisnik ${u.name} odjavljen sa svih uređaja` });
 }

@@ -23,6 +23,7 @@ import { buildEffectiveConfig } from './config';
 import { expireCommands } from './commands';
 import { removeFile, saveBuffer } from './storage';
 import { AgentError, RateLimiter, deadTokenHash, hashToken, newDeviceToken, type AgentDevice } from './agent-auth';
+import { orgTree, retireDuplicates } from './retire';
 
 /**
  * Poslužiteljska strana protokola agenta v1 (docs/mdm-agent-protocol.md):
@@ -226,10 +227,12 @@ export async function registerDevice(raw: unknown, ip: string | null): Promise<A
       orderBy: { updatedAt: 'desc' },
       take: 20,
     });
+    // Odjavljeni zapis se nikad ne oživljava, a zapis druge organizacije se ne preuzima: bilješke, PIN,
+    // veza na skladište i povijest (događaji, naredbe, snimke) pripadaju prethodnom vlasniku — novi zapis.
+    const targetOrgId = enroll?.orgId ?? null;
     const reuse =
       (enroll && same.find((d) => d.status === 'ENROLLED' && d.orgId === enroll.orgId)) ||
-      same.find((d) => d.status === 'PENDING') ||
-      same.find((d) => d.status === 'RETIRED') ||
+      same.find((d) => d.status === 'PENDING' && (d.orgId === null || d.orgId === targetOrgId)) ||
       null;
 
     const now = new Date();
@@ -280,6 +283,15 @@ export async function registerDevice(raw: unknown, ip: string | null): Promise<A
       });
       deviceId = d.id;
     }
+    // ostali zapisi istog uređaja: oni na čekanju uvijek, upisani tek kad je ovaj zapis upisan
+    // (bez ključa upisa stari zapis ostaje do upisa kodom — enrollByCode ga tada odjavljuje)
+    await retireDuplicates(
+      tx,
+      { companyId, hardwareId: input.hardwareId, platform: input.platform, keepId: deviceId, orgIds: enroll ? await orgTree(tx, enroll.orgId) : [] },
+      enroll ? ['ENROLLED', 'PENDING'] : ['PENDING'],
+      'Agent je ponovno registriran kao novi zapis uređaja.',
+      now,
+    );
     await tx.mdmEvent.create({
       data: {
         deviceId,
@@ -337,7 +349,7 @@ async function completePayload(device: AgentDevice, type: string, payload: Paylo
   if (type === 'INSTALL_APP' && s(payload.appId) && !(s(payload.downloadPath) && s(payload.sha256))) {
     const app = await db.mdmApp.findFirst({
       where: { id: s(payload.appId)!, companyId: device.companyId, platform: device.platform },
-      include: { versions: { include: { file: { select: { id: true, sha256: true } } }, orderBy: [{ versionCode: 'desc' }, { createdAt: 'desc' }] } },
+      include: { versions: { include: { file: { select: { id: true, sha256: true } } }, orderBy: [{ versionCode: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }] } },
     });
     if (!app) return { ...payload, error: 'Aplikacija ne postoji ili nije za ovu platformu.' };
     const v = (s(payload.versionId) && app.versions.find((x) => x.id === payload.versionId)) || app.versions[0];

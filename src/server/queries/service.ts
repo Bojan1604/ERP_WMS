@@ -1,7 +1,8 @@
 import 'server-only';
 import type { Prisma, ServiceStatus } from '@prisma/client';
 import { db } from '../db';
-import { addDays, fromISO, today } from '@/domain/dates';
+import { addDays, fromISO, toISO, today } from '@/domain/dates';
+import { warrantyEnd } from '@/domain/pricing';
 import { num } from '@/domain/money';
 import { LONG_SERVICE_DAYS, OPEN_SERVICE_STATUSES, SERVICE_STATUS } from '@/components/service/labels';
 
@@ -97,12 +98,23 @@ export async function getServiceOrder(companyId: string, id: string) {
           supplier: { select: { name: true } },
           status: { select: { name: true, color: true } },
           warehouse: { select: { name: true } },
-          model: { select: { brand: true, name: true, code: true } },
+          model: { select: { brand: true, name: true, code: true, warrantyMonths: true } },
           contractItem: { select: { id: true, contractId: true, monthly: true, plan: true, skipped: true, paused: true, status: true, contract: { select: { number: true } } } },
         },
       },
     },
   });
+}
+
+/** Kraj jamstva uređaja: vlastito trajanje ili zadano trajanje modela, od početka jamstva ili izdavanja. */
+export function deviceWarrantyEnd(i: {
+  warrantyStart: Date | null;
+  issueDate: Date | null;
+  warrantyMonths: number | null;
+  model: { warrantyMonths: number | null };
+}): string | null {
+  const start = i.warrantyStart ?? i.issueDate;
+  return warrantyEnd(start ? toISO(start) : null, i.warrantyMonths ?? i.model.warrantyMonths);
 }
 
 /** Pretraga uređaja po serijskom broju (za odabir na nalogu). */

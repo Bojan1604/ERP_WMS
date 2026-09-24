@@ -4,6 +4,7 @@ import type { Tx } from '../db';
 import { audit } from '../audit';
 import { AuthError, assert } from '../errors';
 import { queueCommands } from './commands';
+import { bumpConfig } from './config';
 import { canEditShared, deviceWhere, sharedWhere, type MdmScope } from './scope';
 import type { Actor } from './profiles';
 
@@ -54,6 +55,7 @@ export async function addAppVersion(tx: Tx, scope: MdmScope, actor: Actor, v: Ne
   const dup = await tx.mdmAppVersion.findFirst({ where: { appId: app.id, version: v.version }, select: { id: true } });
   assert(!dup, `Verzija ${v.version} aplikacije „${app.name}" već postoji.`);
   const ver = await tx.mdmAppVersion.create({ data: { appId: app.id, version: v.version, versionCode: v.versionCode, fileId: v.fileId, notes: v.notes } });
+  await bumpAppConfigs(tx, scope.companyId, app.id);
   await audit(tx, actor, { entity: 'mdmApp', entityId: app.id, action: 'version', summary: `Aplikacija ${app.name}: nova verzija ${v.version}` });
   return { appId: app.id, versionId: ver.id, name: app.name, version: v.version };
 }
@@ -61,6 +63,7 @@ export async function addAppVersion(tx: Tx, scope: MdmScope, actor: Actor, v: Ne
 export async function updateApp(tx: Tx, scope: MdmScope, actor: Actor, input: { id: string; name: string; description: string | null; installArgs: string | null }) {
   const app = await findAppForEdit(tx, scope, input.id);
   await tx.mdmApp.update({ where: { id: app.id }, data: { name: input.name, description: input.description, installArgs: app.platform === 'WINDOWS' ? input.installArgs : null } });
+  await bumpAppConfigs(tx, scope.companyId, app.id);
   await audit(tx, actor, { entity: 'mdmApp', entityId: app.id, action: 'update', summary: `Aplikacija ${input.name} izmijenjena` });
 }
 
@@ -80,6 +83,16 @@ export async function appReferences(tx: Tx, companyId: string, ref: { appId: str
   return { profiles, devices };
 }
 
+/**
+ * Konfiguracije bez odabrane verzije koriste najnoviju, a naziv i parametri instalacije idu
+ * u konfiguraciju — nakon promjene aplikacije podiže se verzija svih uređaja koji je koriste.
+ */
+async function bumpAppConfigs(tx: Tx, companyId: string, appId: string) {
+  const refs = await appReferences(tx, companyId, { appId });
+  for (const p of refs.profiles) await bumpConfig(tx, { profileId: p.id });
+  if (refs.devices.length) await bumpConfig(tx, { deviceIds: refs.devices.map((d) => d.id) });
+}
+
 /** Brisanje verzije; vraća ključ datoteke za brisanje s diska nakon transakcije. */
 export async function deleteVersion(tx: Tx, scope: MdmScope, actor: Actor, versionId: string) {
   const v = await tx.mdmAppVersion.findUnique({ where: { id: versionId }, include: { file: true } });
@@ -92,6 +105,7 @@ export async function deleteVersion(tx: Tx, scope: MdmScope, actor: Actor, versi
   );
   await tx.mdmAppVersion.delete({ where: { id: versionId } });
   await tx.mdmFile.delete({ where: { id: v.fileId } });
+  await bumpAppConfigs(tx, scope.companyId, app.id);
   await audit(tx, actor, { entity: 'mdmApp', entityId: app.id, action: 'delete-version', summary: `Aplikacija ${app.name}: obrisana verzija ${v.version}` });
   return v.file.storageKey;
 }

@@ -4,8 +4,9 @@ import type { Tx } from '../db';
 import type { SessionUser } from '../auth';
 import { DomainError } from '../errors';
 import { nextDocNumber } from '../numbering';
-import { fromISO, today } from '@/domain/dates';
+import { fromISO, toISO, today } from '@/domain/dates';
 import { STATE_LABEL } from '@/domain/warehouse';
+import { keepReturned } from './contract-items';
 
 export type Actor = Pick<SessionUser, 'id' | 'name' | 'companyId'>;
 
@@ -50,7 +51,7 @@ export async function changeItemStatus(tx: Tx, actor: Actor, itemIds: string[], 
     where: { id: { in: itemIds }, companyId: actor.companyId },
     select: {
       id: true, serial: true, state: true, partnerId: true, invoiceId: true, warehouseId: true,
-      contractItem: { select: { contractId: true, monthly: true, plan: true, skipped: true, paused: true, status: true } },
+      contractItem: true,
     },
   });
   if (items.length !== new Set(itemIds).size) throw new DomainError('Neki od odabranih uređaja ne postoje.');
@@ -68,6 +69,8 @@ export async function changeItemStatus(tx: Tx, actor: Actor, itemIds: string[], 
   if (kind !== 'RENTED' && kind !== 'RETURNING') {
     const onContract = items.filter((i) => i.contractItem);
     if (onContract.length) {
+      // neizdane rate do danas ostaju za naplatu (uvjeti se čuvaju uz datum skidanja)
+      await keepReturned(tx, onContract.map((i) => i.contractItem!), today());
       await tx.contractItem.deleteMany({ where: { itemId: { in: onContract.map((i) => i.id) } } });
       await tx.itemEvent.createMany({
         data: onContract.map((i) => ({
@@ -107,7 +110,7 @@ type OpeningItem = {
   partnerId: string | null;
   invoiceId: string | null;
   warehouseId: string | null;
-  contractItem: { contractId: string; monthly: Prisma.Decimal; plan: Prisma.JsonValue; skipped: string[]; paused: string[]; status: string | null } | null;
+  contractItem: { contractId: string; monthly: Prisma.Decimal; plan: Prisma.JsonValue; skipped: string[]; paused: string[]; status: string | null; pausedSince: Date | null } | null;
 };
 
 /**
@@ -149,7 +152,7 @@ async function openServiceOrders(tx: Tx, actor: Actor, items: OpeningItem[], sta
               partnerId: i.partnerId,
               warehouseId: i.warehouseId,
               contract: i.contractItem
-                ? { contractId: i.contractItem.contractId, monthly: i.contractItem.monthly.toNumber(), plan: i.contractItem.plan, skipped: i.contractItem.skipped, paused: i.contractItem.paused, status: i.contractItem.status }
+                ? { contractId: i.contractItem.contractId, monthly: i.contractItem.monthly.toNumber(), plan: i.contractItem.plan, skipped: i.contractItem.skipped, paused: i.contractItem.paused, status: i.contractItem.status, pausedSince: i.contractItem.pausedSince ? toISO(i.contractItem.pausedSince) : null }
                 : null,
             },
           },

@@ -620,20 +620,21 @@ model Item {
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
 
-  company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  model         DeviceModel    @relation(fields: [modelId], references: [id])
-  status        ItemStatus     @relation(fields: [statusId], references: [id])
-  warehouse     Warehouse?     @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
-  supplier      Partner?       @relation("ItemSupplier", fields: [supplierId], references: [id], onDelete: SetNull)
-  partner       Partner?       @relation("ItemHolder", fields: [partnerId], references: [id], onDelete: SetNull)
-  invoice       Invoice?       @relation("ItemLastInvoice", fields: [invoiceId], references: [id], onDelete: SetNull)
-  receipt       GoodsReceipt?  @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+  company       Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  model         DeviceModel            @relation(fields: [modelId], references: [id])
+  status        ItemStatus             @relation(fields: [statusId], references: [id])
+  warehouse     Warehouse?             @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  supplier      Partner?               @relation("ItemSupplier", fields: [supplierId], references: [id], onDelete: SetNull)
+  partner       Partner?               @relation("ItemHolder", fields: [partnerId], references: [id], onDelete: SetNull)
+  invoice       Invoice?               @relation("ItemLastInvoice", fields: [invoiceId], references: [id], onDelete: SetNull)
+  receipt       GoodsReceipt?          @relation(fields: [receiptId], references: [id], onDelete: SetNull)
   contractItem  ContractItem?
+  returnedFrom  ReturnedContractItem[]
   events        ItemEvent[]
   invoiceLines  InvoiceLine[]
   quoteLines    QuoteLine[]
-  serviceOrders ServiceOrder[] @relation("ServiceItem")
-  replacements  ServiceOrder[] @relation("ServiceReplacement")
+  serviceOrders ServiceOrder[]         @relation("ServiceItem")
+  replacements  ServiceOrder[]         @relation("ServiceReplacement")
   transferItems TransferItem[]
   rentOverrides RentOverride[]
   mdmDevices    MdmDevice[]
@@ -939,15 +940,20 @@ model Contract {
   seasonFrom       Int? // 1–12
   seasonTo         Int?
   terminatedAt     DateTime?      @db.Date
+  /// Raskinut ili označen kao istekao u programu: neizdane rate do kraja ugovora i dalje se traže.
+  closedAt         DateTime?      @db.Date
+  /// Početak pauze (status PAUSED) — pri nastavku rate dospjele u pauzi idu u `paused` uređaja.
+  pausedSince      DateTime?      @db.Date
   note             String?
   createdBy        String?
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
 
-  company  Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  partner  Partner        @relation(fields: [partnerId], references: [id])
-  items    ContractItem[]
-  invoices Invoice[]
+  company       Company                @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  partner       Partner                @relation(fields: [partnerId], references: [id])
+  items         ContractItem[]
+  returnedItems ReturnedContractItem[]
+  invoices      Invoice[]
 
   @@unique([companyId, number])
   @@index([companyId, status])
@@ -958,24 +964,47 @@ model Contract {
 
 /// Uređaj na ugovoru s vlastitom mjesečnom cijenom i planom naplate.
 model ContractItem {
-  id         String          @id @default(cuid())
-  contractId String
-  itemId     String          @unique // uređaj može biti na samo jednom ugovoru
-  monthly    Decimal         @db.Decimal(14, 2)
+  id          String          @id @default(cuid())
+  contractId  String
+  itemId      String          @unique // uređaj može biti na samo jednom ugovoru
+  monthly     Decimal         @db.Decimal(14, 2)
   /// Plan naplate: [{ from, to?, billing, price?, seasonFrom?, seasonTo? }] — prazno = uvjeti ugovora
-  plan       Json            @default("[]")
+  plan        Json            @default("[]")
   /// Pauza ili raskid za pojedini uređaj (null = prati ugovor).
-  status     ContractStatus?
+  status      ContractStatus?
   /// Razdoblja (YYYY-MM) koja se ne fakturiraju — izdana izvan programa.
-  skipped    String[]        @default([])
+  skipped     String[]        @default([])
   /// Pauzirana razdoblja (YYYY-MM): rata se ne naplaćuje.
-  paused     String[]        @default([])
-  addedAt    DateTime        @default(now())
+  paused      String[]        @default([])
+  /// Početak pauze uređaja (status PAUSED) — pri nastavku rate dospjele u pauzi idu u `paused`.
+  pausedSince DateTime?       @db.Date
+  addedAt     DateTime        @default(now())
 
   contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
   item     Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
   @@index([contractId])
+}
+
+/// Uređaj skinut s ugovora (povrat, prodaja, servis…): uvjeti se čuvaju da se
+/// rate do datuma skidanja koje još nisu izdane i dalje mogu fakturirati.
+model ReturnedContractItem {
+  id         String   @id @default(cuid())
+  contractId String
+  itemId     String
+  monthly    Decimal  @db.Decimal(14, 2)
+  plan       Json     @default("[]")
+  skipped    String[] @default([])
+  paused     String[] @default([])
+  /// Zadnji dan u najmu — naplata staje s tim datumom.
+  endDate    DateTime @db.Date
+  createdAt  DateTime @default(now())
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  item     Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([contractId])
+  @@index([itemId])
 }
 
 /// Ručni upis u mrežu najma (prednost pred izračunom).

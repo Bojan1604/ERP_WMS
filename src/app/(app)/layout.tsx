@@ -27,6 +27,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <div className="flex h-dvh overflow-hidden">
         <Sidebar
           perms={user.perms}
+          isAdmin={user.role === 'ADMIN'}
           company={user.mdmOrgName ?? user.companyName}
           badges={{ '/skladiste/odobrenja': approvals, '/skladiste/izlaz': reserved + returning }}
         />

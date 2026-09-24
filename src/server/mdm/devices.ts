@@ -3,6 +3,7 @@ import type { Tx } from '../db';
 import { audit } from '../audit';
 import { AuthError, DomainError, assert } from '../errors';
 import { bumpConfig } from './config';
+import { orgUsable } from './profiles';
 import { assertOrgInScope, deviceWhere, sharedWhere, type MdmScope } from './scope';
 import { PLATFORM_LABEL } from '@/domain/mdm';
 import type { Level } from '@/domain/permissions';
@@ -87,6 +88,18 @@ export async function moveDevices(tx: Tx, scope: MdmScope, ids: string[], orgId:
   }
   const devices = await devicesInScope(tx, scope, ids);
   await tx.mdmDevice.updateMany({ where: { id: { in: devices.map((d) => d.id) } }, data: { orgId, siteId } });
+  // nova organizacija: izmjene uređaja (aplikacije, Wi-Fi prethodne organizacije) se brišu,
+  // vlastiti profil ostaje samo ako ga nova organizacija smije koristiti
+  const moved = devices.filter((d) => d.orgId !== orgId);
+  if (moved.length) {
+    await tx.mdmDevice.updateMany({ where: { id: { in: moved.map((d) => d.id) } }, data: { overrides: {} } });
+    const profileIds = [...new Set(moved.map((d) => d.profileId).filter((p): p is string => !!p))];
+    const profiles = profileIds.length ? await tx.mdmProfile.findMany({ where: { id: { in: profileIds } }, select: { id: true, orgId: true } }) : [];
+    const unusable: string[] = [];
+    for (const p of profiles) if (!(await orgUsable(tx, p.orgId, orgId))) unusable.push(p.id);
+    const drop = moved.filter((d) => d.profileId && (unusable.includes(d.profileId) || !profiles.some((p) => p.id === d.profileId)));
+    if (drop.length) await tx.mdmDevice.updateMany({ where: { id: { in: drop.map((d) => d.id) } }, data: { profileId: null } });
+  }
   await bumpConfig(tx, { deviceIds: devices.map((d) => d.id) });
   await tx.mdmEvent.createMany({ data: devices.map((d) => ({ deviceId: d.id, type: 'MOVE', message: `Premješten: ${org.name}${siteName} (${scope.userName})` })) });
   await audit(tx, actorOf(scope), {
@@ -105,10 +118,13 @@ export async function assignProfile(tx: Tx, scope: MdmScope, ids: string[], prof
   const devices = await devicesInScope(tx, scope, ids);
   let label = 'profil lokacije';
   if (profileId) {
-    const p = await tx.mdmProfile.findFirst({ where: { id: profileId, ...sharedWhere(scope) }, select: { name: true, platform: true } });
+    const p = await tx.mdmProfile.findFirst({ where: { id: profileId, ...sharedWhere(scope) }, select: { name: true, platform: true, orgId: true } });
     if (!p) throw new AuthError('Profil nije dostupan.', 403);
     const wrong = devices.filter((d) => d.platform !== p.platform);
     if (wrong.length) throw new DomainError(`Profil „${p.name}" je za ${PLATFORM_LABEL[p.platform]}, a ${wrong.length} odabranih uređaja nije.`);
+    for (const org of new Set(devices.map((d) => d.orgId))) {
+      if (!(await orgUsable(tx, p.orgId, org))) throw new DomainError(`Profil „${p.name}" ne pripada organizaciji svih odabranih uređaja.`);
+    }
     label = p.name;
   }
   await tx.mdmDevice.updateMany({ where: { id: { in: devices.map((d) => d.id) } }, data: { profileId } });

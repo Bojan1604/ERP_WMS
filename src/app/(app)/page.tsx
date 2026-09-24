@@ -78,7 +78,7 @@ export default async function Dashboard() {
       </ActionPanel>
     ),
     d.returning !== null && (
-      <ActionPanel key="returning" title="U dolasku" count={d.returning} tone="info" href="/skladiste/izlaz" empty="Nema najavljenih povrata.">
+      <ActionPanel key="returning" title="U dolasku" count={d.returning} tone="info" href="/skladiste/izlaz?tab=dolazak" empty="Nema najavljenih povrata.">
         <p className="text-fg-2">Najavljeni povrati s terena — zaprimite ih kad stignu.</p>
       </ActionPanel>
     ),
@@ -88,7 +88,7 @@ export default async function Dashboard() {
       </ActionPanel>
     ),
     d.serviceOld && (
-      <ActionPanel key="service" title="Servis otvoren dulje od 14 dana" count={d.serviceOld.count} tone="bad" href="/servis" empty="Nema zastarjelih servisnih naloga.">
+      <ActionPanel key="service" title="Servis otvoren dulje od 14 dana" count={d.serviceOld.count} tone="bad" href="/servis?long=1" empty="Nema zastarjelih servisnih naloga.">
         <ul>
           {d.serviceOld.rows.map((s) => (
             <PanelRow
@@ -108,7 +108,7 @@ export default async function Dashboard() {
           {d.lowStock.slice(0, 6).map((m) => (
             <PanelRow
               key={m.id}
-              href={`/skladiste?model=${m.id}`}
+              href={`/skladiste?model=${m.id}&state=IN_STOCK`}
               left={modelLabel(m)}
               right={
                 <span>

@@ -3,6 +3,7 @@ import type { Tx } from '../db';
 import { audit } from '../audit';
 import { AuthError, DomainError, assert } from '../errors';
 import { bumpConfig } from './config';
+import { orgUsable } from './profiles';
 import { assertOrgInScope, sharedWhere, type MdmScope } from './scope';
 import { actorOf, requireLevel } from './devices';
 
@@ -137,23 +138,30 @@ export async function saveSite(tx: Tx, scope: MdmScope, id: string | null, input
   assert(name.length >= 1 && name.length <= 150, 'Naziv lokacije mora imati 1–150 znakova.');
   const timezone = input.timezone.trim() || 'Europe/Zagreb';
   assert(validTimezone(timezone), 'Neispravna vremenska zona.');
-  if (input.profileId) {
-    const p = await tx.mdmProfile.findFirst({ where: { id: input.profileId, ...sharedWhere(scope) }, select: { id: true } });
-    if (!p) throw new AuthError('Profil nije dostupan.', 403);
-  }
   const data = { name, address: input.address?.trim() || null, timezone, profileId: input.profileId, note: input.note?.trim() || null };
+  // profil lokacije mora biti dostupan korisniku i organizaciji lokacije
+  const checkProfile = async (siteOrgId: string) => {
+    if (!input.profileId) return;
+    const p = await tx.mdmProfile.findFirst({ where: { id: input.profileId, ...sharedWhere(scope) }, select: { orgId: true, name: true } });
+    if (!p) throw new AuthError('Profil nije dostupan.', 403);
+    assert(await orgUsable(tx, p.orgId, siteOrgId), `Konfiguracija „${p.name}" ne pripada organizaciji lokacije.`);
+  };
   if (!id) {
     assertOrgInScope(scope, input.orgId);
     assert(await tx.mdmOrg.findFirst({ where: { id: input.orgId, companyId: scope.companyId }, select: { id: true } }), 'Organizacija ne postoji.');
+    await checkProfile(input.orgId);
     const s = await tx.mdmSite.create({ data: { ...data, orgId: input.orgId } });
     await audit(tx, actorOf(scope), { entity: 'mdmSite', entityId: s.id, action: 'create', summary: `Nova lokacija ${name}` });
     return s.id;
   }
-  const before = await tx.mdmSite.findFirst({ where: { id, org: { companyId: scope.companyId } }, select: { orgId: true, profileId: true, timezone: true } });
+  const before = await tx.mdmSite.findFirst({ where: { id, org: { companyId: scope.companyId } }, select: { orgId: true, profileId: true } });
   assert(before, 'Lokacija ne postoji.');
   assertOrgInScope(scope, before.orgId);
+  // postojeći profil smije ostati (i ako je u međuvremenu postao nedostupan), novi se provjerava
+  if (before.profileId !== data.profileId) await checkProfile(before.orgId);
   await tx.mdmSite.update({ where: { id }, data });
-  if (before.profileId !== data.profileId || before.timezone !== data.timezone) await bumpConfig(tx, { siteIds: [id] });
+  // vremenska zona lokacije nije dio konfiguracije uređaja — mijenja je samo profil
+  if (before.profileId !== data.profileId) await bumpConfig(tx, { siteIds: [id] });
   await audit(tx, actorOf(scope), { entity: 'mdmSite', entityId: id, action: 'update', summary: `Lokacija ${name} izmijenjena`, diff: { profileId: data.profileId, timezone } });
   return id;
 }

@@ -230,7 +230,10 @@ export const getDevice = cache(async (scope: MdmScope, id: string) => {
 /** Uređaji u skladištu ERP-a s istim serijskim brojem (samo za korisnike vlasnika). */
 export async function erpMatches(companyId: string, serial: string | null, linkedItemId: string | null) {
   const or: Prisma.ItemWhereInput[] = [];
-  if (serial) or.push({ serial });
+  // serijski broj s uređaja i u skladištu se mogu razlikovati u razmacima i velikim/malim slovima
+  const sn = serial?.trim();
+  // Prisma `equals` + insensitive postaje ILIKE — % i _ se escapeaju da budu doslovni
+  if (sn) or.push({ serial: { equals: sn.replace(/[\\%_]/g, '\\$&'), mode: 'insensitive' } });
   if (linkedItemId) or.push({ id: linkedItemId });
   if (!or.length) return [];
   const [items, company] = await Promise.all([

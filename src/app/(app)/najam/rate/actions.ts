@@ -12,10 +12,11 @@ export const issueInstallmentsAction = action(
   { module: 'sales', level: 'edit' },
   z.object({ rows: z.array(installmentSchema).min(1, 'Odaberite barem jednu ratu').max(200), paid: zBool }),
   async ({ rows, paid }, user) => {
-    const numbers = await transaction((tx) => issuePending(tx, user, rows, { paid }));
-    // fiskalizacija / eRačun nakon što je izdavanje spremljeno (mrežni pozivi ne idu u transakciju)
+    const { numbers, ids } = await transaction((tx) => issuePending(tx, user, rows, { paid }));
+    // fiskalizacija / eRačun nakon što je izdavanje spremljeno (mrežni pozivi ne idu u transakciju);
+    // po id-u, jer se brojevi računa ponavljaju svake godine
     const pending = await db.invoice.findMany({
-      where: { companyId: user.companyId, number: { in: numbers }, fiscalStatus: 'PENDING', type: 'RENT' },
+      where: { companyId: user.companyId, id: { in: ids }, fiscalStatus: 'PENDING' },
       select: { id: true },
     });
     let failed = 0;

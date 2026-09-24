@@ -4,13 +4,12 @@ import { FileText, Printer, Truck } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import { getLookups, modelLabel } from '@/server/queries/lookups';
-import { getServiceOrder } from '@/server/queries/service';
+import { deviceWarrantyEnd, getServiceOrder } from '@/server/queries/service';
 import { previousState } from '@/server/services/service';
 import { STATUS_KIND_LABEL } from '@/server/services/items';
 import { can } from '@/domain/permissions';
 import { daysBetween, formatDate, toISO, today } from '@/domain/dates';
 import { num } from '@/domain/money';
-import { warrantyEnd } from '@/domain/pricing';
 import { Badge, COLOR_TONE, Card, Detail, PageHeader } from '@/components/ui/misc';
 import { LinkButton } from '@/components/ui/button';
 import { ServiceEditForm } from '@/components/service/service-edit-form';
@@ -31,7 +30,7 @@ export default async function ServiceOrderPage({ params }: { params: Promise<{ i
   const st = SERVICE_STATUS[o.status];
   const item = o.item;
   const days = daysBetween(toISO(o.reportedAt), o.closedAt ? toISO(o.closedAt) : today());
-  const wEnd = item ? warrantyEnd(toISO(item.warrantyStart ?? item.issueDate), item.warrantyMonths) : null;
+  const wEnd = item ? deviceWarrantyEnd(item) : null;
   const warehouses = lookups.warehouses.map((w) => ({ value: w.id, label: w.name }));
 
   // povrat: ciljevi prema stanju prije servisa
@@ -39,7 +38,8 @@ export default async function ServiceOrderPage({ params }: { params: Promise<{ i
   const partnerId = item?.partnerId ?? prev?.partnerId ?? null;
   const contractKnown = !!(item?.contractItem || prev?.contract);
   const returnOptions = [
-    ...(partnerId ? [{ value: 'SOLD' as const, label: `Kupcu (${o.partner?.name ?? 'klijent'}) — prodan` }] : []),
+    // „prodan" samo ako je uređaj prije servisa bio prodan (kao i kod zamjene)
+    ...(partnerId && prev?.state === 'SOLD' ? [{ value: 'SOLD' as const, label: `Kupcu (${o.partner?.name ?? 'klijent'}) — prodan` }] : []),
     ...(contractKnown ? [{ value: 'RENTED' as const, label: 'Natrag u najam (isti ugovor)' }] : []),
     { value: 'IN_STOCK' as const, label: 'Na skladište' },
   ];

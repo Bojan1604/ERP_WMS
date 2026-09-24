@@ -63,6 +63,7 @@ export const lookupPartnerAction = action(
     const h = lookupLimit.get(user.id);
     if (!h || h.reset < now) lookupLimit.set(user.id, { n: 1, reset: now + 60_000 });
     else if (++h.n > 20) throw new DomainError('Previše dohvata u minuti — pričekajte malo.');
-    return { message: undefined, data: await lookupPartner(user.companyId, input) };
+    // samo dohvat — bez osvježavanja stranice
+    return { revalidate: [], data: await lookupPartner(user.companyId, input) };
   },
 );

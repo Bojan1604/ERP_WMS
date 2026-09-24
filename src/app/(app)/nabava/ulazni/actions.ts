@@ -56,12 +56,21 @@ export const fetchEInvoicesAction = action({ module: 'purchasing', level: 'edit'
   };
 });
 
-export const acceptSupplierInvoiceAction = action({ module: 'purchasing', level: 'edit' }, z.object({ id: zId }), async ({ id }, user) => {
-  const r = await acceptSupplierInvoice(user, id);
-  return {
-    message: r.reported ? (r.already ? 'Račun prihvaćen (posrednik ga je već imao kao prihvaćen) i knjižen kao trošak.' : 'Račun prihvaćen, javljen posredniku i knjižen kao trošak.') : 'Račun prihvaćen i knjižen kao trošak.',
-  };
-});
+export const acceptSupplierInvoiceAction = action(
+  { module: 'purchasing', level: 'edit' },
+  z.object({ id: zId, book: zBool }),
+  async ({ id, book }, user) => {
+    const r = await acceptSupplierInvoice(user, id, { book });
+    const booked = book ? ' i knjižen kao trošak' : ' (bez knjiženja troška)';
+    return {
+      message: r.reported
+        ? r.already
+          ? `Račun prihvaćen (posrednik ga je već imao kao prihvaćen)${booked}.`
+          : `Račun prihvaćen, javljen posredniku${booked}.`
+        : `Račun prihvaćen${booked}.`,
+    };
+  },
+);
 
 export const rejectSupplierInvoiceAction = action(
   { module: 'purchasing', level: 'edit' },

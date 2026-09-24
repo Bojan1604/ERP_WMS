@@ -12,6 +12,8 @@ export interface NavItem {
   icon: LucideIcon;
   module: Module;
   level?: 'view' | 'ops' | 'edit';
+  /** Samo za ulogu administratora (stranica to i sama provjerava). */
+  adminOnly?: boolean;
 }
 
 export interface NavGroup {
@@ -89,7 +91,7 @@ export const NAV: NavGroup[] = [
       { href: '/postavke', label: 'Firma', icon: Building2, module: 'settings' },
       { href: '/postavke/sifrarnici', label: 'Šifrarnici', icon: ListTree, module: 'settings' },
       { href: '/postavke/fiskalizacija', label: 'Fiskalizacija', icon: Stamp, module: 'settings' },
-      { href: '/postavke/uvoz', label: 'Uvoz i izvoz', icon: DatabaseBackup, module: 'settings' },
+      { href: '/postavke/uvoz', label: 'Uvoz i izvoz', icon: DatabaseBackup, module: 'settings', level: 'edit', adminOnly: true },
       { href: '/postavke/korisnici', label: 'Korisnici', icon: UserCog, module: 'users' },
       { href: '/postavke/dnevnik', label: 'Dnevnik promjena', icon: History, module: 'settings' },
     ],

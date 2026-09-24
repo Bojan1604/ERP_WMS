@@ -166,7 +166,7 @@ export function CorrectionButtons({ inv }: { inv: PanelInvoice }) {
                 vraćaju se na skladište.
               </p>
               {inv.paidTotal > 0 && <p className="rounded-md bg-warn-soft px-3 py-2 text-sm text-warn">Račun ima uplate — prije storna ih treba obrisati.</p>}
-              <Field label="Datum storna">
+              <Field label="Datum storna" hint="Ne raniji od zadnjeg izdanog računa — inače dobiva njegov datum.">
                 <Input type="date" name="date" defaultValue={today()} />
               </Field>
               <Field label="Razlog (neobavezno)">
@@ -197,7 +197,7 @@ export function CorrectionButtons({ inv }: { inv: PanelInvoice }) {
                 <Field label="Iznos bez PDV-a €" hint={`Najviše ${eur(maxNet)}`} required>
                   <Input name="netAmount" inputMode="decimal" className="text-right" required />
                 </Field>
-                <Field label="Datum">
+                <Field label="Datum" hint="Ne raniji od zadnjeg izdanog računa.">
                   <Input type="date" name="date" defaultValue={today()} />
                 </Field>
               </div>

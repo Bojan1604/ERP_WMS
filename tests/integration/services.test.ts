@@ -9,7 +9,10 @@ import { db, transaction } from '../../src/server/db';
 import { bootstrapCompany } from '../../src/server/services/company';
 import { changeItemStatus, statusFor, type Actor } from '../../src/server/services/items';
 import { createDraft, issueInvoice, stornoInvoice, addPayment, creditNote, markPaid, markUnpaid } from '../../src/server/services/invoices';
-import { attachItems, pendingForCompany, issueInstallments, skipInstallment, setPausedPeriod } from '../../src/server/services/rentals';
+import {
+  attachItems, pendingForCompany, issueInstallments, skipInstallment, setPausedPeriod, setContractStatus, updateContractItems,
+  terminateContract, previewInstallment, issuePending,
+} from '../../src/server/services/rentals';
 import { fromISO, today, addMonths } from '../../src/domain/dates';
 
 assert.match(process.env.DATABASE_URL ?? '', /wms_test/, 'Integracijski testovi smiju raditi samo nad testnom bazom (wms_test).');
@@ -241,4 +244,150 @@ test('najam: pauza naplate jednog uređaja u mjesecu; fakturirano se ne može pa
   await assert.rejects(transaction((tx) => setPausedPeriod(tx, other.actor, contract.id, s.items[0].id, first, true)), /nije na ovom ugovoru/);
   const audit = await db.auditLog.count({ where: { companyId: s.companyId, action: { in: ['pause', 'resume'] } } });
   assert.equal(audit, 2);
+});
+
+test('gotovina s odbijenim predujmom naplaćuje otvoreni iznos; predujam karticom je plaćen pri izdavanju', async () => {
+  const s = await setup();
+  const inv = await transaction(async (tx) => {
+    const d = await createDraft(tx, s.actor, {
+      type: 'SERVICE', partnerId: s.partner.id, date: today(), vatRate: 25, advanceAmount: 50, paymentMethod: 'CASH',
+      lines: [{ kind: 'MANUAL', description: 'Usluga', qty: 1, unitPrice: 100 }],
+    });
+    await issueInvoice(tx, s.actor, d.id);
+    return tx.invoice.findUniqueOrThrow({ where: { id: d.id } });
+  });
+  assert.equal(inv.status, 'ISSUED');
+  assert.equal(inv.paidTotal.toNumber(), 75); // 125 − 50 predujma
+  assert.equal(inv.openAmount.toNumber(), 0);
+
+  const adv = await transaction(async (tx) => {
+    const d = await createDraft(tx, s.actor, {
+      type: 'SERVICE', kind: 'ADVANCE', partnerId: s.partner.id, date: today(), vatRate: 25, paymentMethod: 'CARD',
+      lines: [{ kind: 'MANUAL', description: 'Predujam', qty: 1, unitPrice: 40 }],
+    });
+    await issueInvoice(tx, s.actor, d.id);
+    return tx.invoice.findUniqueOrThrow({ where: { id: d.id } });
+  });
+  assert.equal(adv.paidTotal.toNumber(), 50);
+  assert.equal(adv.openAmount.toNumber(), 0);
+});
+
+test('stavka najma: ručno promijenjena cijena se čuva, mjesečna se preračunava; PDV samo uz kategoriju S', async () => {
+  const s = await setup();
+  const id = await transaction(async (tx) =>
+    (await createDraft(tx, s.actor, {
+      type: 'RENT', partnerId: s.partner.id, date: today(), vatRate: 25, taxCategory: 'K',
+      lines: [
+        { kind: 'MANUAL', description: 'Najam', qty: 1, monthly: 20, months: 3, unitPrice: 50 },
+        { kind: 'MANUAL', description: 'Najam 2', qty: 1, monthly: 10, months: 3, unitPrice: 30 },
+      ],
+    })).id,
+  );
+  const inv = await db.invoice.findUniqueOrThrow({ where: { id }, include: { lines: { orderBy: { sort: 'asc' } } } });
+  assert.equal(inv.lines[0].unitPrice.toNumber(), 50);
+  assert.equal(inv.lines[0].monthly?.toNumber(), 16.67);
+  assert.equal(inv.lines[1].monthly?.toNumber(), 10);
+  assert.equal(inv.vatRate.toNumber(), 0);
+  assert.equal(inv.grandTotal.toNumber(), 80);
+});
+
+test('storno s datumom prije zadnjeg izdanog računa dobiva datum zadnjeg', async () => {
+  const s = await setup();
+  const mk = (date: string) =>
+    transaction(async (tx) => {
+      const d = await createDraft(tx, s.actor, { type: 'SERVICE', partnerId: s.partner.id, date, vatRate: 25, lines: [{ kind: 'MANUAL', description: 'X', qty: 1, unitPrice: 10 }] });
+      await issueInvoice(tx, s.actor, d.id);
+      return d.id;
+    });
+  const first = await mk('2026-03-01');
+  await mk('2026-03-10');
+  const st = await transaction((tx) => stornoInvoice(tx, s.actor, first, { date: '2026-03-05' }));
+  assert.equal((await db.invoice.findUniqueOrThrow({ where: { id: st.id } })).date.toISOString().slice(0, 10), '2026-03-10');
+});
+
+/** Ugovor od prvog dana u mjesecu prije `monthsAgo` mjeseci, mjesečna naplata unaprijed 1. u mjesecu. */
+async function rentContract(s: Awaited<ReturnType<typeof setup>>, number: string, monthsAgo: number, items: string[]) {
+  const start = addMonths(today(), -monthsAgo).slice(0, 7) + '-01';
+  const contract = await db.contract.create({
+    data: { companyId: s.companyId, number, partnerId: s.partner.id, startDate: fromISO(start), billing: 'MONTHLY', billingDay: 1 },
+  });
+  await transaction((tx) => attachItems(tx, s.actor, contract.id, items.map((itemId) => ({ itemId, monthly: 10 })), { issueDate: start }));
+  return { contract, start };
+}
+const periodsOf = async (companyId: string) => (await transaction((tx) => pendingForCompany(tx, companyId))).map((p) => [p.period, p.amount]);
+const monthAgo = (k: number) => addMonths(today(), -k).slice(0, 7);
+
+test('pauza ugovora: rate dospjele u pauzi se ni nakon nastavka ne traže', async () => {
+  const s = await setup();
+  const { contract } = await rentContract(s, 'UG-PZ', 4, [s.items[0].id]);
+  await transaction((tx) => issueInstallments(tx, s.actor, [{ contractId: contract.id, period: monthAgo(4) }]));
+  await transaction((tx) => setContractStatus(tx, s.actor, contract.id, 'PAUSED'));
+  assert.equal((await periodsOf(s.companyId)).length, 0, 'pauzirani ugovor nema rata');
+  // pauza je počela prije dva mjeseca (usred mjeseca)
+  await db.contract.update({ where: { id: contract.id }, data: { pausedSince: fromISO(`${monthAgo(2)}-10`) } });
+  await transaction((tx) => setContractStatus(tx, s.actor, contract.id, 'ACTIVE'));
+  const ci = await db.contractItem.findFirstOrThrow({ where: { contractId: contract.id } });
+  // rata od prije dva mjeseca dospjela je 1. — prije pauze; prošli i ovaj mjesec dospjeli su u pauzi
+  assert.deepEqual(ci.paused, [monthAgo(1), monthAgo(0)]);
+  assert.deepEqual(await periodsOf(s.companyId), [[monthAgo(3), 10], [monthAgo(2), 10]]);
+  assert.equal((await db.contract.findUniqueOrThrow({ where: { id: contract.id } })).pausedSince, null);
+});
+
+test('pauza uređaja: nastavak upisuje pauzirana razdoblja samo tom uređaju', async () => {
+  const s = await setup();
+  const { contract } = await rentContract(s, 'UG-PU', 3, [s.items[0].id, s.items[1].id]);
+  const [a] = await db.contractItem.findMany({ where: { contractId: contract.id, itemId: s.items[0].id } });
+  await transaction((tx) => updateContractItems(tx, s.actor, contract.id, [a.id], { status: 'PAUSED' }));
+  assert.ok((await db.contractItem.findUniqueOrThrow({ where: { id: a.id } })).pausedSince);
+  await db.contractItem.update({ where: { id: a.id }, data: { pausedSince: fromISO(`${monthAgo(2)}-01`) } });
+  await transaction((tx) => updateContractItems(tx, s.actor, contract.id, [a.id], { status: null }));
+  const after = await db.contractItem.findUniqueOrThrow({ where: { id: a.id } });
+  assert.deepEqual(after.paused, [monthAgo(2), monthAgo(1), monthAgo(0)]);
+  assert.equal(after.pausedSince, null);
+  assert.deepEqual(await periodsOf(s.companyId), [[monthAgo(3), 20], [monthAgo(2), 10], [monthAgo(1), 10], [monthAgo(0), 10]]);
+});
+
+test('povrat uređaja i otkaz ugovora ne gube neizdane rate; vraćeni uređaj ide na drugi ugovor', async () => {
+  const s = await setup();
+  const { contract } = await rentContract(s, 'UG-PV', 2, [s.items[0].id, s.items[1].id]);
+  // uređaj 0 vraćen na skladište
+  await transaction((tx) => changeItemStatus(tx, s.actor, [s.items[0].id], { kind: 'RETURNING', event: { type: 'T', message: 't' } }));
+  await transaction((tx) => changeItemStatus(tx, s.actor, [s.items[0].id], { kind: 'IN_STOCK', data: { warehouseId: s.wh.id }, event: { type: 'T', message: 't' } }));
+  assert.equal(await db.contractItem.count({ where: { itemId: s.items[0].id } }), 0);
+  assert.deepEqual(await periodsOf(s.companyId), [[monthAgo(2), 20], [monthAgo(1), 20], [monthAgo(0), 20]]);
+
+  // vraćeni uređaj može na drugi ugovor; stari ugovor i dalje traži njegove zaostale rate
+  const other = await db.contract.create({ data: { companyId: s.companyId, number: 'UG-PV2', partnerId: s.partner.id, startDate: fromISO(today()) } });
+  await transaction((tx) => attachItems(tx, s.actor, other.id, [{ itemId: s.items[0].id, monthly: 5 }]));
+
+  // izdaje se najstarija rata (oba uređaja), zatim se ugovor otkazuje
+  await transaction((tx) => issuePending(tx, s.actor, [{ contractId: contract.id, period: monthAgo(2) }]));
+  const inv = await db.invoice.findFirstOrThrow({ where: { contractId: contract.id, status: 'ISSUED' }, include: { lines: true } });
+  assert.equal(inv.lines.length, 2);
+  assert.notEqual((await db.item.findUniqueOrThrow({ where: { id: s.items[0].id } })).invoiceId, inv.id, 'vraćeni uređaj ne dobiva vezu na račun starog ugovora');
+  await transaction((tx) => terminateContract(tx, s.actor, contract.id, { returnNow: true }));
+  const pend = (await transaction((tx) => pendingForCompany(tx, s.companyId))).filter((p) => p.contractId === contract.id);
+  assert.deepEqual(pend.map((p) => [p.period, p.amount]), [[monthAgo(1), 20], [monthAgo(0), 20]]);
+  await transaction((tx) => issuePending(tx, s.actor, pend.map((p) => ({ contractId: p.contractId, period: p.period }))));
+  assert.equal((await transaction((tx) => pendingForCompany(tx, s.companyId))).filter((p) => p.contractId === contract.id).length, 0);
+});
+
+test('izdavanje rate iz starog nacrta: datum se pomiče na zadnji izdani, ostale rate prolaze', async () => {
+  const s = await setup();
+  const { contract } = await rentContract(s, 'UG-ND', 2, [s.items[0].id]);
+  const draftId = await transaction((tx) => previewInstallment(tx, s.actor, contract.id, monthAgo(2)));
+  // u međuvremenu je izdan račun s današnjim datumom
+  await transaction(async (tx) => {
+    const d = await createDraft(tx, s.actor, { type: 'SERVICE', partnerId: s.partner.id, date: today(), vatRate: 25, lines: [{ kind: 'MANUAL', description: 'X', qty: 1, unitPrice: 10 }] });
+    await issueInvoice(tx, s.actor, d.id);
+  });
+  const res = await transaction((tx) =>
+    issuePending(tx, s.actor, [monthAgo(2), monthAgo(1), monthAgo(0)].map((period) => ({ contractId: contract.id, period })), { paid: true }),
+  );
+  assert.equal(res.ids.length, 3);
+  assert.ok(res.ids.includes(draftId), 'postojeći nacrt je ponovno iskorišten');
+  const issued = await db.invoice.findUniqueOrThrow({ where: { id: draftId } });
+  assert.equal(issued.status, 'ISSUED');
+  assert.equal(issued.date.toISOString().slice(0, 10), today());
+  assert.equal(issued.openAmount.toNumber(), 0);
 });

@@ -30,6 +30,9 @@ export default async function PartnerPage({ params, searchParams }: { params: Pr
   const [partner, company, counts] = await Promise.all([getPartner(user.companyId, id), getCompany(user.companyId), partnerCounts(user.companyId, id)]);
   if (!partner) notFound();
   const canEdit = can(user.perms, 'partners', 'edit');
+  // računi, kartica i otvoreni iznos pripadaju prodaji, ugovori najmu
+  const canSales = can(user.perms, 'sales');
+  const canRentals = can(user.perms, 'rentals');
   const base = `/partneri/${id}`;
 
   return (
@@ -54,7 +57,7 @@ export default async function PartnerPage({ params, searchParams }: { params: Pr
           .filter(Boolean)
           .join(' · ')}
         actions={
-          counts.open > 0 ? (
+          canSales && counts.open > 0 ? (
             <div className="rounded-lg bg-bad-soft px-3 py-1.5 text-right">
               <p className="text-xs text-bad-strong">Otvoreno ({counts.openCount})</p>
               <p className="font-semibold text-bad-strong tnum">{eur(counts.open)}</p>
@@ -66,22 +69,22 @@ export default async function PartnerPage({ params, searchParams }: { params: Pr
         param="tab"
         tabs={[
           { href: base, label: 'Podaci' },
-          { href: `${base}?tab=racuni`, label: 'Računi', count: counts.invoices },
+          ...(canSales ? [{ href: `${base}?tab=racuni`, label: 'Računi', count: counts.invoices }] : []),
           { href: `${base}?tab=uredaji`, label: 'Uređaji', count: counts.devices },
-          { href: `${base}?tab=ugovori`, label: 'Ugovori', count: counts.contracts },
+          ...(canRentals ? [{ href: `${base}?tab=ugovori`, label: 'Ugovori', count: counts.contracts }] : []),
           { href: `${base}?tab=cjenik`, label: 'Cjenik', count: counts.prices },
-          { href: `${base}?tab=kartica`, label: 'Kartica' },
+          ...(canSales ? [{ href: `${base}?tab=kartica`, label: 'Kartica' }] : []),
         ]}
       />
-      {tab === 'racuni' ? (
+      {tab === 'racuni' && canSales ? (
         <InvoicesTab companyId={user.companyId} partnerId={id} params={sp} overdueDays={company.overdueDays} />
       ) : tab === 'uredaji' ? (
         <DevicesTab companyId={user.companyId} partnerId={id} params={sp} />
-      ) : tab === 'ugovori' ? (
+      ) : tab === 'ugovori' && canRentals ? (
         <ContractsTab companyId={user.companyId} partnerId={id} />
       ) : tab === 'cjenik' ? (
         <PricesTab companyId={user.companyId} partnerId={id} canEdit={canEdit} />
-      ) : tab === 'kartica' ? (
+      ) : tab === 'kartica' && canSales ? (
         <LedgerTab companyId={user.companyId} partnerId={id} />
       ) : (
         <PartnerForm

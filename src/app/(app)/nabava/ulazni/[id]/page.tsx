@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation';
 import { FileCode2, FileText } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { getCompany, getLookups } from '@/server/queries/lookups';
-import { getSupplierInvoice, supplierOptions } from '@/server/queries/purchasing';
+import { getSupplierInvoice, recentSupplierReceipts, supplierOptions } from '@/server/queries/purchasing';
 import { can } from '@/domain/permissions';
 import { toISO } from '@/domain/dates';
 import { num } from '@/domain/money';
@@ -18,11 +18,16 @@ import {
 } from '../actions';
 
 export default async function SupplierInvoicePage({ params }: { params: Promise<{ id: string }> }) {
-  const user = await pageAccess('purchasing', 'edit');
+  const user = await pageAccess('purchasing', 'view');
   const { id } = await params;
   const si = await getSupplierInvoice(user.companyId, id);
   if (!si) notFound();
-  const [suppliers, lookups, company] = await Promise.all([supplierOptions(user.companyId, si.supplierId), getLookups(user.companyId), getCompany(user.companyId)]);
+  const [suppliers, lookups, company, receipts] = await Promise.all([
+    supplierOptions(user.companyId, si.supplierId),
+    getLookups(user.companyId),
+    getCompany(user.companyId),
+    si.status === 'RECEIVED' ? recentSupplierReceipts(user.companyId, si.supplierId, si.issueDate) : 0,
+  ]);
   const categories = lookups.expenseCategories.map((c) => c.name);
   if (si.category && !categories.includes(si.category)) categories.push(si.category);
 
@@ -31,6 +36,8 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
   const rejected = si.status === 'REJECTED';
   // prihvaćen/odbijen eRačun je javljen posredniku — ne briše se
   const canDelete = canEdit && (!eInvoice || si.status === 'RECEIVED');
+  // eRačun se plaća tek nakon prihvaćanja (posrednik status „plaćen" prije „prihvaćen" odbija, a plaćeni se ne može odbiti)
+  const payLocked = eInvoice && si.status === 'RECEIVED';
   const xml = si.attachments.find((a) => a.mime === 'application/xml');
   const pdfs = si.attachments.filter((a) => a.mime === 'application/pdf');
   const fileHref = (attId: string) => `/api/nabava/ulazni/${si.id}/prilog/${attId}`;
@@ -52,8 +59,9 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
                 id={si.id}
                 eInvoice={eInvoice}
                 canAccept={si.status === 'RECEIVED'}
+                recentReceipts={receipts}
                 canReject={!rejected && !si.paidDate}
-                canPay={!rejected && !si.paidDate}
+                canPay={!rejected && !si.paidDate && !payLocked}
                 accept={acceptSupplierInvoiceAction}
                 reject={rejectSupplierInvoiceAction}
                 paidToday={supplierInvoicePaidTodayAction}
@@ -85,7 +93,7 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
           ulazi u obveze, troškove ni izvještaje.
         </Notice>
       )}
-      {si.status === 'RECEIVED' && <Notice tone="warn">Zaprimljeni eRačun čeka odluku: prihvatite ga ili odbijte s razlogom.</Notice>}
+      {si.status === 'RECEIVED' && <Notice tone="warn">Zaprimljeni eRačun čeka odluku: prihvatite ga ili odbijte s razlogom. Plaćanje se označava nakon prihvaćanja.</Notice>}
 
       <Card title="Status" className="mb-4">
         <dl className="grid gap-x-8 sm:grid-cols-2">
@@ -146,6 +154,8 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
         action={saveSupplierInvoiceAction}
         lockDocument={eInvoice}
         rejected={rejected}
+        payLocked={payLocked}
+        readOnly={!canEdit}
       />
     </>
   );

@@ -249,3 +249,51 @@ test('vanjski korisnici: uloga prema organizaciji, prava ne rastu, deaktivacija 
   await transaction((tx) => setMdmUserActive(tx, s.scope.distA, uid, false));
   assert.equal(await db.session.count({ where: { userId: uid, revokedAt: null } }), 0);
 });
+
+test('profil i izmjene uređaja ne prelaze u drugu organizaciju; profil samo za organizaciju kojoj pripada', async () => {
+  const s = await setup();
+  const pA1 = await db.mdmProfile.create({ data: { companyId: s.companyId, orgId: s.orgs.A1.id, name: 'A1 profil', platform: 'ANDROID' } });
+  const pA = await db.mdmProfile.create({ data: { companyId: s.companyId, orgId: s.orgs.A.id, name: 'A profil', platform: 'ANDROID' } });
+  const shared = await db.mdmProfile.create({ data: { companyId: s.companyId, orgId: null, name: 'Zajednički A', platform: 'ANDROID' } });
+
+  // profil klijenta A1 nije za uređaj klijenta A2; profil distributera A vrijedi za njegove klijente
+  await assert.rejects(transaction((tx) => assignProfile(tx, s.scope.distA, [s.devices.devA2.id], pA1.id)), /ne pripada/);
+  await transaction((tx) => assignProfile(tx, s.scope.distA, [s.devices.devA2.id], pA.id));
+  await assert.rejects(transaction((tx) => saveSite(tx, s.scope.distA, s.sites.siteA2.id, { orgId: s.orgs.A2.id, name: 'Lokal A2', address: null, timezone: 'Europe/Zagreb', profileId: pA1.id, note: null })), /ne pripada/);
+  await assert.rejects(
+    transaction((tx) => enrollByCode(tx, s.scope.distA, { code: '654321', orgId: s.orgs.A2.id, siteId: null, name: null, profileId: pA1.id })),
+    /ne pripada/,
+  );
+
+  // premještaj u drugu organizaciju: izmjene se brišu, profil ostaje samo ako je upotrebljiv
+  await transaction((tx) => assignProfile(tx, s.scope.owner, [s.devices.devA1.id], pA1.id));
+  await db.mdmDevice.update({ where: { id: s.devices.devA1.id }, data: { overrides: { settings: { wifi: [{ ssid: 'A1', security: 'WPA2', password: 'tajna1234' }] } } } });
+  await transaction((tx) => moveDevices(tx, s.scope.owner, [s.devices.devA1.id], s.orgs.B1.id, null));
+  let d = await db.mdmDevice.findUniqueOrThrow({ where: { id: s.devices.devA1.id } });
+  assert.equal(d.profileId, null, 'profil A1 ne ide u B1');
+  assert.deepEqual(d.overrides, {});
+
+  await transaction((tx) => assignProfile(tx, s.scope.owner, [s.devices.devB1.id], shared.id));
+  await transaction((tx) => moveDevices(tx, s.scope.owner, [s.devices.devB1.id], s.orgs.A1.id, s.sites.siteA1.id));
+  d = await db.mdmDevice.findUniqueOrThrow({ where: { id: s.devices.devB1.id } });
+  assert.equal(d.profileId, shared.id, 'zajednički profil ostaje');
+
+  // premještaj unutar iste organizacije (druga lokacija) ne dira izmjene
+  await db.mdmDevice.update({ where: { id: s.devices.devA2.id }, data: { overrides: { settings: { volumePct: 5 } } } });
+  const site2 = await db.mdmSite.create({ data: { orgId: s.orgs.A2.id, name: 'Lokal A2b' } });
+  await transaction((tx) => moveDevices(tx, s.scope.distA, [s.devices.devA2.id], s.orgs.A2.id, site2.id));
+  d = await db.mdmDevice.findUniqueOrThrow({ where: { id: s.devices.devA2.id } });
+  assert.deepEqual(d.overrides, { settings: { volumePct: 5 } });
+  assert.equal(d.profileId, pA.id);
+});
+
+test('ista naredba koja čeka ne dodaje se dvaput ni kad jsonb promijeni redoslijed ključeva', async () => {
+  const s = await setup();
+  const first = await transaction((tx) => queueCommands(tx, s.scope.owner, [s.devices.devA1.id], 'UNINSTALL_APP', { packageName: 'hr.test.app', name: 'Test' }));
+  assert.equal(first.queued, 1);
+  const again = await transaction((tx) => queueCommands(tx, s.scope.owner, [s.devices.devA1.id], 'UNINSTALL_APP', { packageName: 'hr.test.app', name: 'Test' }));
+  assert.equal(again.queued, 0);
+  assert.equal(again.skipped, 1);
+  const other = await transaction((tx) => queueCommands(tx, s.scope.owner, [s.devices.devA1.id], 'UNINSTALL_APP', { packageName: 'hr.test.other', name: 'Test' }));
+  assert.equal(other.queued, 1);
+});

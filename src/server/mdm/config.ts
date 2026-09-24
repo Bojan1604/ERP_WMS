@@ -33,7 +33,7 @@ export async function buildEffectiveConfig(
   const apps = appIds.length
     ? await tx.mdmApp.findMany({
         where: { id: { in: appIds }, companyId: device.companyId, platform: device.platform },
-        include: { versions: { include: { file: { select: { id: true, sha256: true } } }, orderBy: [{ versionCode: 'desc' }, { createdAt: 'desc' }] } },
+        include: { versions: { include: { file: { select: { id: true, sha256: true } } }, orderBy: [{ versionCode: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }] } },
       })
     : [];
   const byId = new Map(apps.map((a) => [a.id, a]));

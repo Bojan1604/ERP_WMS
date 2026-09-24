@@ -4,9 +4,8 @@ import { z } from 'zod';
 import { action } from '@/server/action';
 import { transaction } from '@/server/db';
 import { zBool, zDate, zId, zMoney, zOptDate, zOptId, zOptText, zReq, zText } from '@/server/zod';
-import { itemForService, searchItems } from '@/server/queries/service';
-import { warrantyEnd } from '@/domain/pricing';
-import { toISO, today } from '@/domain/dates';
+import { deviceWarrantyEnd, itemForService, searchItems } from '@/server/queries/service';
+import { today } from '@/domain/dates';
 import { changeServiceStatus, createServiceOrder, replaceDevice, returnDevice, updateServiceOrder } from '@/server/services/service';
 import { modelLabel } from '@/server/queries/lookups';
 import { STATUS_KIND_LABEL } from '@/server/services/items';
@@ -107,8 +106,7 @@ export const replaceDeviceAction = action(
 export const deviceInfoAction = action({ module: 'service', level: 'view' }, z.object({ id: zId }), async ({ id }, user) => {
   const i = await itemForService(user.companyId, id);
   if (!i) return { revalidate: [], data: null };
-  const start = i.warrantyStart ?? i.issueDate;
-  const end = warrantyEnd(start ? toISO(start) : null, i.warrantyMonths ?? i.model.warrantyMonths);
+  const end = deviceWarrantyEnd(i);
   return {
     revalidate: [],
     data: {

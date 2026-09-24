@@ -36,7 +36,11 @@ export async function dashboardData(companyId: string, perms: PermissionMap) {
   const skip = <T,>(on: boolean, fn: () => Promise<T>): Promise<T | null> => (on ? fn() : Promise.resolve(null));
 
   const receivableWhere: Prisma.InvoiceWhereInput = { companyId, status: 'ISSUED', openAmount: { gt: 0 }, partner: { excluded: false } };
-  const overdueWhere: Prisma.InvoiceWhereInput = { ...receivableWhere, dueDate: { lt: todayDate } };
+  // kao izvještaj „Starost potraživanja": dospijeće = COALESCE(dueDate, date)
+  const overdueWhere: Prisma.InvoiceWhereInput = {
+    ...receivableWhere,
+    OR: [{ dueDate: { lt: todayDate } }, { dueDate: null, date: { lt: todayDate } }],
+  };
 
   const [
     revenue, saleCost, byMonth, receivables, overdue, overdueTop,
@@ -60,9 +64,9 @@ export async function dashboardData(companyId: string, perms: PermissionMap) {
     skip(sales, () =>
       db.invoice.findMany({
         where: overdueWhere,
-        orderBy: { dueDate: 'asc' },
+        orderBy: [{ dueDate: 'asc' }, { date: 'asc' }],
         take: 5,
-        select: { id: true, number: true, dueDate: true, openAmount: true, partner: { select: { name: true } } },
+        select: { id: true, number: true, dueDate: true, date: true, openAmount: true, partner: { select: { name: true } } },
       }),
     ),
     skip(wh, () => db.item.aggregate({ where: { companyId, state: 'IN_STOCK' }, _sum: { cost: true }, _count: true })),
@@ -130,7 +134,7 @@ export async function dashboardData(companyId: string, perms: PermissionMap) {
     },
     months: money ? months : null,
     pending,
-    overdueTop: overdueTop?.map((i) => ({ id: i.id, number: i.number, partner: i.partner.name, dueDate: i.dueDate, open: num(i.openAmount) })) ?? null,
+    overdueTop: overdueTop?.map((i) => ({ id: i.id, number: i.number, partner: i.partner.name, dueDate: i.dueDate ?? i.date, open: num(i.openAmount) })) ?? null,
     reserved,
     returning,
     approvals,

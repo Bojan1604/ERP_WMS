@@ -5,6 +5,7 @@ import { AuthError, DomainError } from '../errors';
 import { COMMANDS, canSendCommand, type CommandType } from '@/domain/mdm';
 import type { MdmScope } from './scope';
 import { deviceWhere } from './scope';
+import { sameJson } from './stable';
 
 /**
  * Naredbe uređajima idu u red (MdmCommand) i agent ih preuzima pri javljanju.
@@ -37,7 +38,7 @@ export async function queueCommands(
     where: { deviceId: { in: active.map((d) => d.id) }, type, status: { in: ['PENDING', 'SENT'] } },
     select: { deviceId: true, payload: true },
   });
-  const same = new Set(pending.filter((p) => JSON.stringify(p.payload) === JSON.stringify(payload)).map((p) => p.deviceId));
+  const same = new Set(pending.filter((p) => sameJson(p.payload, payload)).map((p) => p.deviceId));
   const targets = active.filter((d) => !same.has(d.id));
   const expiresAt = new Date(Date.now() + def.ttlHours * 3_600_000);
   if (targets.length) {

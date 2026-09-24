@@ -44,7 +44,7 @@ export function ItemForm({ item, models, warehouses, hasDuplicates }: { item: It
             <Field label="Model" required error={fields.modelId}>
               <Select name="modelId" defaultValue={item.modelId} options={models} />
             </Field>
-            <Field label="Skladište">
+            <Field label="Skladište" hint="Promjena skladišta stvara međuskladišnicu.">
               <Select name="warehouseId" defaultValue={item.warehouseId ?? ''} placeholder="— bez skladišta —" options={warehouses} />
             </Field>
             <Field label="Dobavljač">

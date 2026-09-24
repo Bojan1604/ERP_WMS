@@ -3,11 +3,11 @@ import type { Contract } from '@prisma/client';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { TableWrap } from '@/components/ui/misc';
 import { contractAccrual, contractBilling, scheduledCharges } from '@/domain/billing';
-import { MONTHS_SHORT, periodLabel, today } from '@/domain/dates';
+import { MONTHS_SHORT, periodLabel, toISO, today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
-import { toDevice, toTerms } from '@/server/services/rentals';
+import { toDevice, toReturnedDevice, toTerms } from '@/server/services/rentals';
 import type { contractItems } from '@/server/queries/rentals';
-import { amount, eur } from '@/lib/format';
+import { amount, date, eur } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { db } from '@/server/db';
 import { coveredPeriods } from '@/server/services/invoices';
@@ -23,11 +23,21 @@ export async function ScheduleTab({ contract: c, items, year: y, canEdit }: { co
   const year = y && y > 1990 && y < 2200 ? y : cy;
   const cm = year === cy ? Number(now.slice(5, 7)) - 1 : -1;
   const terms = toTerms(c);
-  const devices = items.map(toDevice);
+  // uređaji skinuti s ugovora ostaju u rasporedu do dana skidanja (zaostale rate)
+  const returned = await db.returnedContractItem.findMany({
+    where: { contractId: c.id, endDate: { gte: new Date(Date.UTC(year, 0, 1)) } },
+    orderBy: { endDate: 'asc' },
+    include: { item: { select: { id: true, serial: true } } },
+  });
+  const list = [
+    ...items.map((i) => ({ id: i.id, serial: i.item.serial, itemId: i.item.id, monthly: num(i.monthly), device: toDevice(i), returnedAt: null as string | null })),
+    ...returned.map((r) => ({ id: r.id, serial: r.item.serial, itemId: r.item.id, monthly: num(r.monthly), device: toReturnedDevice(r), returnedAt: toISO(r.endDate) })),
+  ];
+  const devices = list.map((x) => x.device);
   const covered = (await coveredPeriods(db, [c.id])).get(c.id) ?? new Set<string>();
   // ćelija = rata u mjesecu naplate; pauzirane se prikazuju precrtane i ne ulaze u zbroj
-  const rows = items.map((i, k) => {
-    const d = devices[k];
+  const rows = list.map((i) => {
+    const d = i.device;
     const paused = new Set(d.paused ?? []);
     const cells = Array.from({ length: 12 }, () => ({ v: 0, period: '', paused: false, invoiced: false }));
     for (const ch of scheduledCharges(terms, d, `${year}-01`, `${year}-12`)) {
@@ -38,8 +48,8 @@ export async function ScheduleTab({ contract: c, items, year: y, canEdit }: { co
       cell.invoiced = covered.has(`${d.itemId}|${ch.period}`);
     }
     const total = r2(cells.reduce((a, x) => a + (x.paused ? 0 : x.v), 0));
-    return { id: i.id, serial: i.item.serial, itemId: i.item.id, monthly: num(i.monthly), cells, total };
-  });
+    return { id: i.id, serial: i.serial, itemId: i.itemId, monthly: i.monthly, returnedAt: i.returnedAt, cells, total };
+  }).filter((r) => !r.returnedAt || r.cells.some((x) => x.v));
   const billing = contractBilling(terms, devices, year);
   const accrual = contractAccrual(terms, devices, year);
   const sum = (a: number[]) => r2(a.reduce((x, v) => x + v, 0));
@@ -84,6 +94,7 @@ export async function ScheduleTab({ contract: c, items, year: y, canEdit }: { co
                   <Link prefetch={false} href={`/skladiste/${r.itemId}`} className="link font-mono text-sm">
                     {r.serial}
                   </Link>
+                  {r.returnedAt && <span className="ml-1.5 text-xs text-fg-3">vraćen {date(r.returnedAt)}</span>}
                 </td>
                 <td className="num">{amount(r.monthly)}</td>
                 {r.cells.map((x, i) => (
@@ -111,7 +122,7 @@ export async function ScheduleTab({ contract: c, items, year: y, canEdit }: { co
           <tfoot>
             <tr>
               <td className="sticky left-0 z-[1]">Naplata (rate)</td>
-              <td className="num">{amount(sum(rows.map((r) => r.monthly)))}</td>
+              <td className="num">{amount(sum(rows.filter((r) => !r.returnedAt).map((r) => r.monthly)))}</td>
               {billing.map((v, i) => (
                 <td key={i} className={cn('num', hl(i))}>
                   {v ? amount(v) : '·'}

@@ -268,7 +268,7 @@ export interface BulkEditInput {
   itemIds: string[];
   warehouseId?: string;
   supplierId?: string | null;
-  cost?: number;
+  cost?: number | null;
   modelId?: string;
   note?: string | null;
 }
@@ -277,12 +277,16 @@ export async function bulkEdit(tx: Tx, actor: Actor, input: BulkEditInput) {
   const items = await loadItems(tx, actor, input.itemIds);
   const data: Prisma.ItemUncheckedUpdateManyInput = {};
   const parts: string[] = [];
+  let transfer: Awaited<ReturnType<typeof transferItems>> | null = null;
   if (input.warehouseId !== undefined) {
     const fixed = items.filter((i) => !(MOVABLE_STATES as string[]).includes(i.state));
     assert(!fixed.length, `Skladište se ne mijenja uređajima koji nisu u skladištu (${fixed.slice(0, 5).map((i) => i.serial).join(', ')}).`);
     const w = await ensureWarehouse(tx, actor, input.warehouseId);
-    data.warehouseId = w.id;
-    parts.push(`skladište → ${w.name}`);
+    // promjena skladišta je premještaj — ide kroz međuskladišnicu (dokument i povijest), ne izravnim upisom
+    if (items.some((i) => i.warehouseId !== w.id)) {
+      transfer = await transferItems(tx, actor, { itemIds: items.map((i) => i.id), toWarehouseId: w.id, note: 'Grupna izmjena' });
+      parts.push(`skladište → ${w.name} (međuskladišnica ${transfer.numbers.join(', ')})`);
+    }
   }
   if (input.supplierId !== undefined) {
     const p = await ensurePartner(tx, actor, input.supplierId);
@@ -290,6 +294,7 @@ export async function bulkEdit(tx: Tx, actor: Actor, input: BulkEditInput) {
     parts.push(`dobavljač → ${p?.name ?? '—'}`);
   }
   if (input.cost !== undefined) {
+    assert(input.cost !== null, 'Upišite nabavnu cijenu (ili odznačite polje).');
     assert(input.cost >= 0, 'Nabavna cijena ne može biti negativna.');
     data.cost = r2(input.cost);
     parts.push(`nabavna → ${r2(input.cost).toFixed(2).replace('.', ',')} €`);
@@ -304,11 +309,16 @@ export async function bulkEdit(tx: Tx, actor: Actor, input: BulkEditInput) {
     data.note = input.note;
     parts.push(input.note ? `napomena → ${input.note}` : 'napomena obrisana');
   }
-  assert(parts.length, 'Odaberite barem jedno polje za izmjenu.');
+  assert(parts.length || input.warehouseId !== undefined, 'Odaberite barem jedno polje za izmjenu.');
+  assert(parts.length, 'Odabrani uređaji su već u tom skladištu.');
   const ids = items.map((i) => i.id);
-  await tx.item.updateMany({ where: { id: { in: ids }, companyId: actor.companyId }, data });
-  await itemEvents(tx, actor, ids, { type: 'EDIT', message: `Grupna izmjena: ${parts.join('; ')}` });
-  return { count: ids.length, summary: parts.join('; ') };
+  // premještaj je već zapisan u povijest (međuskladišnica); ostala polja kao izmjena
+  if (Object.keys(data).length) {
+    await tx.item.updateMany({ where: { id: { in: ids }, companyId: actor.companyId }, data });
+    const edits = parts.filter((p) => !p.startsWith('skladište'));
+    await itemEvents(tx, actor, ids, { type: 'EDIT', message: `Grupna izmjena: ${edits.join('; ')}` });
+  }
+  return { count: ids.length, summary: parts.join('; '), transferIds: transfer?.transferIds ?? [] };
 }
 
 export interface ItemEditInput {
@@ -357,19 +367,23 @@ export async function updateItem(tx: Tx, actor: Actor, id: string, input: ItemEd
     ensurePartner(tx, actor, input.supplierId),
   ]);
   assert(model, 'Model ne postoji.');
-  assert(
-    (input.warehouseId ?? null) === before.warehouseId || (MOVABLE_STATES as string[]).includes(before.state),
-    'Skladište se mijenja samo uređajima koji su u skladištu.',
-  );
+  const warehouseId = input.warehouseId ?? null;
+  const moving = warehouseId !== before.warehouseId;
+  assert(!moving || (MOVABLE_STATES as string[]).includes(before.state), 'Skladište se mijenja samo uređajima koji su u skladištu.');
+  assert(!moving || warehouseId || before.state !== 'IN_STOCK', 'Uređaj na stanju mora biti u nekom skladištu.');
   assert(input.cost >= 0, 'Nabavna cijena ne može biti negativna.');
   assert(input.marginPct === null || (input.marginPct >= 0 && input.marginPct < 100), 'Marža mora biti između 0 i 100 %.');
   assert(input.warrantyMonths === null || (input.warrantyMonths >= 0 && input.warrantyMonths <= 240), 'Jamstvo mora biti između 0 i 240 mjeseci.');
+
+  // promjena skladišta je premještaj — međuskladišnica (dokument i povijest), ne izravan upis
+  let transfer: Awaited<ReturnType<typeof transferItems>> | null = null;
+  if (moving && warehouseId) transfer = await transferItems(tx, actor, { itemIds: [id], toWarehouseId: warehouseId, note: 'Izmjena kartice uređaja' });
 
   const data = {
     serial,
     dupNote,
     modelId: input.modelId,
-    warehouseId: input.warehouseId,
+    warehouseId,
     supplierId: input.supplierId,
     cost: r2(input.cost),
     rentPrice: input.rentPrice === null ? null : r2(input.rentPrice),
@@ -381,10 +395,12 @@ export async function updateItem(tx: Tx, actor: Actor, id: string, input: ItemEd
   await tx.item.update({ where: { id }, data });
 
   const changed = (Object.keys(data) as Array<keyof typeof data>).filter((k) => norm(before[k]) !== norm(data[k]));
-  if (changed.length) {
-    await itemEvents(tx, actor, [id], { type: 'EDIT', message: `Izmijenjeno: ${changed.map((k) => EDIT_LABEL[k]).join(', ')}` });
+  // premještaj ima vlastiti zapis u povijesti (međuskladišnica)
+  const edited = transfer ? changed.filter((k) => k !== 'warehouseId') : changed;
+  if (edited.length) {
+    await itemEvents(tx, actor, [id], { type: 'EDIT', message: `Izmijenjeno: ${edited.map((k) => EDIT_LABEL[k]).join(', ')}` });
   }
-  return { before, after: data, changed };
+  return { before, after: data, changed, transfer };
 }
 
 function norm(v: unknown): string {

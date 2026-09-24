@@ -31,7 +31,8 @@ type SaveInput = Omit<SupplierInvoiceValue, 'internalNo' | 'supplierId'> & { sup
 /**
  * Unos i izmjena ulaznog računa; PDV se predlaže po državi dobavljača.
  * eRačun: dobavljač, broj, datum i iznosi dolaze iz XML-a i ne mijenjaju se
- * (`lockDocument`); odbijeni račun se ne plaća ni knjiži (`rejected`).
+ * (`lockDocument`); odbijeni račun se ne plaća ni knjiži (`rejected`);
+ * zaprimljeni eRačun se ne plaća prije prihvaćanja (`payLocked`); `readOnly` za korisnike bez prava izmjene.
  */
 export function SupplierInvoiceForm({
   initial,
@@ -41,6 +42,8 @@ export function SupplierInvoiceForm({
   action,
   lockDocument = false,
   rejected = false,
+  payLocked = false,
+  readOnly = false,
 }: {
   initial: SupplierInvoiceValue;
   suppliers: Array<{ value: string; label: string; country: string }>;
@@ -49,6 +52,8 @@ export function SupplierInvoiceForm({
   action: ServerAction<SaveInput, { warning?: string | null } | unknown>;
   lockDocument?: boolean;
   rejected?: boolean;
+  payLocked?: boolean;
+  readOnly?: boolean;
 }) {
   const [v, setV] = useState(initial);
   const [vatTouched, setVatTouched] = useState(!!initial.id);
@@ -83,6 +88,7 @@ export function SupplierInvoiceForm({
   return (
     <div className="space-y-4">
       <Card title={v.internalNo ? `Ulazni račun ${v.internalNo}` : 'Novi ulazni račun'}>
+        <fieldset disabled={readOnly} className="contents">
         <FormGrid cols={4}>
           <Field label="Dobavljač" required className="sm:col-span-2">
             <Combobox
@@ -93,7 +99,7 @@ export function SupplierInvoiceForm({
                 recompute({ supplierId: id }, v, c);
               }}
               placeholder="Odaberite dobavljača…"
-              disabled={lockDocument}
+              disabled={lockDocument || readOnly}
             />
           </Field>
           <Field label="Broj računa dobavljača" required>
@@ -119,7 +125,7 @@ export function SupplierInvoiceForm({
               type="number"
               step="0.01"
               value={v.vatAmount}
-              disabled={lockDocument}
+              disabled={lockDocument || readOnly}
               onChange={(e) => {
                 setVatTouched(true);
                 const vat = Number(e.target.value);
@@ -132,15 +138,15 @@ export function SupplierInvoiceForm({
               type="number"
               step="0.01"
               value={v.total}
-              disabled={lockDocument}
+              disabled={lockDocument || readOnly}
               onChange={(e) => {
                 setTotalTouched(true);
                 setV({ ...v, total: Number(e.target.value) });
               }}
             />
           </Field>
-          <Field label="Plaćeno dana" hint="Prazno = nije plaćeno">
-            <Input type="date" value={v.paidDate ?? ''} disabled={rejected} onChange={(e) => setV({ ...v, paidDate: e.target.value || null })} />
+          <Field label="Plaćeno dana" hint={payLocked && !v.paidDate ? 'Plaća se nakon prihvaćanja eRačuna' : 'Prazno = nije plaćeno'}>
+            <Input type="date" value={v.paidDate ?? ''} disabled={rejected || (payLocked && !v.paidDate)} onChange={(e) => setV({ ...v, paidDate: e.target.value || null })} />
           </Field>
           <Field label="Napomena" className="sm:col-span-4">
             <Textarea rows={2} value={v.note ?? ''} onChange={(e) => setV({ ...v, note: e.target.value })} />
@@ -153,14 +159,19 @@ export function SupplierInvoiceForm({
           </p>
           {lockDocument && <p className="mt-1 text-xs text-fg-3">Dobavljač, broj, datum i iznosi eRačuna preuzeti su iz XML-a i ne mijenjaju se.</p>}
         </div>
+        </fieldset>
       </Card>
-      <FormError error={localError ?? error} />
-      <div className="flex justify-end gap-2">
-        <LinkButton href="/nabava/ulazni">Odustani</LinkButton>
-        <Button variant="primary" loading={pending} onClick={submit}>
-          Spremi
-        </Button>
-      </div>
+      {!readOnly && (
+        <>
+          <FormError error={localError ?? error} />
+          <div className="flex justify-end gap-2">
+            <LinkButton href="/nabava/ulazni">Odustani</LinkButton>
+            <Button variant="primary" loading={pending} onClick={submit}>
+              Spremi
+            </Button>
+          </div>
+        </>
+      )}
     </div>
   );
 }

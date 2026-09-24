@@ -146,6 +146,16 @@ test('odbijanje: razlog obvezan, izlazi iz zbrojeva, trošak se briše, ne može
   assert.match(audit.summary, /Neispravan iznos/);
   assert.match(audit.summary, /Poreznoj upravi/);
 
+  // zaprimljeni eRačun se plaća tek nakon prihvaćanja (posrednik „plaćen" prije „prihvaćen" odbija)
+  await assert.rejects(markSupplierInvoicesPaid(s.actor, [b.id], '2026-03-05'), /prihvatite/);
+  await assert.rejects(
+    transaction((tx) => saveSupplierInvoice(tx, s.actor, b.id, { supplierId: b.supplierId, number: b.number, issueDate: '2026-01-01', netAmount: 1, vatAmount: 0, paidDate: '2026-03-05', book: false })),
+    /prihvatite/,
+  );
+  // prihvaćanje bez knjiženja troška (roba već knjižena primkom)
+  await acceptSupplierInvoice(s.actor, b.id, { book: false });
+  assert.equal(await db.expense.count({ where: { supplierInvoiceId: b.id } }), 0);
+
   // plaćanje eRačuna: status „plaćen" posredniku (demo), bez upozorenja
   const paid = await markSupplierInvoicesPaid(s.actor, [b.id], '2026-03-05');
   assert.equal(paid.warning, null);
@@ -164,6 +174,16 @@ test('eRačun: dobavljač, broj i iznosi se ne mijenjaju obrascem; ručni račun
   );
   const x = await db.supplierInvoice.findUniqueOrThrow({ where: { id: a.id } });
   assert.equal(x.number, 'R-2041/1/1');
+
+  // eRačun s istim brojem kao ručno upisan („Mogući duplikat") i dalje se sprema iz obrasca; ručni duplikat se odbija
+  await db.supplierInvoice.create({ data: { companyId: s.companyId, internalNo: 'URA-RUCNI-1', supplierId: x.supplierId, number: 'R-2041/1/1', issueDate: new Date('2026-02-01') } });
+  await transaction((tx) =>
+    saveSupplierInvoice(tx, s.actor, a.id, { supplierId: x.supplierId, number: 'R-2041/1/1', issueDate: '2026-01-01', netAmount: 1, vatAmount: 1, category: 'Oprema', note: 'Mogući duplikat', book: false }),
+  );
+  await assert.rejects(
+    transaction((tx) => saveSupplierInvoice(tx, s.actor, null, { supplierId: x.supplierId, number: 'R-2041/1/1', issueDate: '2026-02-01', netAmount: 10, vatAmount: 0, book: false })),
+    /već je upisan/,
+  );
   assert.equal(Number(x.total), 925);
   assert.equal(x.category, 'Oprema');
 

@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Check, CloudDownload, Wallet, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
-import { Field, Textarea } from '@/components/ui/field';
+import { Checkbox, Field, Textarea } from '@/components/ui/field';
 import { Notice } from '@/components/ui/misc';
 import { ActionButton, FormError, useAction, type ServerAction } from '@/components/ui/action';
 import { useToast } from '@/components/ui/toast';
@@ -40,6 +40,7 @@ export function SupplierInvoiceDecision({
   id,
   eInvoice,
   canAccept,
+  recentReceipts,
   canReject,
   canPay,
   accept,
@@ -49,9 +50,11 @@ export function SupplierInvoiceDecision({
   id: string;
   eInvoice: boolean;
   canAccept: boolean;
+  /** Broj primki istog dobavljača u 90 dana prije računa — tada je roba vjerojatno već knjižena primkom. */
+  recentReceipts: number;
   canReject: boolean;
   canPay: boolean;
-  accept: ServerAction<{ id: string }, unknown>;
+  accept: ServerAction<{ id: string; book: boolean }, unknown>;
   reject: ServerAction<{ id: string; reason: string }, unknown>;
   paidToday: ServerAction<{ id: string }, unknown>;
 }) {
@@ -60,25 +63,17 @@ export function SupplierInvoiceDecision({
   const [reason, setReason] = useState('');
   const rej = useAction(reject);
   const trimmed = reason.trim();
+  const [accepting, setAccepting] = useState(false);
+  // račun robe već zaprimljene primkom ne knjiži se ponovno (primka je knjižila „Nabava robe")
+  const [book, setBook] = useState(recentReceipts === 0);
+  const acc = useAction(accept);
 
   return (
     <>
       {canAccept && (
-        <ActionButton
-          action={accept}
-          input={{ id }}
-          variant="primary"
-          icon={<Check className="size-4" />}
-          confirmTitle="Prihvatiti račun?"
-          confirm={
-            eInvoice
-              ? 'Prihvaćanje se javlja posredniku (poslovni status „prihvaćen"), a račun se knjiži kao trošak.'
-              : 'Račun se označava prihvaćenim i knjiži kao trošak.'
-          }
-          confirmLabel="Prihvati"
-        >
+        <Button variant="primary" icon={<Check className="size-4" />} onClick={() => setAccepting(true)}>
           Prihvati
-        </ActionButton>
+        </Button>
       )}
       {canReject && (
         <Button variant="danger" icon={<X className="size-4" />} onClick={() => setOpen(true)}>
@@ -96,6 +91,43 @@ export function SupplierInvoiceDecision({
           Označi plaćeno
         </ActionButton>
       )}
+
+      <Dialog
+        open={accepting}
+        onClose={() => setAccepting(false)}
+        title="Prihvatiti račun?"
+        size="sm"
+        footer={
+          <>
+            <Button onClick={() => setAccepting(false)}>Odustani</Button>
+            <Button
+              variant="primary"
+              loading={acc.pending}
+              onClick={async () => {
+                const r = await acc.run({ id, book });
+                if (r.ok) setAccepting(false);
+              }}
+            >
+              Prihvati
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-base text-fg-2">
+            {eInvoice ? 'Prihvaćanje se javlja posredniku (poslovni status „prihvaćen").' : 'Račun se označava prihvaćenim.'}
+          </p>
+          <div>
+            <Checkbox label="Knjiži kao trošak" checked={book} onChange={(e) => setBook(e.target.checked)} />
+            <p className="mt-1 text-xs text-fg-3">
+              {recentReceipts > 0
+                ? `Dobavljač ima ${recentReceipts} ${recentReceipts === 1 ? 'primku' : 'primki'} u 90 dana prije računa — roba zaprimljena primkom već je knjižena kao trošak „Nabava robe". Uključite samo ako račun nije za tu robu (npr. usluga).`
+                : 'Za račun robe koja je zaprimljena primkom trošak je već knjižen primkom — tada isključite da se trošak ne zbroji dvaput.'}
+            </p>
+          </div>
+          <FormError error={acc.error} />
+        </div>
+      </Dialog>
 
       <Dialog
         open={open}

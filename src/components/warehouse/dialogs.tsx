@@ -234,7 +234,8 @@ export function TransferDialog({ warehouses, count, ...base }: Base & { warehous
 export function WriteOffDialog({ meta, ...base }: Base & { meta: SelectedMeta }) {
   const [reason, setReason] = useState(WRITE_OFF_REASONS[0]);
   const [note, setNote] = useState('');
-  const [book, setBook] = useState(true);
+  // primka je nabavnu vrijednost već knjižila kao trošak — otpis je po zadanom ne knjiži ponovno
+  const [book, setBook] = useState(false);
   const [date, setDate] = useState(today());
   return (
     <ActionDialog
@@ -259,7 +260,10 @@ export function WriteOffDialog({ meta, ...base }: Base & { meta: SelectedMeta })
       <Field label="Napomena">
         <Textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} />
       </Field>
-      <Checkbox checked={book} onChange={(e) => setBook(e.target.checked)} label={<>Knjiži trošak „Otpis opreme" u iznosu nabavne vrijednosti ({eur(meta.cost)})</>} />
+      <div>
+        <Checkbox checked={book} onChange={(e) => setBook(e.target.checked)} label={<>Knjiži trošak „Otpis opreme" u iznosu nabavne vrijednosti ({eur(meta.cost)})</>} />
+        <p className="mt-1 text-xs text-fg-3">Nabavna vrijednost uređaja zaprimljenih primkom već je knjižena kao trošak „Nabava robe" — ponovno knjiženje bi trošak zbrojilo dvaput. Uključite samo za uređaje unesene bez primke (npr. uvoz, početno stanje).</p>
+      </div>
       {meta.onContract > 0 && <Notice tone="warn">{meta.onContract} uređaja je na ugovoru i bit će skinuto s njega.</Notice>}
     </ActionDialog>
   );
@@ -269,6 +273,14 @@ export function BulkEditDialog({ warehouses, models, count, ...base }: Base & { 
   const [on, setOn] = useState<Record<string, boolean>>({});
   const [v, setV] = useState({ warehouseId: '', supplierId: null as string | null, cost: '', modelId: '', note: '' });
   const toggle = (k: string) => setOn((o) => ({ ...o, [k]: !o[k] }));
+  // označeno polje mora imati vrijednost (prazna nabavna cijena ne smije postati 0 na svim uređajima)
+  const missing = on.cost && !v.cost.trim()
+    ? 'Upišite nabavnu cijenu ili odznačite polje.'
+    : on.warehouseId && !v.warehouseId
+      ? 'Odaberite skladište ili odznačite polje.'
+      : on.modelId && !v.modelId
+        ? 'Odaberite model ili odznačite polje.'
+        : null;
   const row = (k: string, label: string, control: ReactNode) => (
     <div className="grid grid-cols-[9rem_1fr] items-center gap-2">
       <Checkbox checked={!!on[k]} onChange={() => toggle(k)} label={label} />
@@ -289,9 +301,10 @@ export function BulkEditDialog({ warehouses, models, count, ...base }: Base & { 
         ...(on.note ? { note: v.note } : {}),
       })}
       confirmLabel="Spremi izmjene"
-      disabled={!Object.values(on).some(Boolean)}
+      disabled={!Object.values(on).some(Boolean) || !!missing}
     >
       <p className="text-sm text-fg-3">Označite polja koja želite promijeniti na svim odabranim uređajima.</p>
+      {missing && <p className="text-sm text-warn">{missing}</p>}
       {row('warehouseId', 'Skladište', <Select value={v.warehouseId} onChange={(e) => setV({ ...v, warehouseId: e.target.value })} placeholder="Odaberite…" options={warehouses} />)}
       {row('supplierId', 'Dobavljač', <PartnerPicker value={v.supplierId} onChange={(x) => setV({ ...v, supplierId: x })} role="supplier" placeholder="— bez dobavljača —" />)}
       {row('cost', 'Nabavna cijena', <Input inputMode="decimal" value={v.cost} onChange={(e) => setV({ ...v, cost: e.target.value })} placeholder="0,00" />)}

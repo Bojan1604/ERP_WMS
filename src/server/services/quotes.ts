@@ -8,7 +8,7 @@ import { createDraft, type LineInput } from './invoices';
 import type { Actor } from './items';
 import { documentTotals } from '@/domain/invoice';
 import { customerVat } from '@/domain/tax';
-import { addDays, fromISO, today } from '@/domain/dates';
+import { fromISO, today } from '@/domain/dates';
 import { num } from '@/domain/money';
 
 export interface QuoteLineInput {
@@ -200,13 +200,14 @@ export async function convertQuote(tx: Tx, actor: Actor, id: string, picks: Reco
   }
 
   const vat = customerVat(q.partner.country, { vatRegistered: q.company.vatRegistered, vatRate: num(q.company.vatRate), country: q.company.country });
-  const date = today();
   const inv = await createDraft(tx, actor, {
     type: 'SALE',
     partnerId: q.partnerId,
-    date,
-    dueDate: addDays(date, q.partner.paymentTermDays ?? q.company.paymentTermDays),
-    vatRate: num(q.vatRate),
+    date: today(),
+    // dospijeće se ne upisuje — izdavanje ga računa iz roka plaćanja i stvarnog datuma računa
+    dueDate: null,
+    // kategorija prema kupcu; stopa iz ponude samo uz standardnu kategoriju (S), inače 0 %
+    vatRate: vat.category === 'S' ? num(q.vatRate) : 0,
     taxCategory: vat.category,
     taxExemptReason: vat.exemptReason ?? null,
     discountPct: num(q.discountPct),

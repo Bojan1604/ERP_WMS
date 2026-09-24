@@ -7,6 +7,7 @@ import { AuthError, DomainError, assert } from '../errors';
 import type { SessionUser } from '../auth';
 import { bumpConfig, deviceProfile } from './config';
 import { assertOrgInScope, canEditShared, deviceWhere, orgWhere, sharedWhere, type MdmScope } from './scope';
+import { stable } from './stable';
 import { mergeConfig, type DeviceOverrides, type ProfileApp, type ProfileSettings, type WifiNetwork } from '@/domain/mdm';
 
 /**
@@ -140,8 +141,6 @@ export function normalizeApps(apps: ConfigInput['apps']): ProfileApp[] {
   });
 }
 
-const stable = (v: unknown): string =>
-  JSON.stringify(v, (_k, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, x[k]])) : x));
 const same = (a: unknown, b: unknown) => stable(a ?? null) === stable(b ?? null);
 const appKey = (a: ProfileApp) => ({ versionId: a.versionId ?? null, config: a.config ?? {}, hidden: !!a.hidden, autoStart: !!a.autoStart, remove: !!a.remove });
 
@@ -182,7 +181,7 @@ export function diffOverrides(profile: { settings: ProfileSettings; apps: Profil
 // ---------------------------------------------------------------- provjere nad bazom
 
 /** Organizacije koje smiju koristiti resurs organizacije `orgId`: ona i njeni klijenti. */
-async function orgUsable(tx: Tx, resourceOrgId: string | null, targetOrgId: string | null) {
+export async function orgUsable(tx: Tx, resourceOrgId: string | null, targetOrgId: string | null) {
   if (resourceOrgId === null) return true;
   if (!targetOrgId) return false;
   if (resourceOrgId === targetOrgId) return true;

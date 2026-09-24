@@ -2,7 +2,7 @@ import 'server-only';
 import type { OrderStatus, Prisma } from '@prisma/client';
 import { db } from '../db';
 import { num, r2 } from '@/domain/money';
-import { fromISO } from '@/domain/dates';
+import { addDays, fromISO, toISO } from '@/domain/dates';
 
 type Params = Record<string, string | string[] | undefined>;
 const str = (v: string | string[] | undefined) => (typeof v === 'string' && v.trim() ? v.trim() : null);
@@ -291,6 +291,15 @@ export async function getSupplierInvoice(companyId: string, id: string) {
     select: { id: true, fileName: true, mime: true, size: true },
   });
   return { ...si, attachments };
+}
+
+/**
+ * Primke dobavljača u 90 dana prije računa: ako ih ima, roba s ulaznog računa je
+ * vjerojatno već knjižena kao trošak primkom („Nabava robe").
+ */
+export async function recentSupplierReceipts(companyId: string, supplierId: string, invoiceDate: Date) {
+  const from = fromISO(addDays(toISO(invoiceDate), -90));
+  return db.goodsReceipt.count({ where: { companyId, supplierId, status: 'POSTED', date: { gte: from } } });
 }
 
 /** Dobavljači za odabir: partneri označeni kao dobavljači (+ trenutni, ako to više nije). */

@@ -104,8 +104,11 @@ export async function saveOccurrence(tx: Tx, actor: Actor, id: string, period: s
 export async function setExpensesPaid(tx: Tx, actor: Actor, ids: string[], paid: boolean) {
   const rows = await tx.expense.findMany({ where: { id: { in: ids }, companyId: actor.companyId }, select: { id: true, source: true } });
   assert(rows.length === ids.length, 'Neki troškovi ne postoje.');
-  assert(rows.every((r) => r.source === 'MANUAL'), 'Plaćanje troškova iz dokumenata mijenja se na dokumentu (npr. ulaznom računu).');
-  await tx.expense.updateMany({ where: { id: { in: ids } }, data: { paid, paidDate: paid ? fromISO(today()) : null } });
+  // plaćenost ulaznog računa živi na računu (i javlja se posredniku); primka i otpis nemaju svoj dokument plaćanja
+  assert(!rows.some((r) => r.source === 'SUPPLIER_INVOICE'), 'Plaćanje ulaznog računa označava se na ulaznom računu (Nabava → Ulazni računi).');
+  // već plaćenima se ne mijenja datum plaćanja
+  if (paid) await tx.expense.updateMany({ where: { id: { in: ids }, companyId: actor.companyId, paid: false }, data: { paid: true, paidDate: fromISO(today()) } });
+  else await tx.expense.updateMany({ where: { id: { in: ids }, companyId: actor.companyId }, data: { paid: false, paidDate: null } });
   await audit(tx, actor, { entity: 'expense', action: paid ? 'paid' : 'unpaid', summary: `${ids.length} troškova označeno kao ${paid ? 'plaćeno' : 'neplaćeno'}` });
 }
 
@@ -168,6 +171,11 @@ export async function saveSupplierInvoice(tx: Tx, actor: Actor, id: string | nul
       total: Number(old.total),
     };
   }
+  // eRačun se plaća tek nakon prihvaćanja: posrednik status „plaćen" prije „prihvaćen" odbija, a plaćeni se više ne može odbiti
+  assert(
+    !(old?.source === 'EINVOICE' && old.status === 'RECEIVED' && !old.paidDate && input.paidDate),
+    'Zaprimljeni eRačun prvo prihvatite, pa ga onda označite plaćenim.',
+  );
   if (old?.status === 'REJECTED') {
     assert(!input.paidDate, 'Odbijeni račun se ne može označiti plaćenim.');
     assert(!input.book, 'Odbijeni račun se ne knjiži kao trošak.');
@@ -176,11 +184,14 @@ export async function saveSupplierInvoice(tx: Tx, actor: Actor, id: string | nul
   assert(supplier, 'Dobavljač ne postoji.');
   const number = input.number.trim();
   assert(number, 'Broj računa dobavljača je obavezan.');
-  const dup = await tx.supplierInvoice.findFirst({
-    where: { companyId: actor.companyId, supplierId: supplier.id, number, ...(id ? { id: { not: id } } : {}) },
-    select: { internalNo: true },
-  });
-  assert(!dup, `Račun ${number} tog dobavljača već je upisan (${dup?.internalNo}).`);
+  // eRačun je upisan preuzimanjem i može biti označen „Mogući duplikat" — broj mu se ne mijenja, pa ga provjera ne smije blokirati
+  if (old?.source !== 'EINVOICE') {
+    const dup = await tx.supplierInvoice.findFirst({
+      where: { companyId: actor.companyId, supplierId: supplier.id, number, ...(id ? { id: { not: id } } : {}) },
+      select: { internalNo: true },
+    });
+    assert(!dup, `Račun ${number} tog dobavljača već je upisan (${dup?.internalNo}).`);
+  }
   const net = r2(input.netAmount);
   const vat = r2(input.vatAmount);
   const total = input.total ? r2(input.total) : r2(net + vat);
@@ -240,10 +251,12 @@ export async function saveSupplierInvoice(tx: Tx, actor: Actor, id: string | nul
 }
 
 export async function setSupplierInvoicesPaid(tx: Tx, actor: Actor, ids: string[], paidDate: string | null) {
-  const found = await tx.supplierInvoice.findMany({ where: { id: { in: ids }, companyId: actor.companyId }, select: { id: true, status: true, internalNo: true } });
+  const found = await tx.supplierInvoice.findMany({ where: { id: { in: ids }, companyId: actor.companyId }, select: { id: true, status: true, source: true, internalNo: true } });
   assert(found.length === ids.length, 'Neki računi ne postoje.');
   const rejected = found.filter((f) => f.status === 'REJECTED');
   assert(!paidDate || !rejected.length, `Odbijeni računi se ne mogu označiti plaćenima: ${rejected.map((r) => r.internalNo).slice(0, 10).join(', ')}`);
+  const pending = found.filter((f) => f.source === 'EINVOICE' && f.status === 'RECEIVED');
+  assert(!paidDate || !pending.length, `Zaprimljene eRačune prvo prihvatite, pa ih onda označite plaćenima: ${pending.map((r) => r.internalNo).slice(0, 10).join(', ')}`);
   const d = paidDate ? fromISO(paidDate) : null;
   await tx.supplierInvoice.updateMany({ where: { id: { in: ids }, companyId: actor.companyId }, data: { paidDate: d } });
   await tx.expense.updateMany({ where: { supplierInvoiceId: { in: ids }, companyId: actor.companyId }, data: { paid: !!d, paidDate: d } });

@@ -52,7 +52,10 @@ export function toError(e: unknown): { ok: false; error: string; fields?: Record
     const fields: Record<string, string> = {};
     for (const i of e.issues) fields[i.path.join('.')] ??= i.message;
     const first = e.issues[0];
-    return { ok: false, error: first ? `${first.path.join('.') || 'Podaci'}: ${first.message}` : 'Podaci nisu ispravni.', fields };
+    // vlastite (hrvatske) poruke idu same; zodove zadane (engleske) samo uz naziv polja
+    const generic = first && /^(Required|Expected|Invalid|String must|Number must|Array must|Too )/.test(first.message);
+    const error = !first ? 'Podaci nisu ispravni.' : generic ? `Podaci nisu ispravni (${first.path.join('.') || 'obrazac'}).` : first.message;
+    return { ok: false, error, fields };
   }
   if (e instanceof Prisma.PrismaClientKnownRequestError) {
     if (e.code === 'P2002') return { ok: false, error: 'Zapis s istom vrijednošću već postoji.' };

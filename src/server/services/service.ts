@@ -5,7 +5,9 @@ import { DomainError, assert } from '../errors';
 import { nextDocNumber } from '../numbering';
 import { audit } from '../audit';
 import { changeItemStatus, itemEvents, type Actor } from './items';
-import { fromISO, today } from '@/domain/dates';
+import { coveredPeriods } from './invoices';
+import { mergePeriods, takeBackReturned } from './contract-items';
+import { fromISO, toISO, today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import {
   CLOSED_SERVICE_STATUSES,
@@ -45,18 +47,25 @@ const itemSelect = {
   issueDate: true,
   warrantyStart: true,
   warrantyMonths: true,
-  contractItem: { select: { id: true, contractId: true, monthly: true, plan: true, skipped: true, paused: true, status: true } },
+  contractItem: { select: { id: true, contractId: true, monthly: true, plan: true, skipped: true, paused: true, status: true, pausedSince: true } },
 } satisfies Prisma.ItemSelect;
 
 type ServiceItem = Prisma.ItemGetPayload<{ select: typeof itemSelect }>;
+type ServiceContractItem = NonNullable<ServiceItem['contractItem']>;
+/** Uređaj za snimku stanja — početak pauze nije obavezan (stranica naloga ga ne učitava). */
+type SnapshotItem = Omit<ServiceItem, 'contractItem'> & {
+  contractItem: (Omit<ServiceContractItem, 'pausedSince'> & { pausedSince?: Date | null }) | null;
+};
 
-function snapshot(item: ServiceItem): PrevSnapshot {
+function snapshot(item: SnapshotItem): PrevSnapshot {
   const ci = item.contractItem;
   return {
     state: item.state,
     partnerId: item.partnerId,
     warehouseId: item.warehouseId,
-    contract: ci ? { contractId: ci.contractId, monthly: num(ci.monthly), plan: ci.plan, skipped: ci.skipped, paused: ci.paused, status: ci.status } : null,
+    contract: ci
+      ? { contractId: ci.contractId, monthly: num(ci.monthly), plan: ci.plan, skipped: ci.skipped, paused: ci.paused, status: ci.status, pausedSince: ci.pausedSince ? toISO(ci.pausedSince) : null }
+      : null,
   };
 }
 
@@ -64,7 +73,7 @@ function snapshot(item: ServiceItem): PrevSnapshot {
  * Stanje uređaja prije servisa: iz zapisa pri otvaranju naloga, a za naloge
  * koje je otvorila promjena statusa — iz povijesti uređaja (skidanje s ugovora).
  */
-export async function previousState(tx: Tx, order: { itemId: string | null; createdAt: Date; timeline: Prisma.JsonValue }, item: ServiceItem | null) {
+export async function previousState(tx: Tx, order: { itemId: string | null; createdAt: Date; timeline: Prisma.JsonValue }, item: SnapshotItem | null) {
   const saved = timelineOf(order.timeline).find((t) => t.prev)?.prev;
   if (saved) return saved;
   if (!item) return null;
@@ -184,6 +193,14 @@ export async function changeServiceStatus(
   assert(status !== 'REPLACED', 'Status „Zamijenjeno" postavlja se odabirom zamjenskog uređaja.');
   assert(o.status !== 'REPLACED', 'Nalog je zatvoren zamjenom uređaja.');
   assert(status !== o.status, 'Nalog je već u tom statusu.');
+  // ponovno otvaranje zatvorenog naloga: uređaj smije imati samo jedan otvoren nalog
+  if (o.itemId && isClosing(o.status) && !isClosing(status)) {
+    const other = await tx.serviceOrder.findFirst({
+      where: { companyId: actor.companyId, itemId: o.itemId, status: { in: OPEN }, id: { not: o.id } },
+      select: { number: true },
+    });
+    assert(!other, `Uređaj ${o.serial ?? ''} već ima otvoren servisni nalog ${other?.number} — nalog se ne može ponovno otvoriti.`);
+  }
   const t = today();
   await tx.serviceOrder.update({
     where: { id },
@@ -222,6 +239,8 @@ export async function returnDevice(tx: Tx, actor: Actor, id: string, target: Ret
   let note: string;
 
   if (target === 'SOLD') {
+    // „prodan" samo ako je uređaj prije servisa bio prodan — najam ili skladište ne smiju postati prodaja
+    assert(prev?.state === 'SOLD', 'Uređaj prije servisa nije bio prodan — vratite ga u najam ili na skladište.');
     const partnerId = item.partnerId ?? prev?.partnerId;
     assert(partnerId, 'Uređaj nema kupca — vratite ga na skladište.');
     await changeItemStatus(tx, actor, [item.id], {
@@ -237,15 +256,18 @@ export async function returnDevice(tx: Tx, actor: Actor, id: string, target: Ret
       assert(c, 'Nije poznat ugovor s kojeg je uređaj skinut — vratite ga na skladište pa ga dodajte na ugovor.');
       const contract = await tx.contract.findFirst({ where: { id: c.contractId, companyId: actor.companyId }, select: { id: true, status: true } });
       assert(contract && (contract.status === 'ACTIVE' || contract.status === 'PAUSED'), 'Ugovor više nije aktivan — vratite uređaj na skladište.');
+      // snimka skidanja pri odlasku u servis više ne treba — uređaj nastavlja na istom retku
+      const back = await takeBackReturned(tx, contract.id, item.id, o.createdAt);
       await tx.contractItem.create({
         data: {
           contractId: contract.id,
           itemId: item.id,
           monthly: c.monthly,
           plan: (c.plan ?? []) as Prisma.InputJsonValue,
-          skipped: c.skipped ?? [],
-          paused: c.paused ?? [],
+          skipped: mergePeriods(c.skipped, back.skipped),
+          paused: mergePeriods(c.paused, back.paused),
           status: (c.status as ContractStatus | null) ?? null,
+          pausedSince: c.status === 'PAUSED' && c.pausedSince ? fromISO(c.pausedSince) : null,
         },
       });
       contractId = contract.id;
@@ -300,12 +322,19 @@ export async function replaceDevice(
   const partnerId = orig.partnerId ?? prev?.partnerId ?? o.partnerId;
   assert(partnerId, 'Izvorni uređaj nije kod klijenta — zamjena nije potrebna.');
   const contract = orig.contractItem
-    ? { contractId: orig.contractItem.contractId, monthly: num(orig.contractItem.monthly), plan: orig.contractItem.plan, skipped: orig.contractItem.skipped, paused: orig.contractItem.paused, status: orig.contractItem.status }
+    ? snapshot(orig).contract!
     : (prev?.contract ?? null);
   // bez poznatog ugovora uređaj iz najma ne smije postati „prodan"
   assert(contract || prev?.state !== 'RENTED', 'Uređaj je bio u najmu, ali ugovor nije poznat — zamjenski uređaj dodajte na ugovor ručno (Najam → Ugovori).');
   const kind = contract ? 'RENTED' : 'SOLD';
   const ref = { refType: 'service', refId: id };
+  const c = contract
+    ? await tx.contract.findFirst({ where: { id: contract.contractId, companyId: actor.companyId }, select: { id: true, number: true, status: true } })
+    : null;
+  if (contract) {
+    if (!c) throw new DomainError('Ugovor izvornog uređaja ne postoji.');
+    assert(c.status === 'ACTIVE' || c.status === 'PAUSED', `Ugovor ${c.number} više nije aktivan — zamjenski uređaj se ne može staviti u najam.`);
+  }
 
   // 1) zamjenski uređaj preuzima kupca, status i jamstvo izvornog
   await changeItemStatus(tx, actor, [repl.id], {
@@ -322,21 +351,30 @@ export async function replaceDevice(
   });
 
   // 2) mjesto na ugovoru prelazi na zamjenski (prije promjene statusa izvornog)
-  if (contract) {
-    const c = await tx.contract.findFirst({ where: { id: contract.contractId, companyId: actor.companyId }, select: { id: true, number: true } });
-    if (!c) throw new DomainError('Ugovor izvornog uređaja ne postoji.');
+  if (contract && c) {
+    // Pokrivenost naplate vodi se po uređaju (`itemId|razdoblje`). Razdoblja već
+    // fakturirana za izvorni uređaj zamjenski preuzima kao „izdana" (skipped) —
+    // inače bi se ponovno pojavila kao dospjela. Plan, cijena i pauze ostaju isti,
+    // pa nema ni dvostruke naplate ni praznine (nefakturirano ostaje dospjelo).
+    const covered = (await coveredPeriods(tx, [c.id])).get(c.id) ?? new Set<string>();
+    const billed = [...covered].filter((k) => k.startsWith(`${orig.id}|`)).map((k) => k.slice(orig.id.length + 1));
+    const skipped = [...new Set([...(contract.skipped ?? []), ...billed])].sort();
     if (orig.contractItem) {
-      await tx.contractItem.update({ where: { id: orig.contractItem.id }, data: { itemId: repl.id } });
+      await tx.contractItem.update({ where: { id: orig.contractItem.id }, data: { itemId: repl.id, skipped } });
     } else {
+      // izvorni je pri odlasku u servis skinut s ugovora (snimka za zaostale rate): njegova
+      // nefakturirana razdoblja sad preuzima zamjenski — snimka se briše, inače bi se rata tražila dvaput
+      const back = await takeBackReturned(tx, c.id, orig.id, o.createdAt);
       await tx.contractItem.create({
         data: {
           contractId: c.id,
           itemId: repl.id,
           monthly: contract.monthly,
           plan: (contract.plan ?? []) as Prisma.InputJsonValue,
-          skipped: contract.skipped ?? [],
-          paused: contract.paused ?? [],
+          skipped: mergePeriods(skipped, back.skipped),
+          paused: mergePeriods(contract.paused, back.paused),
           status: (contract.status as ContractStatus | null) ?? null,
+          pausedSince: contract.status === 'PAUSED' && contract.pausedSince ? fromISO(contract.pausedSince) : null,
         },
       });
     }

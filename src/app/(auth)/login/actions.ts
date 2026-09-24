@@ -26,7 +26,19 @@ export async function login(_: unknown, fd: FormData): Promise<{ error?: string 
   attempts.delete(email);
   await createSession(user.id);
   await db.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
-  redirect(next && next.startsWith('/') && !next.startsWith('//') ? next : '/');
+  redirect(safeNext(next));
+}
+
+/** Samo relativna putanja iste domene — sprječava preusmjeravanje na tuđu stranicu (`//evil`, `/\\evil`). */
+function safeNext(next: string | undefined): string {
+  if (!next || !next.startsWith('/') || next.startsWith('//') || next.includes('\\')) return '/';
+  try {
+    const u = new URL(next, 'http://x');
+    if (u.origin !== 'http://x') return '/';
+    return u.pathname + u.search + u.hash;
+  } catch {
+    return '/';
+  }
 }
 
 export async function logout() {

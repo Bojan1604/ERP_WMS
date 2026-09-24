@@ -121,14 +121,15 @@ export const bulkEditAction = action(
     itemIds: zIds,
     warehouseId: optField(zId),
     supplierId: optField(zOptId),
-    cost: optField(zMoney),
+    // prazno polje je null (ne 0) — servis ga odbija
+    cost: optField(zOptMoney),
     modelId: optField(zId),
     note: optField(zOptText),
   }),
   async (input, user) =>
     transaction(async (tx) => {
       const r = await bulkEdit(tx, user, input);
-      await audit(tx, user, { entity: 'item', action: 'bulkUpdate', summary: `Grupna izmjena (${kom(r.count)}): ${r.summary}`, diff: { itemIds: input.itemIds } });
+      await audit(tx, user, { entity: 'item', action: 'bulkUpdate', summary: `Grupna izmjena (${kom(r.count)}): ${r.summary}`, diff: { itemIds: input.itemIds, transferIds: r.transferIds } });
       return { message: `Izmijenjeno ${kom(r.count)}.` };
     }),
 );
@@ -163,6 +164,14 @@ export const updateItemAction = action(
   async ({ id, ...input }, user) =>
     transaction(async (tx) => {
       const r = await updateItem(tx, user, id, input);
+      if (r.transfer) {
+        await audit(tx, user, {
+          entity: 'transfer',
+          entityId: r.transfer.transferIds[0],
+          action: 'create',
+          summary: `Međuskladišnica ${r.transfer.numbers.join(', ')} → ${r.transfer.to} (uređaj ${input.serial})`,
+        });
+      }
       if (r.changed.length) {
         await audit(tx, user, {
           entity: 'item',

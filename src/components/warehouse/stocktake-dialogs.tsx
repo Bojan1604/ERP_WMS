@@ -74,7 +74,8 @@ export function CloseStocktakeButton({
   const [move, setMove] = useState(false);
   const [missingAction, setMissingAction] = useState<'none' | 'status' | 'writeOff'>('none');
   const [statusId, setStatusId] = useState('');
-  const [book, setBook] = useState(true);
+  // primka je nabavnu vrijednost već knjižila kao trošak — otpis je po zadanom ne knjiži ponovno
+  const [book, setBook] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const { run, pending, error } = useAction(closeStocktakeAction);
   const changes = missingAction !== 'none' && counts.missing > 0;
@@ -141,7 +142,10 @@ export function CloseStocktakeButton({
                 </Field>
               )}
               {missingAction === 'writeOff' && (
-                <Checkbox checked={book} onChange={(e) => setBook(e.target.checked)} label={<>Knjiži trošak „Otpis opreme" u iznosu nabavne vrijednosti</>} />
+                <div>
+                  <Checkbox checked={book} onChange={(e) => setBook(e.target.checked)} label={<>Knjiži trošak „Otpis opreme" u iznosu nabavne vrijednosti</>} />
+                  <p className="mt-1 text-xs text-fg-3">Nabavna vrijednost uređaja zaprimljenih primkom već je knjižena kao trošak „Nabava robe" — ponovno knjiženje bi trošak zbrojilo dvaput. Uključite samo za uređaje unesene bez primke (npr. uvoz, početno stanje).</p>
+                </div>
               )}
               {changes && (
                 <Checkbox

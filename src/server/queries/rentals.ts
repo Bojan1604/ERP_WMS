@@ -2,7 +2,7 @@ import 'server-only';
 import type { Contract, Prisma, StatusKind } from '@prisma/client';
 import { db } from '../db';
 import { coveredPeriods } from '../services/invoices';
-import { pendingForCompany, toDevice, toTerms } from '../services/rentals';
+import { pendingForCompany, returnedWhere, toDevice, toReturnedDevice, toTerms } from '../services/rentals';
 import { nextBillingDate, pendingInstallments, type BillingCode, type ContractStatusCode } from '@/domain/billing';
 import { suggestedRent } from '@/domain/pricing';
 import { num } from '@/domain/money';
@@ -50,20 +50,20 @@ export async function listContracts(companyId: string, params: Params, page: { s
     db.contractItem.aggregate({ where: { contract: where }, _sum: { monthly: true }, _count: true }),
   ]);
   const ids = contracts.map((c) => c.id);
-  const activeIds = contracts.filter((c) => c.status === 'ACTIVE').map((c) => c.id);
-  const [sums, items, covered] = await Promise.all([
+  // rate za izdati imaju aktivni ugovori i oni zatvoreni u programu (zaostale rate)
+  const activeIds = contracts.filter((c) => c.status === 'ACTIVE' || (c.status !== 'PAUSED' && c.closedAt)).map((c) => c.id);
+  const now = today();
+  const [sums, items, returned, covered] = await Promise.all([
     db.contractItem.groupBy({ by: ['contractId'], where: { contractId: { in: ids } }, _sum: { monthly: true }, _count: { _all: true } }),
     db.contractItem.findMany({ where: { contractId: { in: activeIds } } }),
+    db.returnedContractItem.findMany({ where: { contractId: { in: activeIds }, ...returnedWhere(now) } }),
     coveredPeriods(db, activeIds),
   ]);
   const sumBy = new Map(sums.map((s) => [s.contractId, { monthly: num(s._sum.monthly), count: s._count._all }]));
   const itemsBy = new Map<string, ReturnType<typeof toDevice>[]>();
-  for (const ci of items) {
-    const list = itemsBy.get(ci.contractId) ?? [];
-    list.push(toDevice(ci));
-    itemsBy.set(ci.contractId, list);
-  }
-  const now = today();
+  const push = (contractId: string, d: ReturnType<typeof toDevice>) => itemsBy.set(contractId, [...(itemsBy.get(contractId) ?? []), d]);
+  for (const ci of items) push(ci.contractId, toDevice(ci));
+  for (const r of returned) push(r.contractId, toReturnedDevice(r));
   const rows = contracts.map((c) => {
     const terms = toTerms(c);
     const devices = itemsBy.get(c.id) ?? [];
@@ -81,7 +81,7 @@ export async function listContracts(companyId: string, params: Params, page: { s
       devices: sumBy.get(c.id)?.count ?? 0,
       monthly: sumBy.get(c.id)?.monthly ?? 0,
       nextBilling: c.status === 'ACTIVE' ? nextBillingDate(terms, devices, now) : null,
-      pending: c.status === 'ACTIVE' ? pendingInstallments(terms, devices, covered.get(c.id) ?? new Set(), now).length : 0,
+      pending: activeIds.includes(c.id) ? pendingInstallments(terms, devices, covered.get(c.id) ?? new Set(), now).length : 0,
     };
   });
   return { rows, total, summary: { devices: totals._count, monthly: num(totals._sum.monthly) } };
@@ -116,11 +116,19 @@ export async function contractItems(contractId: string) {
   });
 }
 
-/** Rate za izdati jednog ugovora (i za isključenog partnera) + postojeći nacrti. */
+/**
+ * Rate za izdati jednog ugovora (i za isključenog partnera) + postojeći nacrti.
+ * Uz uređaje na ugovoru gledaju se i skinuti (zaostale rate do dana skidanja).
+ */
 export async function contractPending(c: Contract, devices: ReturnType<typeof toDevice>[]) {
-  if (c.status !== 'ACTIVE') return [];
-  const covered = (await coveredPeriods(db, [c.id])).get(c.id) ?? new Set<string>();
-  const rows = pendingInstallments(toTerms(c), devices, covered, today());
+  const now = today();
+  const terms = toTerms(c);
+  if (c.status === 'PAUSED' || (c.status !== 'ACTIVE' && !c.closedAt)) return [];
+  const [covered, returned] = await Promise.all([
+    coveredPeriods(db, [c.id]).then((m) => m.get(c.id) ?? new Set<string>()),
+    db.returnedContractItem.findMany({ where: { contractId: c.id, ...returnedWhere(now) } }),
+  ]);
+  const rows = pendingInstallments(terms, [...devices, ...returned.map(toReturnedDevice)], covered, now);
   const drafts = await draftsFor([c.id]);
   return rows.map((r) => ({
     key: `${c.id}|${r.period}`,

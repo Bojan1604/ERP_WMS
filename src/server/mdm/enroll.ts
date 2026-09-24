@@ -6,6 +6,8 @@ import { AuthError, DomainError, assert } from '../errors';
 import { bumpConfig } from './config';
 import { assertOrgInScope, sharedWhere, type MdmScope } from './scope';
 import { actorOf, requireLevel } from './devices';
+import { orgUsable } from './profiles';
+import { retireDuplicates } from './retire';
 import { isEnrollCode, PLATFORM_LABEL } from '@/domain/mdm';
 
 /**
@@ -42,16 +44,24 @@ export async function enrollByCode(tx: Tx, scope: MdmScope, input: EnrollInput) 
   // uređaj na čekanju nema organizaciju (ili je već dodijeljen organizaciji u opsegu) — kod je dokaz da je korisnik uz uređaj
   const device = await tx.mdmDevice.findFirst({
     where: { companyId: scope.companyId, status: 'PENDING', enrollCode: code },
-    select: { id: true, name: true, platform: true, orgId: true },
+    select: { id: true, name: true, platform: true, orgId: true, profileId: true, hardwareId: true },
     orderBy: { updatedAt: 'desc' },
   });
   if (!device) throw new DomainError('Uređaj s tim kodom ne čeka upis. Provjerite kod na zaslonu uređaja.');
   if (device.orgId && scope.orgIds && !scope.orgIds.includes(device.orgId)) throw new DomainError('Uređaj s tim kodom ne čeka upis. Provjerite kod na zaslonu uređaja.');
 
   if (input.profileId) {
-    const p = await tx.mdmProfile.findFirst({ where: { id: input.profileId, ...sharedWhere(scope) }, select: { platform: true, name: true } });
+    const p = await tx.mdmProfile.findFirst({ where: { id: input.profileId, ...sharedWhere(scope) }, select: { platform: true, name: true, orgId: true } });
     if (!p) throw new AuthError('Profil nije dostupan.', 403);
     assert(p.platform === device.platform, `Profil „${p.name}" nije za ${PLATFORM_LABEL[device.platform]}.`);
+    assert(await orgUsable(tx, p.orgId, input.orgId), `Profil „${p.name}" ne pripada organizaciji ${org.name}.`);
+  }
+  // uređaj na čekanju već dodijeljen drugoj organizaciji: njene izmjene i profil ne prelaze u novu
+  const orgChanged = device.orgId !== input.orgId;
+  let keepProfile = !orgChanged;
+  if (orgChanged && device.profileId && !input.profileId) {
+    const old = await tx.mdmProfile.findUnique({ where: { id: device.profileId }, select: { orgId: true } });
+    keepProfile = !!old && (await orgUsable(tx, old.orgId, input.orgId));
   }
   const name = input.name?.trim() || device.name;
   assert(name.length <= 100, 'Naziv je predug.');
@@ -66,10 +76,18 @@ export async function enrollByCode(tx: Tx, scope: MdmScope, input: EnrollInput) 
       orgId: input.orgId,
       siteId: input.siteId,
       name,
-      ...(input.profileId ? { profileId: input.profileId } : {}),
+      ...(input.profileId ? { profileId: input.profileId } : keepProfile ? {} : { profileId: null }),
+      ...(orgChanged ? { overrides: {} } : {}),
     },
   });
   assert(r.count === 1, 'Uređaj je upravo upisan s drugog mjesta.');
+  // stari upisani zapisi istog uređaja (agent je ponovno instaliran) se odjavljuju
+  await retireDuplicates(
+    tx,
+    { companyId: scope.companyId, hardwareId: device.hardwareId, platform: device.platform, keepId: device.id, orgIds: scope.orgIds },
+    ['ENROLLED', 'PENDING'],
+    'Uređaj je ponovno upisan kao novi zapis.',
+  );
   await bumpConfig(tx, { deviceIds: [device.id] });
   await tx.mdmEvent.create({ data: { deviceId: device.id, type: 'ENROLLED', message: `Upisan: ${org.name}${siteName} (${scope.userName})` } });
   await audit(tx, actorOf(scope), {

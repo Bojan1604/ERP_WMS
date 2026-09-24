@@ -61,6 +61,12 @@ export interface ContractTerms {
   billingMode: BillingModeCode;
   seasonFrom?: number | null;
   seasonTo?: number | null;
+  /**
+   * Datum kad je ugovor raskinut ili označen kao istekao u programu. Tada se
+   * rate do kraja ugovora koje još nisu izdane i dalje traže (naplata unatrag,
+   * zaostale rate). Uvezeni zatvoreni ugovori ga nemaju — za njih se ne traži ništa.
+   */
+  closedAt?: ISODate | null;
 }
 
 export interface PlanPeriodInput {
@@ -81,6 +87,8 @@ export interface ContractDevice {
   skipped?: Period[] | null;
   /** Pauzirana razdoblja: rata se ne naplaćuje (za razliku od `skipped` = izdano izvan programa). */
   paused?: Period[] | null;
+  /** Uređaj skinut s ugovora: zadnji dan u najmu (naplata staje s tim datumom). */
+  endDate?: ISODate | null;
 }
 
 export interface PlanPeriod {
@@ -120,7 +128,15 @@ export function deviceStatus(c: ContractTerms, d: ContractDevice): ContractStatu
   return d.status ?? c.status;
 }
 
-const billable = (s: ContractStatusCode) => s === 'ACTIVE' || s === 'EXPIRED';
+/**
+ * Stvara li uređaj rate: aktivan i istekao da; pauziran ne; raskinut ugovor samo
+ * ako je raskinut u programu i ima kraj (rate do kraja), raskinut uređaj ne.
+ */
+function billable(c: ContractTerms, d: ContractDevice): boolean {
+  const s = deviceStatus(c, d);
+  if (s === 'ACTIVE' || s === 'EXPIRED') return true;
+  return s === 'TERMINATED' && !d.status && Boolean(c.closedAt && c.endDate);
+}
 
 // ---------------------------------------------------------------- plan
 
@@ -152,6 +168,7 @@ export function devicePlan(c: ContractTerms, d: ContractDevice): PlanPeriod[] {
       to = to && to < before ? to : before;
     }
     if (c.endDate && (!to || to > c.endDate)) to = c.endDate;
+    if (d.endDate && (!to || to > d.endDate)) to = d.endDate;
     return { ...p, to };
   })
     // razdoblje koje počinje nakon kraja ugovora (ili sljedećeg razdoblja) ne postoji
@@ -168,7 +185,7 @@ export function deviceCharges(c: ContractTerms, d: ContractDevice, fromPeriod: P
 
 /** Zaduženja prema planu, uključujući pauzirana (za prikaz rasporeda i provjeru pauze). */
 export function scheduledCharges(c: ContractTerms, d: ContractDevice, fromPeriod: Period, toPeriod: Period): Charge[] {
-  if (!billable(deviceStatus(c, d))) return [];
+  if (!billable(c, d)) return [];
   const out: Charge[] = [];
   for (const s of devicePlan(c, d)) {
     const step = billingMonths(s.billing);
@@ -199,7 +216,7 @@ export const deviceChargesInYear = (c: ContractTerms, d: ContractDevice, year: n
 
 /** Je li uređaj u obračunu u razdoblju (neovisno o tome kad se naplaćuje). */
 export function deviceActiveIn(c: ContractTerms, d: ContractDevice, p: Period): PlanPeriod | null {
-  if (!billable(deviceStatus(c, d))) return null;
+  if (!billable(c, d)) return null;
   const first = periodStart(p);
   const last = ymd(Number(p.slice(0, 4)), Number(p.slice(5, 7)), 31);
   for (const s of devicePlan(c, d)) {
@@ -302,18 +319,24 @@ export function pendingInstallments(
   now: ISODate = today(),
   lookbackMonths = 24,
 ): PendingInstallment[] {
-  if (c.status !== 'ACTIVE') return [];
+  // pauziran ugovor ne traži rate; zatvoren (raskinut/istekao u programu) traži zaostale do kraja
+  if (c.status === 'PAUSED') return [];
+  if (c.status !== 'ACTIVE' && !(c.closedAt && c.endDate)) return [];
   const limit = addMonths(now, -lookbackMonths);
   const from = limit.slice(0, 7);
   const to = addMonths(now, 1).slice(0, 7);
   const byPeriod = new Map<Period, PendingInstallment>();
+  // isti uređaj može biti i na ugovoru i među skinutima (vraćen pa ponovno dodan) — rata jednom
+  const seen = new Set<string>();
 
   for (const d of devices) {
     const skipped = new Set(d.skipped ?? []);
     for (const ch of deviceCharges(c, d, from, to)) {
       const due = installmentDate(c, ch.period);
       if (due > now || due < limit) continue;
-      if (skipped.has(ch.period) || covered.has(`${d.itemId}|${ch.period}`)) continue;
+      const key = `${d.itemId}|${ch.period}`;
+      if (skipped.has(ch.period) || covered.has(key) || seen.has(key)) continue;
+      seen.add(key);
       const row = byPeriod.get(ch.period) ?? { period: ch.period, dueDate: due, amount: 0, lines: [] };
       row.lines.push({ ...ch, itemId: d.itemId });
       row.amount = r2(row.amount + ch.amount);
@@ -321,6 +344,25 @@ export function pendingInstallments(
     }
   }
   return [...byPeriod.values()].sort((a, b) => a.period.localeCompare(b.period));
+}
+
+/**
+ * Razdoblja čija je rata pala u pauzu [since, until): kod naplate unaprijed
+ * odlučuje datum rate, a kod naplate unatrag početak razdoblja koje rata pokriva
+ * (usluga pružena prije pauze naplaćuje se i kad rata dospije u pauzi).
+ * Pri nastavku se ta razdoblja upisuju u `paused` uređaja — inače bi se nakon
+ * nastavka sve rate iz pauze naknadno tražile.
+ */
+export function periodsInPause(c: ContractTerms, d: ContractDevice, since: ISODate, until: ISODate): Period[] {
+  if (!since || until <= since) return [];
+  const terms: ContractTerms = { ...c, status: 'ACTIVE' };
+  const dev: ContractDevice = { ...d, status: null, paused: [] };
+  const out: Period[] = [];
+  for (const ch of scheduledCharges(terms, dev, addMonths(since, -1).slice(0, 7), until.slice(0, 7))) {
+    const at = c.billingMode === 'IN_ARREARS' ? periodStart(ch.period) : installmentDate(terms, ch.period);
+    if (at >= since && at < until) out.push(ch.period);
+  }
+  return [...new Set(out)].sort();
 }
 
 /** Sljedeći datum naplate (od danas) — najraniji među uređajima. */
