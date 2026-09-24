@@ -28,12 +28,13 @@ object Forget {
         }
     }
 
-    fun run(ctx: Context) {
-        AgentLog.w("forget", "Uređaj odjavljen (FORGET)")
+    /** FORGET i HTTP 410 (§9): isto čišćenje; agent se više ne javlja dok se ponovno ne postavi. */
+    fun run(ctx: Context, finalStatus: String = "FORGOTTEN") {
+        AgentLog.w("forget", "Uređaj odjavljen ($finalStatus)")
         cleanup(ctx, removeOwner = true)
         val prefs = Prefs(ctx)
         prefs.clearCredentials()
-        prefs.status = "FORGOTTEN"
+        prefs.status = finalStatus
         AgentService.stop(ctx)
     }
 }

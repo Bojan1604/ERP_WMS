@@ -12,12 +12,15 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
-open class HttpException(val code: Int, message: String) : IOException(message)
+open class HttpException(val code: Int, message: String, val errorCode: String? = null, val retryAfterSec: Int? = null) : IOException(message)
 
-/** HTTP 410 — uređaj je umirovljen na poslužitelju: agent staje i briše vjerodajnice. */
-class RetiredException : HttpException(410, "Uređaj je uklonjen iz sustava (410)")
+/** HTTP 410 — uređaj je umirovljen na poslužitelju: agent čisti kao kod FORGET i staje. */
+class RetiredException : HttpException(410, "Uređaj je uklonjen iz sustava (410)", "RETIRED")
 
-/** Klijent za /api/mdm/agent/* preko HttpURLConnection (bez dodatnih biblioteka). */
+/** HTTP 401 — token više ne vrijedi: briše se i agent se ponovno prijavljuje. */
+class UnauthorizedException(msg: String) : HttpException(401, msg, "UNAUTHORIZED")
+
+/** Klijent za agentski API poslužitelja (/api/mdm/agent) preko HttpURLConnection, bez dodatnih biblioteka. */
 class ApiClient(private val server: String, private val token: String?) {
 
     init {
@@ -36,9 +39,10 @@ class ApiClient(private val server: String, private val token: String?) {
     fun upload(kind: String, commandId: String?, file: File, contentType: String, fileName: String): JSONObject {
         val q = "kind=" + URLEncoder.encode(kind, "UTF-8") +
             (commandId?.let { "&commandId=" + URLEncoder.encode(it, "UTF-8") } ?: "") +
-            "&name=" + URLEncoder.encode(fileName, "UTF-8")
+            ""
         val c = open("/api/mdm/agent/upload?$q", "POST", auth = true, readTimeoutMs = 120_000)
         c.setRequestProperty("Content-Type", contentType)
+        c.setRequestProperty("X-File-Name", fileName.take(100))
         c.setRequestProperty("X-Content-SHA256", Hashing.sha256Hex(file))
         c.setFixedLengthStreamingMode(file.length())
         c.doOutput = true
@@ -57,9 +61,13 @@ class ApiClient(private val server: String, private val token: String?) {
         for (attempt in 1..2) {
             val have = if (part.exists()) part.length() else 0L
             val c = openUrl(url, "GET", auth = true, readTimeoutMs = 120_000)
-            if (have > 0) c.setRequestProperty("Range", "bytes=$have-")
+            if (have > 0) {
+                c.setRequestProperty("Range", "bytes=$have-")
+                c.setRequestProperty("If-Range", "\"${expectedSha256.lowercase()}\"")
+            }
             val code = c.responseCode
             if (code == 410) throw RetiredException()
+            if (code == 401) throw UnauthorizedException("HTTP 401 pri preuzimanju")
             if (code == 416) { part.delete(); c.disconnect(); continue }
             if (code !in 200..299) throw HttpException(code, "Preuzimanje nije uspjelo: HTTP $code")
             val append = code == 206 && have > 0
@@ -132,8 +140,12 @@ class ApiClient(private val server: String, private val token: String?) {
             val stream = if (code in 200..299) c.inputStream else c.errorStream
             val text = stream?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
             if (code !in 200..299) {
-                val msg = runCatching { JSONObject(text).optString("error") }.getOrNull()?.takeIf { it.isNotBlank() } ?: text.take(200)
-                throw HttpException(code, "HTTP $code: $msg")
+                val j = runCatching { JSONObject(text) }.getOrNull()
+                val msg = j?.optString("error")?.takeIf { it.isNotBlank() } ?: text.take(200)
+                val errCode = j?.optString("code")?.takeIf { it.isNotBlank() }
+                if (code == 401) throw UnauthorizedException("HTTP 401: $msg")
+                val retry = c.getHeaderField("Retry-After")?.trim()?.toIntOrNull()
+                throw HttpException(code, "HTTP $code: $msg", errCode, retry)
             }
             return text
         } finally {

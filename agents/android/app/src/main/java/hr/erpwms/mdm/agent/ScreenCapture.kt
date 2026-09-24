@@ -114,7 +114,7 @@ class ScreenCaptureService : Service() {
                     try {
                         val id = ScreenCapture.pendingCommandId
                         val resp = Agent(this).api().upload("SCREENSHOT", id, file, "image/png", file.name)
-                        ScreenCapture.finish(this, true, null, resp.put("width", w).put("height", ht))
+                        ScreenCapture.finish(this, true, null, JSONObject().put("fileId", resp.optString("fileId")).put("width", w).put("height", ht))
                     } catch (e: Exception) {
                         ScreenCapture.finish(this, false, "Slanje snimke nije uspjelo: ${e.message}", null)
                     } finally {

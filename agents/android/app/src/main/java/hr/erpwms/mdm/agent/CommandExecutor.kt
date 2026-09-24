@@ -12,6 +12,7 @@ import hr.erpwms.mdm.agent.core.ConfigPlanner
 import hr.erpwms.mdm.agent.core.EffectiveConfig
 import hr.erpwms.mdm.agent.core.Payloads
 import hr.erpwms.mdm.agent.core.Restriction
+import hr.erpwms.mdm.agent.core.TargetPath
 import hr.erpwms.mdm.agent.policy.Kiosk
 import org.json.JSONObject
 import java.io.File
@@ -51,30 +52,31 @@ class CommandExecutor(private val ctx: Context, private val agent: Agent) {
         return when (cmd.type) {
             "REBOOT" -> {
                 needOwner("Ponovno pokretanje")
-                CommandOutcome.ok(after = { Thread.sleep(2000); dpm.reboot(admin) })
+                CommandOutcome.ok(JSONObject(), after = { Thread.sleep(2000); dpm.reboot(admin) })
             }
             "LOCK" -> {
                 if (!dpm.isAdminActive(admin)) return CommandOutcome.fail("Agent nije administrator uređaja")
                 dpm.lockNow()
-                CommandOutcome.ok()
+                CommandOutcome.ok(JSONObject())
             }
             "WIPE" -> {
                 needOwner("Brisanje uređaja")
-                CommandOutcome.ok(after = {
+                CommandOutcome.ok(JSONObject(), after = {
                     Thread.sleep(2000)
                     if (Build.VERSION.SDK_INT >= 34) dpm.wipeDevice(0) else dpm.wipeData(0)
                 })
             }
             "APPLY_CONFIG" -> {
-                // ponovno primijeni zadnju poznatu i zatraži svježu pri sljedećem javljanju
-                val last = prefs.lastConfig
-                prefs.appliedConfigVersion = 0
-                if (last != null) agent.applyConfig(EffectiveConfig.parse(JSONObject(last)))
-                CommandOutcome.ok(JSONObject().put("reapplied", last != null))
+                val v = agent.reapplyConfig() ?: return CommandOutcome.fail("Nema konfiguracije za primjenu")
+                if (prefs.appliedConfigVersion != v) return CommandOutcome.fail("Konfiguracija v$v nije potpuno primijenjena (vidi događaje uređaja)")
+                CommandOutcome.ok(JSONObject().put("configVersion", v))
             }
             "INSTALL_APP" -> installApp(p)
             "UNINSTALL_APP" -> {
                 val pkg = Payloads.uninstallApp(p)
+                if (!agent.control().installedPackages().containsKey(pkg)) {
+                    return CommandOutcome.ok(JSONObject().put("packageName", pkg).put("notInstalled", true))
+                }
                 withPackageRestrictionLifted(Restriction.UNINSTALL_APPS) { agent.control().uninstall(pkg) }
                 CommandOutcome.ok(JSONObject().put("packageName", pkg))
             }
@@ -85,10 +87,10 @@ class CommandExecutor(private val ctx: Context, private val agent: Agent) {
             "UPLOAD_LOGS" -> uploadLogs(cmd.id)
             "MESSAGE" -> {
                 Notifier.showMessage(ctx, Payloads.message(p))
-                CommandOutcome.ok()
+                CommandOutcome.ok(JSONObject())
             }
             "PUSH_FILE" -> pushFile(p)
-            "RUN_SCRIPT" -> CommandOutcome.fail("RUN_SCRIPT nije podržan na Androidu")
+            "RUN_SCRIPT" -> CommandOutcome.fail("UNSUPPORTED: RUN_SCRIPT (skripte se na Androidu ne izvršavaju)")
             "SET_KIOSK" -> {
                 needOwner("Kiosk")
                 val k = Payloads.kiosk(p)
@@ -100,19 +102,24 @@ class CommandExecutor(private val ctx: Context, private val agent: Agent) {
                 Kiosk.set(ctx, k.enabled, pkg)
                 CommandOutcome.ok(JSONObject().put("enabled", k.enabled).put("packageName", pkg ?: JSONObject.NULL))
             }
-            "FORGET" -> CommandOutcome.ok(after = { Forget.run(ctx) })
-            else -> CommandOutcome.fail("Nepoznata naredba: ${cmd.type}")
+            "FORGET" -> CommandOutcome.ok(JSONObject(), after = { Forget.run(ctx) })
+            else -> CommandOutcome.fail("UNSUPPORTED: ${cmd.type}")
         }
     }
 
     private fun installApp(p: JSONObject): CommandOutcome {
         val a = Payloads.installApp(p)
         if (a.packageName == ctx.packageName && !owner) return CommandOutcome.fail("Samoažuriranje traži Device Owner")
+        val have = agent.control().installedPackages()[a.packageName]
+        if (have != null && a.versionCode != null && have == a.versionCode) {
+            return CommandOutcome.ok(JSONObject().put("packageName", a.packageName).put("version", a.version ?: JSONObject.NULL).put("versionCode", have).put("skipped", true))
+        }
         withPackageRestrictionLifted(Restriction.INSTALL_APPS) {
             agent.control().installFromServer(a.packageName, a.downloadPath, a.sha256)
         }
         val installed = agent.control().installedPackages()[a.packageName]
-        return CommandOutcome.ok(JSONObject().put("packageName", a.packageName).put("versionCode", installed ?: JSONObject.NULL))
+        val version = runCatching { ctx.packageManager.getPackageInfo(a.packageName, 0).versionName }.getOrNull()
+        return CommandOutcome.ok(JSONObject().put("packageName", a.packageName).put("version", version ?: a.version ?: JSONObject.NULL).put("versionCode", installed ?: JSONObject.NULL))
     }
 
     /** DISALLOW_INSTALL_APPS zabranjuje instalaciju i samom Device Owneru — privremeno se skida. */
@@ -151,10 +158,17 @@ class CommandExecutor(private val ctx: Context, private val agent: Agent) {
                 }
             }
             val resp = agent.api().upload("LOGS", commandId, out, "application/gzip", "agent-logs.txt.gz")
-            return CommandOutcome.ok(resp)
+            return CommandOutcome.ok(JSONObject().put("fileId", resp.optString("fileId")).put("size", resp.optLong("size")))
         } finally {
             out.delete()
         }
+    }
+
+    private fun copyTo(src: File, dir: File, name: String): String {
+        dir.mkdirs()
+        val dest = File(dir, name)
+        src.copyTo(dest, overwrite = true)
+        return dest.absolutePath
     }
 
     private fun pushFile(p: JSONObject): CommandOutcome {
@@ -162,30 +176,30 @@ class CommandExecutor(private val ctx: Context, private val agent: Agent) {
         val tmp = File(ctx.cacheDir, "push-${System.currentTimeMillis()}")
         try {
             agent.api().download(f.downloadPath, tmp, f.sha256)
-            val sub = f.targetPath?.split('/', '\\')?.map { it.trim() }?.filter { it.isNotEmpty() && it != "." && it != ".." }
-                ?.map { Payloads.safeFileName(it) }?.joinToString("/")?.takeIf { it.isNotEmpty() }
-            val location = if (Build.VERSION.SDK_INT >= 29) {
-                val rel = Environment.DIRECTORY_DOWNLOADS + (sub?.let { "/$it" } ?: "")
-                val values = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, f.name)
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, rel)
-                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+            val t = TargetPath.resolve(f.targetPath, f.name)
+            val location = if (t.area == TargetPath.Area.DOWNLOADS) {
+                if (Build.VERSION.SDK_INT >= 29) {
+                    val rel = Environment.DIRECTORY_DOWNLOADS + (t.subdir?.let { "/$it" } ?: "")
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, t.fileName)
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, rel)
+                        put(MediaStore.MediaColumns.IS_PENDING, 1)
+                    }
+                    val cr = ctx.contentResolver
+                    val uri = cr.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: throw IllegalStateException("MediaStore je odbio datoteku")
+                    cr.openOutputStream(uri)!!.use { o -> tmp.inputStream().use { it.copyTo(o) } }
+                    values.clear()
+                    values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    cr.update(uri, values, null, null)
+                    "$rel/${t.fileName}"
+                } else {
+                    @Suppress("DEPRECATION")
+                    val base = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    copyTo(tmp, if (t.subdir != null) File(base, t.subdir) else base, t.fileName)
                 }
-                val cr = ctx.contentResolver
-                val uri = cr.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values) ?: throw IllegalStateException("MediaStore je odbio datoteku")
-                cr.openOutputStream(uri)!!.use { o -> tmp.inputStream().use { it.copyTo(o) } }
-                values.clear()
-                values.put(MediaStore.MediaColumns.IS_PENDING, 0)
-                cr.update(uri, values, null, null)
-                "$rel/${f.name}"
             } else {
-                @Suppress("DEPRECATION")
-                val base = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                val dir = if (sub != null) File(base, sub) else base
-                dir.mkdirs()
-                val dest = File(dir, f.name)
-                tmp.copyTo(dest, overwrite = true)
-                dest.absolutePath
+                val base = ctx.getExternalFilesDir(null) ?: ctx.filesDir
+                copyTo(tmp, if (t.subdir != null) File(base, t.subdir) else base, t.fileName)
             }
             AgentLog.i("file", "Datoteka spremljena: $location", report = true)
             return CommandOutcome.ok(JSONObject().put("path", location))

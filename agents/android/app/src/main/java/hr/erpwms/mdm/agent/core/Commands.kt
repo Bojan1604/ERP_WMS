@@ -46,7 +46,7 @@ object Payloads {
 
     fun message(p: JSONObject): String {
         val t = need(p, "text")
-        return t.take(4000)
+        return t.take(2000)
     }
 
     fun kiosk(p: JSONObject): Kiosk {
@@ -111,12 +111,49 @@ object UrlPolicy {
     fun sameOrigin(a: String, b: String) = origin(a) != null && origin(a) == origin(b)
 }
 
-/** Eksponencijalno odgađanje pri greškama: interval × 2^n, najviše 15 min. */
+/**
+ * Odgađanje prema protokolu (§10): pri greškama min(checkinSec, 5 s × 2^n) × slučajno(0,5–1,5),
+ * a redovni interval ±10 %. [random] vraća [0, 1).
+ */
 object Backoff {
-    fun delaySec(baseSec: Int, failures: Int): Int {
-        if (failures <= 0) return baseSec
-        val exp = failures.coerceAtMost(10)
-        val d = baseSec.toLong() * (1L shl exp) / 2
-        return d.coerceIn(baseSec.toLong().coerceAtMost(30), 900).toInt()
+    fun delaySec(checkinSec: Int, failures: Int, random: () -> Double = Math::random): Int {
+        if (failures <= 0) return jitter(checkinSec, random)
+        val exp = (failures - 1).coerceAtMost(12)
+        val base = minOf(checkinSec.toLong(), 5L * (1L shl exp)).toDouble()
+        return (base * (0.5 + random())).toInt().coerceAtLeast(1)
+    }
+
+    fun jitter(checkinSec: Int, random: () -> Double = Math::random): Int =
+        (checkinSec * (0.9 + 0.2 * random())).toInt().coerceAtLeast(1)
+}
+
+/**
+ * Odredište PUSH_FILE na Androidu. targetPath je mapa (završava s "/") ili putanja datoteke.
+ * "Download/…" (ili apsolutno /sdcard/Download/…, /storage/emulated/0/Download/…) → javna mapa Download
+ * (MediaStore); sve ostalo → vanjska mapa aplikacije agenta.
+ */
+object TargetPath {
+    enum class Area { DOWNLOADS, APP }
+    data class Target(val area: Area, val subdir: String?, val fileName: String)
+
+    fun resolve(targetPath: String?, name: String): Target {
+        val raw = (targetPath ?: "").trim().replace('\\', '/')
+        val isDir = raw.isEmpty() || raw.endsWith("/")
+        var segs = raw.split('/').map { it.trim() }.filter { it.isNotEmpty() && it != "." }
+        require(segs.none { it == ".." }) { "Putanja ne smije sadržavati '..'" }
+        // apsolutne putanje do javne pohrane
+        val lower = segs.map { it.lowercase() }
+        val dl = lower.indexOf("download")
+        var area = Area.APP
+        if (dl >= 0 && (dl == 0 || lower.take(dl).let { it == listOf("sdcard") || it == listOf("storage", "emulated", "0") })) {
+            area = Area.DOWNLOADS
+            segs = segs.drop(dl + 1)
+        } else if (raw.startsWith("/")) {
+            throw IllegalArgumentException("Apsolutna putanja nije dopuštena: $raw")
+        }
+        val fileName = if (isDir || segs.isEmpty()) Payloads.safeFileName(name) else Payloads.safeFileName(segs.last())
+        val dirSegs = if (isDir) segs else segs.dropLast(1)
+        val sub = dirSegs.map { Payloads.safeFileName(it) }.joinToString("/").ifEmpty { null }
+        return Target(area, sub, fileName)
     }
 }

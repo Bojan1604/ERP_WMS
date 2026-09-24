@@ -72,13 +72,43 @@ class PayloadsTest {
     }
 
     @Test
-    fun backoffGrowsAndCaps() {
-        assertEquals(60, Backoff.delaySec(60, 0))
-        assertEquals(60, Backoff.delaySec(60, 1))
-        assertEquals(120, Backoff.delaySec(60, 2))
-        assertEquals(240, Backoff.delaySec(60, 3))
-        assertEquals(900, Backoff.delaySec(60, 10))
-        assertEquals(900, Backoff.delaySec(60, 50))
+    fun backoffFollowsProtocol() {
+        val mid = { 0.5 } // faktor 1,0
+        assertEquals(5, Backoff.delaySec(60, 1, mid))
+        assertEquals(10, Backoff.delaySec(60, 2, mid))
+        assertEquals(40, Backoff.delaySec(60, 4, mid))
+        assertEquals(60, Backoff.delaySec(60, 5, mid))
+        assertEquals(60, Backoff.delaySec(60, 50, mid))
+        assertEquals(30, Backoff.delaySec(60, 5) { 0.0 }) // × 0,5
+        assertEquals(89, Backoff.delaySec(60, 5) { 0.99 }) // × 1,49
+        // redovni interval ±10 %
+        assertEquals(54, Backoff.jitter(60) { 0.0 })
+        assertEquals(60, Backoff.jitter(60) { 0.5 })
+        assertEquals(65, Backoff.jitter(60) { 0.99 })
+    }
+
+    @Test
+    fun pushFileTargets() {
+        val d = TargetPath.resolve("Download/", "cjenik.pdf")
+        assertEquals(TargetPath.Area.DOWNLOADS, d.area); assertNull(d.subdir); assertEquals("cjenik.pdf", d.fileName)
+        val s = TargetPath.resolve("Download/Cjenici/2024/", "a.pdf")
+        assertEquals("Cjenici/2024", s.subdir)
+        val abs = TargetPath.resolve("/sdcard/Download/x/novo.pdf", "a.pdf")
+        assertEquals(TargetPath.Area.DOWNLOADS, abs.area); assertEquals("x", abs.subdir); assertEquals("novo.pdf", abs.fileName)
+        val app = TargetPath.resolve("cjenik.pdf", "cjenik.pdf")
+        assertEquals(TargetPath.Area.APP, app.area); assertNull(app.subdir); assertEquals("cjenik.pdf", app.fileName)
+        val empty = TargetPath.resolve(null, "b.txt")
+        assertEquals(TargetPath.Area.APP, empty.area); assertEquals("b.txt", empty.fileName)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun pushFileRejectsTraversal() {
+        TargetPath.resolve("Download/../../data/x", "a")
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun pushFileRejectsOtherAbsolutePaths() {
+        TargetPath.resolve("/data/data/other.app/x", "a")
     }
 
     @Test
