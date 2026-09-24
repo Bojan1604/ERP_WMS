@@ -11,7 +11,12 @@ import { today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import { toDevice, toTerms } from '@/server/services/rentals';
 import { deviceCandidates, type contractItems } from '@/server/queries/rentals';
-import { eur } from '@/lib/format';
+import { eur, integer } from '@/lib/format';
+import { SearchFilter } from '@/components/ui/filters';
+import { Pagination } from '@/components/ui/pagination';
+
+/** Iznad toga uređaji se prikazuju po stranicama (tablica s tisuću redaka je spora u pregledniku). */
+const PAGE = 250;
 
 type Items = Awaited<ReturnType<typeof contractItems>>;
 
@@ -21,12 +26,14 @@ export async function DevicesTab({
   canEdit,
   companyId,
   prefill,
+  params,
 }: {
   contract: Contract & { partner: { name: string } };
   items: Items;
   canEdit: boolean;
   companyId: string;
   prefill: string;
+  params: Record<string, string | string[] | undefined>;
 }) {
   const terms = toTerms(c);
   const now = today();
@@ -34,20 +41,28 @@ export async function DevicesTab({
   const initial = canEdit && ids.length ? await deviceCandidates(companyId, c.id, { ids, limit: 500 }) : [];
   const total = r2(items.reduce((a, i) => a + num(i.monthly), 0));
   const defaultFrom = `${now.slice(0, 7)}-01`;
+  const q = typeof params.q === 'string' ? params.q.trim().toLowerCase() : '';
+  const found = q
+    ? items.filter((i) => [i.item.serial, i.item.model.brand, i.item.model.name, i.item.model.category?.name].some((v) => v?.toLowerCase().includes(q)))
+    : items;
+  const paged = items.length > PAGE;
+  const page = paged ? Math.min(Math.max(1, Number(params.page) || 1), Math.max(1, Math.ceil(found.length / PAGE))) : 1;
+  const shown = paged ? found.slice((page - 1) * PAGE, page * PAGE) : found;
 
   return (
-    <SelectionProvider ids={items.map((i) => i.id)}>
+    <SelectionProvider ids={shown.map((i) => i.id)}>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-fg-3">
           Uređaj bez vlastitog plana slijedi uvjete ugovora. Uklonjeni uređaji ostaju na ugovoru „U dolasku" dok ih skladište ne zaprimi.
         </p>
+        {items.length > 20 && <SearchFilter placeholder="Serijski broj, model…" />}
         {canEdit && <AddDevicesDialog contractId={c.id} partnerName={c.partner.name} initial={initial} defaultFrom={defaultFrom} startOpen={initial.length > 0} />}
       </div>
       {canEdit && (
         <DeviceBulkBar
           contractId={c.id}
           defaultFrom={defaultFrom}
-          devices={items.map((i) => ({
+          devices={shown.map((i) => ({
             id: i.id,
             serial: i.item.serial,
             monthly: num(i.monthly),
@@ -57,7 +72,7 @@ export async function DevicesTab({
           }))}
         />
       )}
-      {items.length ? (
+      {shown.length ? (
         <TableWrap>
           <table className="data-table">
             <thead>
@@ -77,7 +92,7 @@ export async function DevicesTab({
               </tr>
             </thead>
             <tbody>
-              {items.map((i) => {
+              {shown.map((i) => {
                 const d = toDevice(i);
                 const reason = i.item.state === 'RENTED' ? returnReason(terms, d, now) : null;
                 return (
@@ -126,18 +141,25 @@ export async function DevicesTab({
             <tfoot>
               <tr>
                 {canEdit && <td />}
-                <td colSpan={3}>{items.length} uređaja</td>
+                <td colSpan={3}>{integer(items.length)} uređaja{q ? ` (pronađeno ${integer(found.length)})` : ''}</td>
                 <td className="num">{eur(total)}</td>
                 <td colSpan={3} />
               </tr>
             </tfoot>
           </table>
         </TableWrap>
-      ) : (
+      ) : null}
+      {paged && <Pagination page={page} pageSize={PAGE} total={found.length} params={params} basePath={`/najam/ugovori/${c.id}`} />}
+      {q && !found.length && items.length ? (
+        <TableWrap>
+          <Empty icon={<Boxes className="size-5" />} title="Nema uređaja za ovu pretragu" />
+        </TableWrap>
+      ) : null}
+      {!items.length ? (
         <TableWrap>
           <Empty icon={<Boxes className="size-5" />} title="Na ugovoru nema uređaja" description={canEdit ? 'Dodajte uređaje sa skladišta ili one koji su već kod klijenta.' : undefined} />
         </TableWrap>
-      )}
+      ) : null}
     </SelectionProvider>
   );
 }

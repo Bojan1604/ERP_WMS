@@ -3,7 +3,7 @@ import type { Contract } from '@prisma/client';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { TableWrap } from '@/components/ui/misc';
 import { contractAccrual, contractBilling, scheduledCharges } from '@/domain/billing';
-import { MONTHS_SHORT, periodLabel, toISO, today } from '@/domain/dates';
+import { MONTHS_SHORT, toISO, today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import { toDevice, toReturnedDevice, toTerms } from '@/server/services/rentals';
 import type { contractItems } from '@/server/queries/rentals';
@@ -11,13 +11,29 @@ import { amount, date, eur } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { db } from '@/server/db';
 import { coveredPeriods } from '@/server/services/invoices';
-import { PauseCell } from '@/components/rentals/pause-cell';
+import { PauseGrid } from '@/components/rentals/pause-cell';
+import { Pagination } from '@/components/ui/pagination';
+
+/** Redaka po stranici — s tisuću uređaja × 12 mjeseci tablica bi bila spora u pregledniku. */
+const PAGE = 250;
 import { pausePeriodAction } from '../actions';
 
 type Items = Awaited<ReturnType<typeof contractItems>>;
 
 /** Raspored naplate kroz godinu: rata po uređaju i mjesecu, uz obračun i naplatu ugovora. */
-export async function ScheduleTab({ contract: c, items, year: y, canEdit }: { contract: Contract; items: Items; year?: number; canEdit: boolean }) {
+export async function ScheduleTab({
+  contract: c,
+  items,
+  year: y,
+  canEdit,
+  params,
+}: {
+  contract: Contract;
+  items: Items;
+  year?: number;
+  canEdit: boolean;
+  params: Record<string, string | string[] | undefined>;
+}) {
   const now = today();
   const cy = Number(now.slice(0, 4));
   const year = y && y > 1990 && y < 2200 ? y : cy;
@@ -50,6 +66,8 @@ export async function ScheduleTab({ contract: c, items, year: y, canEdit }: { co
     const total = r2(cells.reduce((a, x) => a + (x.paused ? 0 : x.v), 0));
     return { id: i.id, serial: i.serial, itemId: i.itemId, monthly: i.monthly, returnedAt: i.returnedAt, cells, total };
   }).filter((r) => !r.returnedAt || r.cells.some((x) => x.v));
+  const page = Math.min(Math.max(1, Number(params.page) || 1), Math.max(1, Math.ceil(rows.length / PAGE)));
+  const shown = rows.length > PAGE ? rows.slice((page - 1) * PAGE, page * PAGE) : rows;
   const billing = contractBilling(terms, devices, year);
   const accrual = contractAccrual(terms, devices, year);
   const sum = (a: number[]) => r2(a.reduce((x, v) => x + v, 0));
@@ -73,6 +91,7 @@ export async function ScheduleTab({ contract: c, items, year: y, canEdit }: { co
           {canEdit && <> Klik na iznos <b>pauzira naplatu</b> tog uređaja u tom mjesecu (precrtano = ne naplaćuje se); podebljano = fakturirano.</>}
         </p>
       </div>
+      <Grid canEdit={canEdit} contractId={c.id}>
       <TableWrap>
         <table className="data-table no-stack compact [&_td]:whitespace-nowrap">
           <thead>
@@ -88,8 +107,8 @@ export async function ScheduleTab({ contract: c, items, year: y, canEdit }: { co
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={r.id}>
+            {shown.map((r) => (
+              <tr key={r.id} data-serial={r.serial}>
                 <td className="sticky left-0 z-[1] bg-panel">
                   <Link prefetch={false} href={`/skladiste/${r.itemId}`} className="link font-mono text-sm">
                     {r.serial}
@@ -102,7 +121,9 @@ export async function ScheduleTab({ contract: c, items, year: y, canEdit }: { co
                     {!x.v ? (
                       '·'
                     ) : canEdit && !x.invoiced ? (
-                      <PauseCell action={pausePeriodAction} contractId={c.id} itemId={r.itemId} serial={r.serial} period={x.period} label={periodLabel(x.period)} value={x.v} paused={x.paused} />
+                      <button type="button" data-item={r.itemId} data-period={x.period} data-value={x.v} data-paused={x.paused ? 1 : undefined} className={cn(cellBtn, x.paused && 'text-warn line-through')}>
+                        {amount(x.v)}
+                      </button>
                     ) : (
                       <span className={cn(x.paused && 'text-warn line-through', x.invoiced && 'font-medium')}>{amount(x.v)}</span>
                     )}
@@ -143,6 +164,21 @@ export async function ScheduleTab({ contract: c, items, year: y, canEdit }: { co
           </tfoot>
         </table>
       </TableWrap>
+      </Grid>
+      {rows.length > PAGE && <Pagination page={page} pageSize={PAGE} total={rows.length} params={params} basePath={`/najam/ugovori/${c.id}`} />}
     </div>
+  );
+}
+
+const cellBtn = 'h-6 w-full cursor-pointer rounded px-1 text-right tnum hover:bg-muted';
+
+/** Pauza klikom na iznos — jedan dijalog za cijelu tablicu (samo kad se smije mijenjati). */
+function Grid({ canEdit, contractId, children }: { canEdit: boolean; contractId: string; children: React.ReactNode }) {
+  return canEdit ? (
+    <PauseGrid action={pausePeriodAction} contractId={contractId}>
+      {children}
+    </PauseGrid>
+  ) : (
+    <>{children}</>
   );
 }
