@@ -13,5 +13,7 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!login|_next/static|_next/image|favicon.ico|icon.svg|manifest.webmanifest).*)'],
+  // /api/mdm/agent/* — agenti uređaja (autentikacija tokenom uređaja, ne kolačićem; velika slanja ne smiju prolaziti middleware)
+  // /api/mdm/files/upload — prijenos APK/MSI do 200 MB (sesiju i prava provjerava sama ruta)
+  matcher: ['/((?!login|api/mdm/agent/|api/mdm/files/upload|_next/static|_next/image|favicon.ico|icon.svg|manifest.webmanifest).*)'],
 };

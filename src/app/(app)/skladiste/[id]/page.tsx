@@ -18,6 +18,7 @@ import { listAttachments } from '@/server/services/attachments';
 import { returnOnCost, SERVICE_STATUS_LABEL } from '@/domain/warehouse';
 import { date, dateTime, eur, pct } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { MdmItemCard } from '@/components/mdm/device-item-card';
 
 type CardData = NonNullable<Awaited<ReturnType<typeof getItemCard>>>;
 
@@ -30,6 +31,15 @@ export default async function ItemCardPage({ params }: { params: Promise<{ id: s
     db.company.findUniqueOrThrow({ where: { id: user.companyId }, select: { statusChangeNeedsApproval: true } }),
     listAttachments(db, user.companyId, 'item', [id]),
   ]);
+  // povezani MDM uređaj (samo korisnici vlasnika s pravom na MDM)
+  const mdmDevices =
+    card && !user.mdmOrgId && can(user.perms, 'mdm', 'view')
+      ? await db.mdmDevice.findMany({
+          where: { companyId: user.companyId, itemId: id },
+          select: { id: true, name: true, platform: true, status: true, lastSeenAt: true, agentVersion: true, org: { select: { name: true, parent: { select: { name: true } } } }, site: { select: { name: true } } },
+          take: 5,
+        })
+      : [];
   if (!card) notFound();
   const { item, contract } = card;
 
@@ -136,6 +146,7 @@ export default async function ItemCardPage({ params }: { params: Promise<{ id: s
         </div>
 
         <div className="min-w-0 space-y-4">
+          <MdmItemCard devices={mdmDevices} />
           <Card title="Stanje">
             <dl>
               <Detail label="Status">

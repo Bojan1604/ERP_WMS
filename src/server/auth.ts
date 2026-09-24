@@ -69,13 +69,14 @@ export const getUser = cache(async (): Promise<SessionUser | null> => {
   if (!token) return null;
   const s = await db.session.findUnique({
     where: { tokenHash: hash(token) },
-    include: { user: { include: { company: { select: { name: true } }, mdmOrg: { select: { name: true, active: true } } } } },
+    include: { user: { include: { company: { select: { name: true } }, mdmOrg: { select: { name: true, active: true, parent: { select: { active: true } } } } } } },
   });
   if (!s || s.revokedAt || s.expiresAt < new Date() || !s.user.active) return null;
   const u = s.user;
   const external = isExternalRole(u.role);
   // vanjski korisnik bez (aktivne) organizacije nema pristup ničemu
-  if (external && (!u.mdmOrgId || !u.mdmOrg?.active)) return null;
+  // klijent ugašenog distributera također gubi pristup
+  if (external && (!u.mdmOrgId || !u.mdmOrg?.active || u.mdmOrg.parent?.active === false)) return null;
   return {
     id: u.id,
     name: u.name,

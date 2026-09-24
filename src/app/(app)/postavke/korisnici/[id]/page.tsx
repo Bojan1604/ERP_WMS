@@ -19,7 +19,7 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
   const u = isNew
     ? null
     : await db.user.findFirst({
-        where: { id, companyId: me.companyId },
+        where: { id, companyId: me.companyId, role: { notIn: ['DISTRIBUTOR', 'CLIENT'] } },
         select: { id: true, name: true, email: true, role: true, active: true, oib: true, permissions: true, lastLoginAt: true, createdAt: true },
       });
   if (!isNew && !u) notFound();

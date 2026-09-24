@@ -6,11 +6,12 @@ import { mergeConfig, type DeviceOverrides, type EffectiveConfig, type ProfileAp
 type Client = Tx | typeof db;
 
 /** Profil uređaja: vlastiti, inače profil lokacije. */
-export async function deviceProfile(tx: Client, device: { profileId: string | null; siteId: string | null }) {
+export async function deviceProfile(tx: Client, device: { platform: 'ANDROID' | 'WINDOWS'; profileId: string | null; siteId: string | null }) {
   if (device.profileId) return tx.mdmProfile.findUnique({ where: { id: device.profileId } });
   if (!device.siteId) return null;
   const site = await tx.mdmSite.findUnique({ where: { id: device.siteId }, select: { profile: true } });
-  return site?.profile ?? null;
+  // profil lokacije vrijedi samo za uređaje iste platforme (Android profil ne ide na Windows blagajnu)
+  return site?.profile && site.profile.platform === device.platform ? site.profile : null;
 }
 
 /**
@@ -62,11 +63,18 @@ export async function buildEffectiveConfig(
  * Promjena profila ili izmjena uređaja podiže verziju konfiguracije svih
  * pogođenih uređaja; agent je preuzima pri sljedećem javljanju.
  */
-export async function bumpConfig(tx: Tx, where: { deviceIds?: string[]; profileId?: string; siteIds?: string[] }) {
+export async function bumpConfig(
+  tx: Tx,
+  where: { deviceIds?: string[]; profileId?: string; siteIds?: string[]; platform?: 'ANDROID' | 'WINDOWS' },
+) {
+  // profil lokacije vrijedi samo za uređaje svoje platforme
+  const platform =
+    where.platform ??
+    (where.profileId ? (await tx.mdmProfile.findUnique({ where: { id: where.profileId }, select: { platform: true } }))?.platform : undefined);
   const or = [
     ...(where.deviceIds?.length ? [{ id: { in: where.deviceIds } }] : []),
-    ...(where.profileId ? [{ profileId: where.profileId }, { profileId: null, site: { profileId: where.profileId } }] : []),
-    ...(where.siteIds?.length ? [{ profileId: null, siteId: { in: where.siteIds } }] : []),
+    ...(where.profileId ? [{ profileId: where.profileId }, { profileId: null, platform, site: { profileId: where.profileId } }] : []),
+    ...(where.siteIds?.length ? [{ profileId: null, platform, siteId: { in: where.siteIds } }] : []),
   ];
   if (!or.length) return 0;
   const r = await tx.mdmDevice.updateMany({ where: { OR: or, status: { not: 'RETIRED' } }, data: { configVersion: { increment: 1 } } });

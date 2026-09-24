@@ -14,7 +14,8 @@ export default async function UsersPage() {
   const now = new Date();
   const [users, sessions] = await Promise.all([
     db.user.findMany({
-      where: { companyId: user.companyId },
+      // vanjski korisnici MDM-a (distributeri, klijenti) uređuju se u MDM → Organizacije
+      where: { companyId: user.companyId, role: { notIn: ['DISTRIBUTOR', 'CLIENT'] } },
       orderBy: [{ active: 'desc' }, { name: 'asc' }],
       select: { id: true, name: true, email: true, role: true, active: true, lastLoginAt: true, permissions: true },
     }),

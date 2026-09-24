@@ -6,7 +6,7 @@ import { FormError, useAction, type ServerAction } from '@/components/ui/action'
 import { Button } from '@/components/ui/button';
 import { Checkbox, Field, FormGrid, Input, Select } from '@/components/ui/field';
 import { Card } from '@/components/ui/misc';
-import { LEVEL_LABEL, MODULES, ROLE_DEFAULTS, ROLE_LABEL, type Level, type Module, type RoleCode } from '@/domain/permissions';
+import { LEVEL_LABEL, MODULES, ROLE_DEFAULTS, ROLE_LABEL, isExternalRole, type Level, type Module, type RoleCode } from '@/domain/permissions';
 import { cn } from '@/lib/cn';
 import { isValidOib } from '@/domain/tax';
 
@@ -85,7 +85,7 @@ export function UserForm({ value, save, isSelf }: { value: UserValue; save: Serv
                 value={v.role}
                 disabled={isSelf && value.role === 'ADMIN'}
                 onChange={(e) => changeRole(e.target.value as RoleCode)}
-                options={Object.entries(ROLE_LABEL).map(([value, label]) => ({ value, label }))}
+                options={Object.entries(ROLE_LABEL).filter(([r]) => !isExternalRole(r as RoleCode)).map(([value, label]) => ({ value, label }))}
               />
             </Field>
             <Checkbox

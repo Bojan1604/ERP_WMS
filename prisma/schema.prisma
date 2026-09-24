@@ -1322,6 +1322,10 @@ model MdmDevice {
   @@index([companyId, serial])
   @@index([companyId, lastSeenAt])
   @@index([companyId, enrollCode])
+  @@index([companyId, hardwareId])
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "MdmDevice_name_trgm_idx")
+  @@index([serial(ops: raw("gin_trgm_ops"))], type: Gin, map: "MdmDevice_serial_trgm_idx")
+  @@index([imei(ops: raw("gin_trgm_ops"))], type: Gin, map: "MdmDevice_imei_trgm_idx")
 }
 
 /// Konfiguracija lokacije / skupine uređaja („Site Configuration").
