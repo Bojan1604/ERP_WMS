@@ -70,6 +70,8 @@ export const ROLE_DEFAULTS: Record<RoleCode, Record<Module, Level>> = {
     warehouse: 'view',
     expenses: 'edit',
     purchasing: 'edit',
+    // Knjigovođa: označavanje „poslano knjigovođi" traži izvještaje na razini „ops"
+    reports: 'ops',
     users: 'none',
     settings: 'none',
     mdm: 'none',

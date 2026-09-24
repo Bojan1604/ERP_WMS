@@ -240,6 +240,8 @@ model Company {
   invoiceSeparator          String  @default("/")
   invoiceFooter             String?
   statusChangeNeedsApproval Boolean @default(true)
+  /// E-adresa knjigovođe (stranica Knjigovođa: kome se šalje ZIP s računima).
+  accountantEmail           String?
 
   // fiskalizacija i eRačun (priprema — adapteri u src/server/fiscal)
   fiscalEnabled      Boolean          @default(false)
@@ -777,62 +779,64 @@ model QuoteLine {
 }
 
 model Invoice {
-  id              String        @id @default(cuid())
-  companyId       String
-  status          InvoiceStatus @default(DRAFT)
-  kind            InvoiceKind   @default(INVOICE)
-  type            InvoiceType   @default(SALE)
+  id               String        @id @default(cuid())
+  companyId        String
+  status           InvoiceStatus @default(DRAFT)
+  kind             InvoiceKind   @default(INVOICE)
+  type             InvoiceType   @default(SALE)
   /// Redni broj u godini — dodjeljuje se pri izdavanju, nikad se ne ponavlja.
-  seq             Int?
-  year            Int
-  number          String?
-  partnerId       String
-  date            DateTime      @db.Date
-  dueDate         DateTime?     @db.Date
-  deliveryDate    DateTime?     @db.Date
-  vatRate         Decimal       @db.Decimal(5, 2)
+  seq              Int?
+  year             Int
+  number           String?
+  partnerId        String
+  date             DateTime      @db.Date
+  dueDate          DateTime?     @db.Date
+  deliveryDate     DateTime?     @db.Date
+  vatRate          Decimal       @db.Decimal(5, 2)
   /// Porezna kategorija (S, AE, K, G, E, O) i razlog oslobođenja za eRačun.
-  taxCategory     String        @default("S")
-  taxExemptReason String?
-  discountPct     Decimal       @default(0) @db.Decimal(6, 2)
-  discountAmount  Decimal       @default(0) @db.Decimal(14, 2)
+  taxCategory      String        @default("S")
+  taxExemptReason  String?
+  discountPct      Decimal       @default(0) @db.Decimal(6, 2)
+  discountAmount   Decimal       @default(0) @db.Decimal(14, 2)
   /// Neoporezive naknade: [{ kind, label, amount }]
-  charges         Json          @default("[]")
-  advanceAmount   Decimal       @default(0) @db.Decimal(14, 2)
+  charges          Json          @default("[]")
+  advanceAmount    Decimal       @default(0) @db.Decimal(14, 2)
   /// Izvorni račun je storniran (poništen stornom) — nema potraživanja.
-  stornoed        Boolean       @default(false)
+  stornoed         Boolean       @default(false)
   // zbrojevi — preračunavaju se pri svakoj izmjeni stavki ili uplata
-  netTotal        Decimal       @default(0) @db.Decimal(14, 2)
-  vatTotal        Decimal       @default(0) @db.Decimal(14, 2)
-  chargesTotal    Decimal       @default(0) @db.Decimal(14, 2)
-  grandTotal      Decimal       @default(0) @db.Decimal(14, 2)
-  paidTotal       Decimal       @default(0) @db.Decimal(14, 2)
+  netTotal         Decimal       @default(0) @db.Decimal(14, 2)
+  vatTotal         Decimal       @default(0) @db.Decimal(14, 2)
+  chargesTotal     Decimal       @default(0) @db.Decimal(14, 2)
+  grandTotal       Decimal       @default(0) @db.Decimal(14, 2)
+  paidTotal        Decimal       @default(0) @db.Decimal(14, 2)
   /// Zbroj izdanih knjižnih odobrenja na ovaj račun (pozitivan iznos).
-  creditedTotal   Decimal       @default(0) @db.Decimal(14, 2)
-  openAmount      Decimal       @default(0) @db.Decimal(14, 2)
-  costTotal       Decimal       @default(0) @db.Decimal(14, 2)
-  paidDate        DateTime?     @db.Date
-  refInvoiceId    String? // storno/odobrenje → izvorni
-  contractId      String?
-  period          String? // YYYY-MM — razdoblje najma koje rata pokriva
-  description     String?
-  note            String?
-  paymentRef      String? // poziv na broj
+  creditedTotal    Decimal       @default(0) @db.Decimal(14, 2)
+  openAmount       Decimal       @default(0) @db.Decimal(14, 2)
+  costTotal        Decimal       @default(0) @db.Decimal(14, 2)
+  paidDate         DateTime?     @db.Date
+  refInvoiceId     String? // storno/odobrenje → izvorni
+  contractId       String?
+  period           String? // YYYY-MM — razdoblje najma koje rata pokriva
+  description      String?
+  note             String?
+  paymentRef       String? // poziv na broj
   /// Stanje slanja eRačuna: { status, sentAt, id, error }
-  eInvoice        Json          @default("{}")
-  paymentMethod   PaymentMethod @default(TRANSFER)
+  eInvoice         Json          @default("{}")
+  paymentMethod    PaymentMethod @default(TRANSFER)
   /// Zaštitni kod izdavatelja i jedinstveni identifikator računa (CIS).
-  zki             String?
-  jir             String?
-  fiscalStatus    FiscalStatus  @default(NOT_REQUIRED)
-  fiscalizedAt    DateTime?
-  fiscalError     String?
-  fiscalAttempts  Int           @default(0)
-  createdBy       String?
-  issuedBy        String?
-  issuedAt        DateTime?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  zki              String?
+  jir              String?
+  fiscalStatus     FiscalStatus  @default(NOT_REQUIRED)
+  fiscalizedAt     DateTime?
+  fiscalError      String?
+  fiscalAttempts   Int           @default(0)
+  createdBy        String?
+  issuedBy         String?
+  issuedAt         DateTime?
+  /// Kada je račun predan knjigovođi (stranica Knjigovođa); null = nije poslan.
+  accountantSentAt DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 
   company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   partner       Partner        @relation(fields: [partnerId], references: [id])
@@ -851,6 +855,7 @@ model Invoice {
   @@index([companyId, status, kind])
   @@index([companyId, openAmount])
   @@index([contractId, period])
+  @@index([companyId, accountantSentAt])
   // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
   @@index([partnerId])
   @@index([refInvoiceId])
@@ -1050,21 +1055,23 @@ model GoodsReceipt {
 
 /// Ulazni račun dobavljača (knjiga URA).
 model SupplierInvoice {
-  id         String    @id @default(cuid())
-  companyId  String
-  internalNo String
-  number     String // broj računa dobavljača
-  supplierId String
-  issueDate  DateTime  @db.Date
-  dueDate    DateTime? @db.Date
-  netAmount  Decimal   @default(0) @db.Decimal(14, 2)
-  vatAmount  Decimal   @default(0) @db.Decimal(14, 2)
-  total      Decimal   @default(0) @db.Decimal(14, 2)
-  paidDate   DateTime? @db.Date
-  category   String?
-  note       String?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  id               String    @id @default(cuid())
+  companyId        String
+  internalNo       String
+  number           String // broj računa dobavljača
+  supplierId       String
+  issueDate        DateTime  @db.Date
+  dueDate          DateTime? @db.Date
+  netAmount        Decimal   @default(0) @db.Decimal(14, 2)
+  vatAmount        Decimal   @default(0) @db.Decimal(14, 2)
+  total            Decimal   @default(0) @db.Decimal(14, 2)
+  paidDate         DateTime? @db.Date
+  category         String?
+  note             String?
+  /// Kada je račun predan knjigovođi (stranica Knjigovođa); null = nije poslan.
+  accountantSentAt DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   company  Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   supplier Partner  @relation(fields: [supplierId], references: [id])
@@ -1072,6 +1079,7 @@ model SupplierInvoice {
 
   @@unique([companyId, internalNo])
   @@index([companyId, issueDate])
+  @@index([companyId, accountantSentAt])
   // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
   @@index([supplierId])
 }

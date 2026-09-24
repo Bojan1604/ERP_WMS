@@ -97,17 +97,19 @@ rade bez HTTPS-a — program sam prepoznaje njihov unos.
 
 ### Produkcija
 
+Na vlastitom poslužitelju (Ubuntu + Docker) s HTTPS-om, noćnim kopijama i nadogradnjom jednom
+naredbom — upute korak po korak: **`docs/Program-u-produkciji.pdf`** (prvo testno okruženje
+ePoslovanja, zatim produkcija). Ukratko:
+
 ```bash
-npm run build
-npm run db:deploy           # primjena migracija
-npm run start               # port 3000 (drugi: npx next start -p 8080)
+git clone https://github.com/Bojan1604/ERP_WMS.git /opt/erp && cd /opt/erp/deploy
+bash postavi.sh                     # domena, nasumične lozinke u deploy/.env
+docker compose up -d --build        # baza + program + Caddy (Let's Encrypt)
+docker compose exec app npx tsx --conditions=react-server scripts/prvi-admin.ts
+bash backup.sh | restore.sh | update.sh | obrisi-bazu.sh
 ```
 
-Ili Docker: `docker build -t erp-wms . && docker run -p 3000:3000 --env-file .env erp-wms`
-(migracije se primjenjuju pri pokretanju). Lokalna baza za razvoj: `docker compose up -d`.
-
-Za produkciju obavezno postavite vlastiti `AUTH_SECRET` (`openssl rand -base64 48`) i
-ne pokrećite `db:seed` — on briše i ponovno stvara demo firmu.
+Ne pokrećite `db:seed` na produkciji — on briše i ponovno stvara demo firmu.
 
 ---
 
@@ -138,6 +140,10 @@ i povrat, odobrenja, dugi servisi, niska zaliha, garancije koje istječu. Prikaz
 - Ispis A4 s HUB3 2D barkodom za plaćanje, otpremnica sa serijskim brojevima i jamstvom, **eRačun XML** (UBL 2.1, HR CIUS 2025: 380/381/384/386)
 - Način plaćanja, **fiskalizacija** (ZKI, JIR, QR kod, naknadna dostava) i slanje **eRačuna** posredniku — vidi [Fiskalizacija](#fiskalizacija)
 - Ponude: stavke po modelu bez serijskih, istek valjanosti, stanja, ispis, pretvaranje u račun uz odabir konkretnih uređaja
+
+**Knjigovođa** — izlazni i ulazni računi na jednom mjestu (razdoblje, smjer, poslano / nije poslano,
+vrsta, pretraga), zbrojevi; označeni se preuzimaju kao ZIP (popis CSV, eRačun XML, prilozi) ili ispisuju
+(„Spremi kao PDF") i označavaju kao poslani knjigovođi. E-adresa knjigovođe: Postavke → Firma.
 
 **Najam**
 - Ugovori: početak, kraj, odgoda prve rate, dan naplate, učestalost (mjesečno → godišnje, jednokratno), naplata unaprijed ili unatrag, sezona
@@ -302,9 +308,16 @@ u `src/server/import/upload.ts`); ekran upozori ako bi kopija bila veća (najče
 prilozi provjeravaju kao pri slanju (vrsta po sadržaju, do 2 MB, samo uz uređaje), a postavke firme (valuta, logo,
 brojevi) svode na dopuštene vrijednosti — odbačeno je u upozorenjima analize. Ogledna stara baza: `scripts/fixtures/legacy-sample.json`.
 
+## Dohvati podataka partnera
+
+Gumb **Dohvati** uz OIB: naziv, adresa i poštanski broj iz Sudskog registra (`SUDREG_CLIENT_ID`,
+`SUDREG_CLIENT_SECRET` — besplatna registracija na sudreg-data.gov.hr), bez njih iz EU registra VIES;
+za strane partnere po PDV ID-u (VIES). Ako je posrednik za eRačun podešen, provjerava i AMS (prima li
+partner eRačune).
+
 ## Nije (još) napravljeno
 
-- posrednik Moj-eRačun (sučelje postoji, provedba nije), provjera kupca u AMS-u, primanje ulaznih eRačuna
+- posrednik Moj-eRačun (sučelje postoji, provedba nije), primanje ulaznih eRačuna
 - portal za klijente (prijava kvara s njihove strane)
 - OCR teksta s naljepnica bez barkoda (barkodovi i QR se čitaju kamerom i skenerom)
 - slanje dokumenata e-poštom iz programa (ispis → „Spremi kao PDF")

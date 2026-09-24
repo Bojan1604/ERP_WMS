@@ -4,7 +4,7 @@ import { getCompany } from '@/server/queries/lookups';
 import { num } from '@/domain/money';
 import { PageHeader } from '@/components/ui/misc';
 import { PartnerForm } from '@/components/partners/partner-form';
-import { savePartnerAction } from '../actions';
+import { lookupPartnerAction, savePartnerAction } from '../actions';
 
 export const metadata = { title: 'Novi partner' };
 
@@ -44,6 +44,7 @@ export default async function NewPartnerPage({ searchParams }: { searchParams: P
         }}
         company={{ vatRegistered: company.vatRegistered, vatRate: num(company.vatRate), country: company.country, paymentTermDays: company.paymentTermDays }}
         save={savePartnerAction}
+        lookup={lookupPartnerAction}
         canEdit
       />
     </>

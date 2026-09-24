@@ -1,0 +1,15 @@
+# Caddy sam nabavlja i obnavlja HTTPS certifikat (Let's Encrypt) za domenu iz deploy/.env.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+	reverse_proxy app:3000
+}

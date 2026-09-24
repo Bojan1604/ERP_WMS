@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { action } from '@/server/action';
 import { transaction } from '@/server/db';
 import { zBool, zId, zOptId, zOptInt, zOptMoney, zOptText, zReq } from '@/server/zod';
+import { DomainError } from '@/server/errors';
+import { lookupPartner } from '@/server/lookup';
 import { deletePartner, deletePriceAgreement, savePartner, savePriceAgreement } from '@/server/services/partners';
 
 const partnerSchema = z.object({
@@ -49,3 +51,18 @@ export const deletePriceAction = action({ module: 'partners', level: 'edit' }, z
   await transaction((tx) => deletePriceAgreement(tx, user, id));
   return { message: 'Dogovorena cijena obrisana.' };
 });
+
+/** „Dohvati": Sudski registar / VIES + AMS. Ograničeno po korisniku (vanjski registri i ključevi posrednika). */
+const lookupLimit = new Map<string, { n: number; reset: number }>();
+
+export const lookupPartnerAction = action(
+  { module: 'partners', level: 'edit' },
+  z.object({ oib: zOptText, vatId: zOptText, country: z.string().trim().max(2).default('HR') }),
+  async (input, user) => {
+    const now = Date.now();
+    const h = lookupLimit.get(user.id);
+    if (!h || h.reset < now) lookupLimit.set(user.id, { n: 1, reset: now + 60_000 });
+    else if (++h.n > 20) throw new DomainError('Previše dohvata u minuti — pričekajte malo.');
+    return { message: undefined, data: await lookupPartner(user.companyId, input) };
+  },
+);

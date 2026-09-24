@@ -12,7 +12,7 @@ import { PriceEditor } from '@/components/partners/price-editor';
 import { ContractsTab, DevicesTab, InvoicesTab, LedgerTab } from '@/components/partners/tabs';
 import { countryName } from '@/components/partners/countries';
 import { eur } from '@/lib/format';
-import { deletePartnerAction, deletePriceAction, savePartnerAction, savePriceAction } from '../actions';
+import { deletePartnerAction, deletePriceAction, lookupPartnerAction, savePartnerAction, savePriceAction } from '../actions';
 
 type Params = Record<string, string | string[] | undefined>;
 
@@ -106,6 +106,7 @@ export default async function PartnerPage({ params, searchParams }: { params: Pr
           }}
           company={{ vatRegistered: company.vatRegistered, vatRate: num(company.vatRate), country: company.country, paymentTermDays: company.paymentTermDays }}
           save={savePartnerAction}
+          lookup={lookupPartnerAction}
           remove={deletePartnerAction}
           canEdit={canEdit}
         />

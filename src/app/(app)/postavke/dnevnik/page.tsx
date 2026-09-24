@@ -16,13 +16,14 @@ const ENTITY_LABEL: Record<string, string> = {
   company: 'Firma', user: 'Korisnik', partner: 'Partner', item: 'Uređaj', invoice: 'Račun', quote: 'Ponuda', contract: 'Ugovor',
   receipt: 'Primka', order: 'Narudžbenica', transfer: 'Međuskladišnica', service: 'Servis / usluga', serviceOrder: 'Servisni nalog',
   expense: 'Trošak', supplierInvoice: 'Ulazni račun', warehouse: 'Skladište', category: 'Kategorija', model: 'Model',
-  status: 'Status', expenseCategory: 'Kategorija troška', request: 'Odobrenje',
+  status: 'Status', expenseCategory: 'Kategorija troška', request: 'Odobrenje', accountant: 'Knjigovođa',
 };
 const ACTION_LABEL: Record<string, string> = {
   create: 'novo', update: 'izmjena', delete: 'brisanje', issue: 'izdavanje', storno: 'storno', payment: 'uplata',
   'payment-delete': 'brisanje uplate', unpaid: 'neplaćeno', price: 'cijena', 'price-delete': 'brisanje cijene', logout: 'odjava',
   terminate: 'raskid', add: 'dodavanje', remove: 'uklanjanje', items: 'uređaji', approve: 'odobreno', reject: 'odbijeno',
   'rent-apply': 'najam na uređaje', 'rent-override': 'ručni najam', status: 'status', transfer: 'premještanje',
+  sent: 'poslano knjigovođi', unsent: 'nije poslano knjigovođi',
 };
 const ACTION_TONE: Record<string, 'ok' | 'bad' | 'info' | 'neutral' | 'warn'> = { create: 'ok', delete: 'bad', update: 'info', issue: 'ok', storno: 'warn' };
 const isoDay = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);

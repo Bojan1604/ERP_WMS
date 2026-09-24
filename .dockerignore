@@ -1,4 +1,15 @@
 node_modules
 .next
-.env
 .git
+.env
+.env.*
+!.env.example
+storage
+tests
+docs
+agents/android
+agents/windows/tests
+deploy/.env
+deploy/backups
+*.log
+tsconfig.tsbuildinfo

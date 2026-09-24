@@ -21,6 +21,7 @@ export interface CompanyValue {
   iban: string | null;
   bank: string | null;
   email: string | null;
+  accountantEmail: string | null;
   phone: string | null;
   web: string | null;
   logo: string | null;
@@ -116,6 +117,9 @@ export function CompanyForm({ value, save, canEdit }: { value: CompanyValue; sav
                   </Field>
                   <Field label="Web">
                     <Input name="web" defaultValue={value.web ?? ''} />
+                  </Field>
+                  <Field label="E-adresa knjigovođe" hint="Prikazuje se na stranici Knjigovođa" error={fields.accountantEmail} className="sm:col-span-2">
+                    <Input name="accountantEmail" type="email" defaultValue={value.accountantEmail ?? ''} />
                   </Field>
                 </FormGrid>
               </div>

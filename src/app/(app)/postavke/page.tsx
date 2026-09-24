@@ -28,6 +28,7 @@ export default async function CompanySettingsPage() {
           iban: c.iban,
           bank: c.bank,
           email: c.email,
+          accountantEmail: c.accountantEmail,
           phone: c.phone,
           web: c.web,
           logo: c.logo,

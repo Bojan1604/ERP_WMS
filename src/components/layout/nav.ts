@@ -1,7 +1,7 @@
 import {
   ArrowLeftRight, BarChart3, Boxes, Building2, CalendarClock, ClipboardList, FileSignature, FileText, History, Inbox, LayoutDashboard, ListTree, PackageCheck, PackagePlus, Receipt, ShieldCheck, Table2, Truck, UserCog, Users, Wallet, Wrench,
   ScanLine, ClipboardCheck, Stamp, DatabaseBackup,
-  MonitorSmartphone, Smartphone, QrCode, SlidersHorizontal, AppWindow, FolderOpen, Network, BookOpen,
+  MonitorSmartphone, Smartphone, QrCode, SlidersHorizontal, AppWindow, FolderOpen, Network, BookOpen, Calculator,
   type LucideIcon,
 } from 'lucide-react';
 import type { Module } from '@/domain/permissions';
@@ -67,6 +67,7 @@ export const NAV: NavGroup[] = [
       { href: '/troskovi', label: 'Troškovi', icon: Wallet, module: 'expenses' },
       { href: '/partneri', label: 'Partneri', icon: Users, module: 'partners' },
       { href: '/izvjestaji', label: 'Izvještaji', icon: BarChart3, module: 'reports' },
+      { href: '/knjigovodja', label: 'Knjigovođa', icon: Calculator, module: 'reports' },
     ],
   },
   {

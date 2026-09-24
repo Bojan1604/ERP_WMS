@@ -1,0 +1,65 @@
+# Produkcija na jednom poslužitelju: baza + program + Caddy (HTTPS s Let's Encrypt certifikatom).
+#   cd deploy && bash postavi.sh          # jednom: upiše .env s vašom domenom i nasumičnim lozinkama
+#   docker compose up -d --build          # pokretanje / nadogradnja
+# Upute: docs/produkcija (PDF „Program u produkciji").
+name: erp-wms
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: erp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?postavite POSTGRES_PASSWORD u deploy/.env}
+      POSTGRES_DB: erp
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U erp -d erp']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # baza nije izložena internetu — samo programu kroz unutarnju mrežu
+
+  app:
+    build:
+      context: ..
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://erp:${POSTGRES_PASSWORD}@db:5432/erp?schema=public
+      APP_URL: https://${DOMAIN:?postavite DOMAIN u deploy/.env}
+      MDM_STORAGE_DIR: /data/mdm
+      MDM_AGENT_DIR: /data/agents
+      NODE_ENV: production
+    volumes:
+      - mdm:/data/mdm
+      - ./agents:/data/agents:ro
+    expose:
+      - '3000'
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  mdm:
+  caddy_data:
+  caddy_config:

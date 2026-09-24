@@ -20,6 +20,8 @@ export interface CompanyInput {
   iban: string | null;
   bank: string | null;
   email: string | null;
+  /** E-adresa knjigovođe (stranica Knjigovođa). */
+  accountantEmail?: string | null;
   phone: string | null;
   web: string | null;
   /** undefined = bez promjene, null = ukloni, niz = novi logo (data URL). */

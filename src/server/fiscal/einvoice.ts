@@ -1,5 +1,6 @@
 import 'server-only';
 import { randomUUID } from 'node:crypto';
+import { amsRegistered } from '@/domain/company-lookup';
 
 /**
  * Informacijski posrednik za eRačun (Fiskalizacija 2.0). Program zna samo za
@@ -46,6 +47,8 @@ export interface EInvoiceProvider {
   status(id: string): Promise<ProviderResult>;
   reportPayment(p: PaymentReport): Promise<ProviderResult>;
   ping(): Promise<ProviderResult>;
+  /** AMS (adresar primatelja eRačuna): može li primatelj s tim OIB-om primati eRačune. */
+  amsCheck?(oib: string): Promise<ProviderResult & { registered?: boolean }>;
 }
 
 // ---------------------------------------------------------------- demo
@@ -66,6 +69,9 @@ export const demoProvider: EInvoiceProvider = {
   async ping() {
     return { ok: true, status: 'OK', demo: true, raw: '{"demo":true}' };
   },
+  async amsCheck(oib) {
+    return { ok: true, registered: true, demo: true, raw: JSON.stringify({ demo: true, oib, registered: true }) };
+  },
 };
 
 // ---------------------------------------------------------------- ePoslovanje.hr (API v2)
@@ -78,7 +84,8 @@ export const demoProvider: EInvoiceProvider = {
  *   GET  document/status/{id}     transportni, poslovni i fiskalizacijski status
  *   POST ereporting/paid/{id}     eIzvještavanje o naplati
  *   GET  document/outgoing?limit=1  (provjera veze i ključa)
- * Ostalo što posrednik nudi (document/validate, ams/check, ereporting/reportdocument,
+ *   POST ams/check                { schema: '9934', identifier: OIB } → prima li eRačune
+ * Ostalo što posrednik nudi (document/validate, ereporting/reportdocument,
  * document/incoming) dodaje se ovdje, iza istog sučelja.
  */
 export function eposlovanjeProvider(apiKey: string, env: 'TEST' | 'PROD', timeoutMs = 30_000): EInvoiceProvider {
@@ -145,6 +152,11 @@ export function eposlovanjeProvider(apiKey: string, env: 'TEST' | 'PROD', timeou
     async ping() {
       const r = await call('GET', 'document/outgoing?limit=1&offset=0');
       return { ...r, status: r.ok ? 'OK' : undefined };
+    },
+    async amsCheck(oib) {
+      // 9934 = shema hrvatskog OIB-a u AMS-u
+      const r = await call('POST', 'ams/check', { schema: '9934', identifier: oib });
+      return { ...r, registered: r.ok ? amsRegistered(200, r.data) : undefined };
     },
   };
 }

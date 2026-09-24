@@ -8,6 +8,8 @@ import { Checkbox, Field, FormGrid, Input, Select, Textarea } from '@/components
 import { Card } from '@/components/ui/misc';
 import { customerVat, isValidOib } from '@/domain/tax';
 import { COUNTRIES } from './countries';
+import { OibLookupButton, OibLookupResult } from './oib-lookup';
+import type { PartnerLookup } from '@/server/lookup';
 
 export interface PartnerFormValue {
   id?: string;
@@ -34,14 +36,17 @@ export function PartnerForm({
   company,
   save,
   remove,
+  lookup,
   canEdit,
 }: {
   value: PartnerFormValue;
   company: { vatRegistered: boolean; vatRate: number; country: string; paymentTermDays: number };
   save: ServerAction<FormData>;
   remove?: ServerAction<{ id: string }>;
+  lookup?: ServerAction<{ oib: string | null; vatId: string | null; country: string }, PartnerLookup>;
   canEdit: boolean;
 }) {
+  const [found, setFound] = useState<PartnerLookup | null>(null);
   const [oib, setOib] = useState(value.oib ?? '');
   const [country, setCountry] = useState(value.country || 'HR');
   const [excluded, setExcluded] = useState(value.excluded);
@@ -78,7 +83,10 @@ export function PartnerForm({
                       )
                     }
                   >
-                    <Input name="oib" value={oib} onChange={(e) => setOib(e.target.value)} inputMode="numeric" maxLength={20} />
+                    <div className="flex gap-2">
+                      <Input name="oib" value={oib} onChange={(e) => setOib(e.target.value)} inputMode="numeric" maxLength={20} />
+                      {lookup && canEdit && <OibLookupButton lookup={lookup} oib={oib.trim()} country={country} onFound={setFound} />}
+                    </div>
                   </Field>
                   <Field label="PDV ID" hint="npr. HR12345678901, SI12345678" error={fields.vatId}>
                     <Input name="vatId" defaultValue={value.vatId ?? ''} />
@@ -112,6 +120,7 @@ export function PartnerForm({
                     <Input name="iban" defaultValue={value.iban ?? ''} />
                   </Field>
                 </FormGrid>
+                {found && <OibLookupResult r={found} />}
               </fieldset>
             </Card>
 

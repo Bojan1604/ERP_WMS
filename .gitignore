@@ -6,3 +6,8 @@ out
 next-env.d.ts
 .DS_Store
 storage
+
+# produkcija (deploy/)
+deploy/.env
+deploy/backups/
+deploy/agents/

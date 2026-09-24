@@ -17,6 +17,7 @@ const schema = z.object({
   iban: zOptText,
   bank: zOptText,
   email: zOptText,
+  accountantEmail: zOptText.refine((v) => !v || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), 'Neispravna e-adresa'),
   phone: zOptText,
   web: zOptText,
   // „keep" = logo se ne mijenja, prazno = ukloni
