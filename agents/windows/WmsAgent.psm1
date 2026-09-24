@@ -9,7 +9,7 @@
     New-MdmWifiProfileXml, ConvertTo-MdmWindowsTimeZone, Limit-MdmText, ConvertTo-MdmHashtable
 #>
 
-Set-StrictMode -Version 2.0
+Set-StrictMode -Off  # hashtable.Kljuc za nepostojeći ključ mora vratiti $null
 
 $script:AgentVersion = '1.0.0'
 $script:Protocol = 1
