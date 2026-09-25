@@ -1,10 +1,11 @@
 import 'server-only';
-import { Prisma } from '@prisma/client';
+import { Prisma, type ExpenseSource } from '@prisma/client';
 import { db } from '../../db';
 import { reportSql } from './sql';
 import { expandExpense, type FrequencyCode } from '@/domain/expenses';
 import { toISO } from '@/domain/dates';
 import { PURCHASE_CATEGORY } from '../../services/purchasing';
+import { COST_REVEALING_HIDDEN, COST_REVEALING_SOURCES } from '../expenses';
 import { n, monthChart, monthRows, opt, periodSql, revenueSql, type ReportDef, type ReportFilters, type Row } from './types';
 
 /**
@@ -13,14 +14,20 @@ import { n, monthChart, monthRows, opt, periodSql, revenueSql, type ReportDef, t
  * `expandExpense` (knjiže se samo do danas). Troškovi isključenih partnera
  * ne ulaze.
  */
-export async function expensesByMonth(companyId: string, year: number, opts: { excludePurchases?: boolean; categoryId?: string | null } = {}) {
+export async function expensesByMonth(
+  companyId: string,
+  year: number,
+  opts: { excludePurchases?: boolean; hideCost?: boolean; categoryId?: string | null } = {},
+) {
   const from = `${year}-01-01`;
   const to = `${year}-12-31`;
   // nabava robe: trošak primke i trošak ulaznog računa za robu (račun stigao prije robe ili stariji
-  // nepovezani račun kategorije „Nabava robe") — ta roba ulazi kroz nabavnu vrijednost prodanog
+  // nepovezani račun kategorije „Nabava robe") — ta roba ulazi kroz nabavnu vrijednost prodanog.
+  // Bez prava „costs" (`hideCost`) skriva se isti skup kao na popisu troškova (COST_REVEALING_SOURCES: i otpis).
+  const hidden: readonly ExpenseSource[] = opts.hideCost ? COST_REVEALING_SOURCES : opts.excludePurchases ? ['RECEIPT'] : [];
   const noPurchase = opt(
-    !!opts.excludePurchases,
-    Prisma.sql`AND e."source" <> 'RECEIPT' AND NOT (e."source" = 'SUPPLIER_INVOICE' AND EXISTS (
+    hidden.length > 0,
+    Prisma.sql`AND e."source"::text NOT IN (${Prisma.join(hidden.length ? [...hidden] : [''])}) AND NOT (e."source" = 'SUPPLIER_INVOICE' AND EXISTS (
       SELECT 1 FROM "SupplierInvoice" s LEFT JOIN "ExpenseCategory" c ON c."id" = e."categoryId"
       WHERE s."id" = e."supplierInvoiceId" AND (s."goodsInvoice" = true OR (s."goodsInvoice" IS NULL AND c."name" = ${PURCHASE_CATEGORY}))))`,
   );
@@ -40,7 +47,7 @@ export async function expensesByMonth(companyId: string, year: number, opts: { e
         date: { lte: new Date(`${to}T00:00:00Z`) },
         OR: [{ recurringUntil: null }, { recurringUntil: { gte: new Date(`${from}T00:00:00Z`) } }],
         AND: [{ OR: [{ partnerId: null }, { partner: { excluded: false } }] }],
-        ...(opts.excludePurchases ? { source: { not: 'RECEIPT' as const } } : {}),
+        ...(opts.hideCost ? COST_REVEALING_HIDDEN : hidden.length ? { source: { notIn: [...hidden] } } : {}),
         ...(opts.categoryId ? { categoryId: opts.categoryId } : {}),
       },
       select: { id: true, date: true, categoryId: true, netAmount: true, vatAmount: true, frequency: true, recurringUntil: true, overrides: true },
@@ -102,7 +109,7 @@ export const costReports: ReportDef[] = [
     run: async (companyId, f, ctx) => {
       // nabava robe (primke, računi za robu) su nabavne cijene — bez prava „costs" ne ulazi u izvještaj
       const [{ byCategory, total }, cats] = await Promise.all([
-        expensesByMonth(companyId, f.displayYear, { excludePurchases: !ctx.canSeeCost }),
+        expensesByMonth(companyId, f.displayYear, { hideCost: !ctx.canSeeCost }),
         db.expenseCategory.findMany({ where: { companyId }, select: { id: true, name: true } }),
       ]);
       const name = new Map(cats.map((c) => [c.id as string | null, c.name]));
@@ -131,7 +138,7 @@ export const costReports: ReportDef[] = [
         rows,
         totals: { category: 'Ukupno', ...Object.fromEntries(total.map((v, i) => [`m${i + 1}`, v ? Math.round(v * 100) / 100 : null])), total: Math.round(total.reduce((a, b) => a + b, 0) * 100) / 100 },
         chart: monthChart(f.year, chartRows, series, { stacked: true }),
-        ...(ctx.canSeeCost ? {} : { note: 'Bez nabave robe (primke i računi za robu) — nabavne cijene vidi samo korisnik s tim pravom.' }),
+        ...(ctx.canSeeCost ? {} : { note: 'Bez nabave robe i otpisa opreme (primke, računi za robu, otpisi) — nabavne cijene vidi samo korisnik s tim pravom.' }),
       };
     },
   },

@@ -226,7 +226,7 @@ export function OverviewGrid({
                           placeholder="auto"
                           className="h-6 w-20 rounded border border-brand bg-panel px-1 text-right text-sm focus:outline-none"
                         />
-                      ) : c.v ? (
+                      ) : c.v || (c.manual && c.v === 0) ? (
                         amount(c.v)
                       ) : (
                         ''

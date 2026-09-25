@@ -1,8 +1,8 @@
 import Link from 'next/link';
-import { can } from '@/domain/permissions';
+import { can, canSeeCost } from '@/domain/permissions';
 import { pageAccess } from '@/server/auth';
 import { getCompany } from '@/server/queries/lookups';
-import { accountantKeysByFilter, accountantRowsByIds, invoicesForPrint } from '@/server/queries/accountant';
+import { accountantAccess, accountantKeysByFilter, accountantRowsByIds, invoicesForPrint } from '@/server/queries/accountant';
 import { ACCOUNTANT_ROW_CAP, parseKeys, readAccountantFilters } from '@/domain/accountant';
 import { r2 } from '@/domain/money';
 import { DocTable, DocTotals, DocumentShell } from '@/components/doc/document';
@@ -25,17 +25,17 @@ export default async function AccountantPrintPage({ searchParams }: { searchPara
   // `sve=1`: svi dokumenti popisa po filtrima iz URL-a (najviše ACCOUNTANT_ROW_CAP po smjeru)
   const ids =
     sp.sve === '1'
-      ? parseKeys(await accountantKeysByFilter(user.companyId, readAccountantFilters(sp), { out: can(user.perms, 'sales', 'view'), in: can(user.perms, 'purchasing', 'view') }))
+      ? parseKeys(await accountantKeysByFilter(user.companyId, readAccountantFilters(sp), accountantAccess(user.perms)))
       : parseKeys(typeof sp.ids === 'string' ? sp.ids : '');
   if (!can(user.perms, 'sales', 'view')) ids.out = [];
   const inIds = can(user.perms, 'purchasing', 'view') ? ids.in.slice(0, ACCOUNTANT_ROW_CAP) : [];
   const [company, invoices, inbound] = await Promise.all([
     getCompany(user.companyId),
     invoicesForPrint(user.companyId, ids.out),
-    inIds.length ? accountantRowsByIds(user.companyId, { out: [], in: inIds }) : Promise.resolve([]),
+    inIds.length ? accountantRowsByIds(user.companyId, { out: [], in: inIds }, canSeeCost(user.perms)) : Promise.resolve([]),
   ]);
   const inRows = [...inbound].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-  const sum = (k: 'net' | 'vat' | 'total') => r2(inRows.reduce((a, r) => a + r[k], 0));
+  const sum = (k: 'net' | 'vat' | 'total') => r2(inRows.reduce((a, r) => a + (r[k] ?? 0), 0));
   const missing = ids.out.length + inIds.length - invoices.length - inRows.length;
 
   return (

@@ -5,9 +5,8 @@ import { action } from '@/server/action';
 import { transaction } from '@/server/db';
 import { zBool, zIds } from '@/server/zod';
 import { markAccountantSent } from '@/server/services/accountant';
-import { accountantKeysByFilter } from '@/server/queries/accountant';
+import { accountantAccess, accountantKeysByFilter } from '@/server/queries/accountant';
 import { readAccountantFilters } from '@/domain/accountant';
-import { can } from '@/domain/permissions';
 import { countLabel, plural } from '@/domain/plural';
 
 /** Skupno: označi/odznači „poslano knjigovođi" (ključevi „out:<id>" i „in:<id>"). */
@@ -36,7 +35,7 @@ export const accountantKeysAction = action(
   z.object({ qs: z.string().max(2000, 'Predugi filtri.') }),
   async ({ qs }, user) => {
     const f = readAccountantFilters(Object.fromEntries(new URLSearchParams(qs)));
-    const keys = await accountantKeysByFilter(user.companyId, f, { out: can(user.perms, 'sales', 'view'), in: can(user.perms, 'purchasing', 'view') });
+    const keys = await accountantKeysByFilter(user.companyId, f, accountantAccess(user.perms));
     return { data: keys, revalidate: [] };
   },
 );

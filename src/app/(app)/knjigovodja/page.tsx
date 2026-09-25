@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { Calculator, Mail } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { getCompany } from '@/server/queries/lookups';
-import { listAccountant } from '@/server/queries/accountant';
+import { accountantAccess, listAccountant } from '@/server/queries/accountant';
 import { can } from '@/domain/permissions';
 import { ACCOUNTANT_KIND_LABEL, ACCOUNTANT_ROW_CAP, accountantEInvoiceLabel, readAccountantFilters, type AccountantKind } from '@/domain/accountant';
 import { ExportButtons } from '@/components/ui/export-buttons';
@@ -31,7 +31,7 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
   // popis po stranicama (100); ZIP, ispis i oznaka „poslano" za sve po filtru idu preko filtra (AccountantBar)
   const page = readPage(sp, 100);
   const [list, company] = await Promise.all([
-    listAccountant(user.companyId, f, { out: can(user.perms, 'sales', 'view'), in: can(user.perms, 'purchasing', 'view') }, page),
+    listAccountant(user.companyId, f, accountantAccess(user.perms), page),
     getCompany(user.companyId),
   ]);
   const { rows, totals, dirs } = list;
@@ -115,6 +115,12 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
           canMark={canMark}
           email={{ to: company.accountantEmail ?? null, subject: subjectText }}
         />
+        {rows.length > 0 && (
+          // na mobitelu zaglavlje tablice nije vidljivo — „označi sve" (pa „svih po filtru") je iznad kartica
+          <label className="mb-2 flex items-center gap-2 text-sm text-fg-2 sm:hidden">
+            <SelectAll /> Označi sve na stranici
+          </label>
+        )}
         <TableWrap>
           {rows.length ? (
             <table className="data-table sm:min-w-[1250px]">
@@ -210,7 +216,10 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
                 {dirs.in && (
                   <tr>
                     <td />
-                    <td colSpan={6}>Ulazni: {countLabel(totals.in.count, 'dokument', 'dokumenta', 'dokumenata', integer)}</td>
+                    <td colSpan={6}>
+                      Ulazni: {countLabel(totals.in.count, 'dokument', 'dokumenta', 'dokumenata', integer)}
+                      {totals.inGoodsHidden && <span className="text-fg-3"> · iznosi bez računa za robu</span>}
+                    </td>
                     <td className="num">{amount(totals.in.net)}</td>
                     <td className="num">{amount(totals.in.vat)}</td>
                     <td className="num">{amount(totals.in.total)}</td>
@@ -229,7 +238,11 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Dokumenata" value={integer(totals.out.count + totals.in.count)} />
         <Stat label="Izlazni (s PDV-om)" value={eur(totals.out.total)} hint={`PDV ${eur(totals.out.vat)}`} />
-        <Stat label="Ulazni (s PDV-om)" value={eur(totals.in.total)} hint={`PDV ${eur(totals.in.vat)}`} />
+        <Stat
+          label="Ulazni (s PDV-om)"
+          value={eur(totals.in.total)}
+          hint={`PDV ${eur(totals.in.vat)}${totals.inGoodsHidden ? ' · bez računa za robu' : ''}`}
+        />
         <Stat label="Nije poslano" value={integer(notSent)} tone={notSent ? 'warn' : 'ok'} />
       </div>
     </>

@@ -44,6 +44,10 @@ const ACTION_LABEL: Record<string, string> = {
   returned: 'vraćeno', returning: 'u povratu', skip: 'preskočeno', unskip: 'vraćeno u plan',
   'einvoice-reset': 'eRačun poništen', 'einvoice-status': 'status eRačuna', 'fiscal-cert': 'certifikat za fiskalizaciju',
   'fiscal-settings': 'postavke fiskalizacije', 'mail-settings': 'postavke e-pošte', 'mail-templates': 'predlošci e-pošte',
+  writeOff: 'otpis', bulkUpdate: 'grupna izmjena', cancelOut: 'poništen izlaz', supplierInvoice: 'račun dobavljača',
+  reconcile: 'usklađivanje troška robe', 'goods-reconcile': 'usklađivanje troška robe', 'goods-expense-fix': 'popravak troška robe',
+  'einvoice-ir': 'fiskalizacija bez slanja (IR)', 'einvoice-report': 'eIzvještavanje', enable: 'uključeno', disable: 'isključeno',
+  public: 'vidljivo klijentu', private: 'skriveno od klijenta', izmjena: 'izmjena',
 };
 const ACTION_TONE: Record<string, 'ok' | 'bad' | 'info' | 'neutral' | 'warn'> = {
   create: 'ok', delete: 'bad', update: 'info', issue: 'ok', storno: 'warn', accept: 'ok', reject: 'bad', 'wipe-transactions': 'bad', 'wipe-all': 'bad', 'log-clean': 'warn', '2fa-reset': 'warn',

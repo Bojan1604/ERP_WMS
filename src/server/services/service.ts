@@ -111,6 +111,15 @@ export async function createServiceOrder(tx: Tx, actor: Actor, input: NewService
   assert(item, 'Uređaj ne postoji.');
   const open = await tx.serviceOrder.findFirst({ where: { companyId: actor.companyId, itemId: item.id, status: { in: OPEN } }, select: { number: true } });
   assert(!open, `Uređaj ${item.serial} već ima otvoren servisni nalog ${open?.number}.`);
+  // popravljen uređaj koji je još na servisu (nije vraćen kupcu, u najam ni na skladište) — prvo povrat
+  if (item.state === 'SERVICE') {
+    const repaired = await tx.serviceOrder.findFirst({
+      where: { companyId: actor.companyId, itemId: item.id, status: 'REPAIRED' },
+      orderBy: { createdAt: 'desc' },
+      select: { number: true },
+    });
+    assert(!repaired, `Uređaj ${item.serial} popravljen je po nalogu ${repaired?.number} i još je na servisu — najprije ga vratite (kupcu, u najam ili na skladište).`);
+  }
 
   const number = await nextDocNumber(tx, actor.companyId, 'SERVICE', Number(input.reportedAt.slice(0, 4)));
   const order = await tx.serviceOrder.create({

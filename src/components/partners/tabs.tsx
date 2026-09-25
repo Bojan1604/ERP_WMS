@@ -11,6 +11,7 @@ import { toISO, today } from '@/domain/dates';
 import { num } from '@/domain/money';
 import { cn } from '@/lib/cn';
 import { ExportButtons } from '@/components/ui/export-buttons';
+import { countLabel } from '@/domain/plural';
 
 type Params = Record<string, string | string[] | undefined>;
 
@@ -91,7 +92,8 @@ export async function InvoicesTab({ companyId, partnerId, params, overdueDays }:
   );
 }
 
-export async function DevicesTab({ companyId, partnerId, params }: { companyId: string; partnerId: string; params: Params }) {
+/** `rentals` — pravo na najam: bez njega nema stupca Ugovor (poveznica na /najam). */
+export async function DevicesTab({ companyId, partnerId, params, rentals = true }: { companyId: string; partnerId: string; params: Params; rentals?: boolean }) {
   const page = readPage(params, 100);
   const { rows, total } = await partnerDevices(companyId, partnerId, page);
   const now = today();
@@ -118,7 +120,7 @@ export async function DevicesTab({ companyId, partnerId, params }: { companyId: 
                 <th>Status</th>
                 <th>Od</th>
                 <th>Jamstvo do</th>
-                <th>Ugovor</th>
+                {rentals && <th>Ugovor</th>}
               </tr>
             </thead>
             <tbody>
@@ -137,15 +139,17 @@ export async function DevicesTab({ companyId, partnerId, params }: { companyId: 
                     </td>
                     <td>{date(i.issueDate)}</td>
                     <td className={cn(wEnd && wEnd < now && 'text-fg-3')}>{wEnd ? date(wEnd) : '—'}</td>
-                    <td>
-                      {i.contractItem ? (
-                        <Link prefetch={false} href={`/najam/ugovori/${i.contractItem.contract.id}`} className="link">
-                          {i.contractItem.contract.number}
-                        </Link>
-                      ) : (
-                        <span className="text-fg-4">—</span>
-                      )}
-                    </td>
+                    {rentals && (
+                      <td>
+                        {i.contractItem ? (
+                          <Link prefetch={false} href={`/najam/ugovori/${i.contractItem.contract.id}`} className="link">
+                            {i.contractItem.contract.number}
+                          </Link>
+                        ) : (
+                          <span className="text-fg-4">—</span>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -243,7 +247,7 @@ export async function LedgerTab({ companyId, partnerId, params }: { companyId: s
           </tbody>
           <tfoot>
             <tr>
-              <td colSpan={3}>Ukupno ({integer(total)} stavki)</td>
+              <td colSpan={3}>Ukupno ({countLabel(total, 'stavka', 'stavke', 'stavki', integer)})</td>
               <td className="num">{amount(debit)}</td>
               <td className="num">{amount(credit)}</td>
               <td className="num">{amount(balance)}</td>

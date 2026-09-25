@@ -40,8 +40,7 @@ export async function loadInvoice(companyId: string, id: string) {
         orderBy: { sort: 'asc' },
         include: {
           item: { select: { serial: true, warrantyMonths: true, warrantyStart: true } },
-          model: { select: { code: true, kpd: true } },
-          service: { select: { kpd: true } },
+          model: { select: { code: true } },
         },
       },
       refInvoice: { select: { number: true, date: true } },
@@ -107,7 +106,8 @@ export function invoiceRows(inv: LoadedInvoice) {
         note: rv.note,
         serial: l.item?.serial ?? null,
         code: l.model?.code ?? null,
-        kpd: l.kpd ?? l.model?.kpd ?? l.service?.kpd ?? null,
+        // ispis = KPD na stavci (isti kao stranica računa i XML eRačuna) — bez zamjene KPD-om prodaje s modela
+        kpd: l.kpd || null,
         unit: rv.unit,
         qty: num(l.qty),
         unitPrice: num(l.unitPrice),
@@ -122,6 +122,12 @@ export function invoiceRows(inv: LoadedInvoice) {
     qty: g.reduce((a, x) => a + x.qty, 0),
     netAmount: r2(g.reduce((a, x) => a + x.netAmount, 0)),
   }));
+}
+
+/** Redak „SN: …" ispod opisa — samo serijski koji već nisu u opisu (npr. stavka najma „…, SN X — mjesečno"). */
+function serialNote(description: string, serials: string[]): Content[] {
+  const rest = serials.filter((sn) => !description.includes(sn));
+  return rest.length ? [{ text: `SN: ${rest.join(', ')}`, fontSize: 7.5, color: GREY, margin: [0, 1, 0, 0] } as Content] : [];
 }
 
 /** pdfmake definicija računa (sve vrste: račun, predujam, storno, odobrenje, nacrt). */
@@ -158,7 +164,7 @@ export function invoiceDefinition(inv: LoadedInvoice, c: LoadedCompany, img: Inv
   const body: TableCell[][] = rows.map((l, i) => [
     { text: String(i + 1), color: GREY },
     ...(hasCode ? [{ text: l.code ?? '', fontSize: 7.5 }] : []),
-    { stack: [{ text: l.description }, ...(l.note ? [{ text: l.note, fontSize: 7.5, color: GREY }] : []), ...(l.serials.length ? [{ text: `SN: ${l.serials.join(', ')}`, fontSize: 7.5, color: GREY, margin: [0, 2, 0, 0] }] : [])] },
+    { stack: [{ text: l.description }, ...(l.note ? [{ text: l.note, fontSize: 7.5, color: GREY }] : []), ...serialNote(l.description, l.serials)] },
     ...(hasKpd ? [{ text: l.kpd ?? '', fontSize: 7.5 }] : []),
     { text: l.unit, noWrap: true },
     qty(l.qty),
@@ -197,7 +203,7 @@ export function invoiceDefinition(inv: LoadedInvoice, c: LoadedCompany, img: Inv
   ];
 
   const taxTable: Content = {
-    margin: [0, 10, 0, 0],
+    margin: [0, 6, 16, 0],
     table: {
       widths: ['auto', 'auto', 'auto', 'auto'],
       body: [
@@ -213,16 +219,18 @@ export function invoiceDefinition(inv: LoadedInvoice, c: LoadedCompany, img: Inv
     layout: { hLineWidth: (i: number) => (i === 1 ? 0.6 : 0), vLineWidth: () => 0, hLineColor: () => '#999', paddingLeft: (i: number) => (i ? 10 : 0), paddingRight: () => 0, paddingTop: () => 2, paddingBottom: () => 2 },
   } as Content;
 
+  // fiskalizacija i porezna tablica stoje lijevo od zbrojeva (kompaktno: račun do ~14 stavki na jednoj stranici)
   const fiscal: Content | null =
     inv.status === 'ISSUED' && inv.zki
       ? box(
           'Fiskalizacija',
           [
-            kv('ZKI', inv.zki, { fontSize: 8 }),
-            kv('JIR', inv.jir ?? 'naknadna dostava', { fontSize: 8 }),
-            ...(inv.issuedAt ? [kv('Vrijeme izdavanja', fullTime(inv.issuedAt), { fontSize: 8 })] : []),
+            kv('ZKI', inv.zki, { fontSize: 7.5, margin: [0, 1, 0, 0] }),
+            kv('JIR', inv.jir ?? 'naknadna dostava', { fontSize: 7.5, margin: [0, 1, 0, 0] }),
+            ...(inv.issuedAt ? [kv('Vrijeme izdavanja', fullTime(inv.issuedAt), { fontSize: 7.5, margin: [0, 1, 0, 0] })] : []),
           ],
-          img.qr ? ({ image: img.qr, width: 68 } as Content) : null,
+          img.qr ? ({ image: img.qr, width: 52 } as Content) : null,
+          [0, 6, 16, 0],
         )
       : null;
 
@@ -231,7 +239,7 @@ export function invoiceDefinition(inv: LoadedInvoice, c: LoadedCompany, img: Inv
       ? box(
           'Podaci za plaćanje',
           [
-            { text: `IBAN ${c.iban ?? '—'}`, fontSize: 10.5, bold: true, margin: [0, 4, 0, 2] } as Content,
+            { text: `IBAN ${c.iban ?? '—'}`, fontSize: 10, bold: true, margin: [0, 2, 0, 1] } as Content,
             ...(c.swift ? [kv('SWIFT / BIC', c.swift)] : []),
             kv('Model i poziv na broj', `${c.paymentModel || 'HR00'} ${inv.paymentRef ?? ''}`.trim()),
             kv('Iznos', `${amt(inv.kind === 'ADVANCE' ? grand : payable)} ${cur}`),
@@ -239,7 +247,7 @@ export function invoiceDefinition(inv: LoadedInvoice, c: LoadedCompany, img: Inv
             kv('Primatelj', c.name, { bold: false }),
           ],
           img.hub3
-            ? ({ stack: [{ image: img.hub3, width: 190 }, { text: '2D barkod za plaćanje — skenirajte u bankovnoj aplikaciji', fontSize: 6.5, color: GREY, margin: [0, 3, 0, 0] }] } as Content)
+            ? ({ stack: [{ image: img.hub3, width: 170 }, { text: '2D barkod za plaćanje — skenirajte u bankovnoj aplikaciji', fontSize: 6.5, color: GREY, margin: [0, 2, 0, 0] }] } as Content)
             : null,
         )
       : null;
@@ -256,9 +264,7 @@ export function invoiceDefinition(inv: LoadedInvoice, c: LoadedCompany, img: Inv
       inv.refInvoice ? { text: [`Odnosi se na račun br. `, { text: inv.refInvoice.number ?? '', bold: true }, ` od ${fmtDate(toISO(inv.refInvoice.date))}`], margin: [0, 10, 0, 0] } : null,
       inv.description ? { text: inv.description, bold: true, margin: [0, 10, 0, 0] } : null,
       itemsTable({ widths, head, right, rows: body }),
-      sums(totals, notes),
-      taxTable,
-      fiscal,
+      sums(totals, notes, [taxTable, fiscal]),
       payment,
     ],
     footer: 'Dokument je izrađen elektronički i valjan je bez potpisa i pečata.',

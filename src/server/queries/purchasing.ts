@@ -4,6 +4,7 @@ import { db } from '../db';
 import { num, r2 } from '@/domain/money';
 import { addDays, fromISO, toISO } from '@/domain/dates';
 import { goodsExpensePlan, goodsGroupOf, goodsInvoiceContext } from '../services/goods-expense';
+import { acceptPreview } from '@/domain/purchase-links';
 import { escapeLike } from '@/lib/like';
 
 type Params = Record<string, string | string[] | undefined>;
@@ -324,6 +325,11 @@ export async function getSupplierInvoice(companyId: string, id: string) {
   const group = await goodsGroupOf(db, companyId, { orderId: si.orderId, receiptId: si.receiptId, invoiceId: si.id });
   const plan = group ? await goodsExpensePlan(db, companyId, group) : null;
   const alloc = plan?.allocation.find((a) => a.id === si.id) ?? null;
+  // zaprimljeni eRačun: što bi knjižilo prihvaćanje s „Knjiži kao trošak" (povezan račun za robu → samo razlika iznad primki)
+  const linked = !!group && !('invoiceId' in group);
+  // račun za robu: zapamćena odluka ili zadana (kao applyInvoiceExpense pri prihvaćanju)
+  const goods = linked && (si.goodsInvoice ?? ctx.defaultGoods);
+  const preview = si.status === 'RECEIVED' && plan ? acceptPreview(plan.receiptsBooked, plan.rows, si.id, goods) : null;
   return {
     ...si,
     attachments,
@@ -331,6 +337,7 @@ export async function getSupplierInvoice(companyId: string, id: string) {
     defaultGoods: ctx.defaultGoods,
     goodsRule: { refs: ctx.refs, others: ctx.otherGoodsInvoices, otherNet: ctx.otherGoodsNet },
     allocation: alloc,
+    acceptPreview: preview ? { ...preview, linked, goods } : null,
   };
 }
 

@@ -1,5 +1,5 @@
 import 'server-only';
-import type { Prisma } from '@prisma/client';
+import type { ExpenseSource, Prisma } from '@prisma/client';
 import { db } from '../db';
 import { expandExpense, type ExpenseInput, type FrequencyCode } from '@/domain/expenses';
 import { fromISO, toISO, today } from '@/domain/dates';
@@ -209,8 +209,11 @@ export async function expensesForYear(companyId: string, f: ExpenseFilters, page
 }
 
 /** Troškovi koji otkrivaju nabavnu vrijednost robe (primka, otpis, ulazni račun za robu) — skriveni bez prava `costs`. */
-const COST_REVEALING_HIDDEN: Prisma.ExpenseWhereInput = {
-  source: { notIn: ['RECEIPT', 'WRITE_OFF'] },
+export const COST_REVEALING_SOURCES = ['RECEIPT', 'WRITE_OFF'] as const satisfies readonly ExpenseSource[];
+
+/** Isti skup kao `COST_REVEALING_SOURCES` + ulazni račun za robu — jedini izvor za popis, izvoz i izvještaje. */
+export const COST_REVEALING_HIDDEN: Prisma.ExpenseWhereInput = {
+  source: { notIn: [...COST_REVEALING_SOURCES] },
   NOT: { source: 'SUPPLIER_INVOICE', supplierInvoice: { is: { goodsInvoice: true } } },
 };
 

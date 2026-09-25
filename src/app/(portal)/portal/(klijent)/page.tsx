@@ -60,7 +60,7 @@ export default async function PortalDevicesPage({ searchParams }: { searchParams
                   <tr key={d.id}>
                     <td className="font-medium">{name}</td>
                     <td data-label="Serijski broj" className="font-mono break-all">{d.serial}</td>
-                    <td data-label="Vrsta" className="text-fg-2">{portalDeviceKind(d.state, d.status.name)}</td>
+                    <td data-label="Vrsta" className="text-fg-2">{portalDeviceKind(d.state, d.status.name, d.prevState)}</td>
                     <td data-label="Kod vas od">{date(d.issueDate)}</td>
                     <td data-label="Jamstvo do">
                       {d.warrantyEnd ? (
@@ -76,6 +76,9 @@ export default async function PortalDevicesPage({ searchParams }: { searchParams
                         <Link prefetch={false} href={`/portal/prijave/${open.id}`} title={`Otvorena prijava ${open.number}`}>
                           <Badge tone="warn">u servisu · {SERVICE_STATUS[open.status as ServiceStatusCode].label}</Badge>
                         </Link>
+                      ) : d.state === 'SERVICE' ? (
+                        // popravljen, čeka povrat — nova prijava tek nakon povrata
+                        <Badge tone="info">na servisu · čeka povrat</Badge>
                       ) : (
                         <ReportFaultButton device={{ id: d.id, name, serial: d.serial, warrantyEnd: d.warrantyEnd, inWarranty }} defaultContact={user.email} />
                       )}

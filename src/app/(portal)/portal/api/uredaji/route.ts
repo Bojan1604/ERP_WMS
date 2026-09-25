@@ -29,12 +29,15 @@ export async function GET(req: Request) {
     [
       { label: 'Uređaj', value: (r) => [r.model.brand, r.model.name].filter(Boolean).join(' ') },
       { label: 'Serijski broj', value: (r) => r.serial, type: 'text' },
-      { label: 'Vrsta', value: (r) => portalDeviceKind(r.state, r.status.name) },
+      { label: 'Vrsta', value: (r) => portalDeviceKind(r.state, r.status.name, r.prevState) },
       { label: 'Kod vas od', value: (r) => (r.issueDate ? formatDate(r.issueDate) : ''), type: 'date' },
       { label: 'Jamstvo do', value: (r) => (r.warrantyEnd ? formatDate(r.warrantyEnd) : ''), type: 'date' },
       {
         label: 'Stanje',
-        value: (r) => portalDeviceState({ openOrderLabel: r.serviceOrders[0] ? SERVICE_STATUS[r.serviceOrders[0].status as ServiceStatusCode].label : null, warrantyEnd: r.warrantyEnd }, now),
+        value: (r) => portalDeviceState(
+            { openOrderLabel: r.serviceOrders[0] ? SERVICE_STATUS[r.serviceOrders[0].status as ServiceStatusCode].label : null, warrantyEnd: r.warrantyEnd, state: r.state },
+            now,
+          ),
       },
     ],
     `uredaji-${now}`,

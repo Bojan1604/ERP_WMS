@@ -42,9 +42,9 @@ export const partnerListSelect = {
  * otvoreno), uređaje kod partnera i aktivne ugovore.
  */
 export async function partnerStats(companyId: string, ids: string[]) {
-  type S = { open: number; devices: number; contracts: number; invoices: number; turnover: number };
+  type S = { open: number; overpaid: number; devices: number; contracts: number; invoices: number; turnover: number };
   if (!ids.length) return new Map<string, S>();
-  const [inv, devices, contracts] = await Promise.all([
+  const [inv, devices, contracts, over] = await Promise.all([
     db.invoice.groupBy({
       by: ['partnerId'],
       where: { companyId, partnerId: { in: ids }, status: 'ISSUED' },
@@ -53,8 +53,17 @@ export async function partnerStats(companyId: string, ids: string[]) {
     }),
     db.item.groupBy({ by: ['partnerId'], where: { companyId, partnerId: { in: ids }, ...ACTIVE_DEVICE }, _count: { _all: true } }),
     db.contract.groupBy({ by: ['partnerId'], where: { companyId, partnerId: { in: ids }, status: 'ACTIVE' }, _count: { _all: true } }),
+    // preplata (za povrat kupcu) — isto pravilo kao partnerOverpaid, za sve partnere stranice jednim upitom
+    db.$queryRaw<Array<{ partnerId: string; amount: Prisma.Decimal | null }>>`
+      SELECT x."partnerId", SUM(x.over) AS amount FROM (
+        SELECT "partnerId", "paidTotal" + "advanceAmount" + "creditedTotal" - "grandTotal" AS over
+        FROM "Invoice"
+        WHERE "companyId" = ${companyId} AND "partnerId" IN (${Prisma.join(ids)}) AND status = 'ISSUED'
+          AND kind IN ('INVOICE', 'ADVANCE') AND NOT stornoed
+      ) x WHERE x.over > 0.005 GROUP BY 1`,
   ]);
-  const out = new Map<string, S>(ids.map((id) => [id, { open: 0, devices: 0, contracts: 0, invoices: 0, turnover: 0 }]));
+  const out = new Map<string, S>(ids.map((id) => [id, { open: 0, overpaid: 0, devices: 0, contracts: 0, invoices: 0, turnover: 0 }]));
+  for (const r of over) out.get(r.partnerId)!.overpaid = r2(num(r.amount));
   for (const r of inv) {
     const s = out.get(r.partnerId)!;
     s.open = num(r._sum.openAmount);

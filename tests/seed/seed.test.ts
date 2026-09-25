@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
 import { today } from '../../src/domain/dates';
+import { isValidOib } from '../../src/domain/tax';
 
 const url = new URL(process.env.SEED_TEST_DATABASE_URL ?? 'postgresql://postgres:postgres@localhost:5432/wms_seedtest?schema=public');
 const dbName = url.pathname.slice(1);
@@ -69,6 +70,21 @@ test('seed na praznoj bazi: migracije + demo firma, dosljedni podaci, prijava ra
     if (multi) assert.match(multi.invoice.description ?? '', / – /, 'opis višemjesečne rate bez raspona mjeseci');
     assert.ok((await db.contract.count({ where: { companyId: u.companyId } })) > 0);
     assert.ok((await db.item.count({ where: { companyId: u.companyId, state: 'RENTED' } })) > 0);
+    // svi OIB-i partnera (i firme) prolaze kontrolnu znamenku (ISO 7064, MOD 11,10)
+    const oibs = await db.partner.findMany({ where: { companyId: u.companyId, oib: { not: null } }, select: { name: true, oib: true } });
+    assert.ok(oibs.length >= 20, `premalo partnera s OIB-om (${oibs.length})`);
+    for (const p of oibs) assert.ok(isValidOib(p.oib), `neispravan OIB partnera ${p.name}: ${p.oib}`);
+    assert.ok(isValidOib(u.company.oib), 'neispravan OIB demo firme');
+    // servisni nalozi: prijava ≤ zaprimanje ≤ zatvaranje, tijek naloga kronološki
+    const orders = await db.serviceOrder.findMany({ where: { companyId: u.companyId }, select: { number: true, reportedAt: true, receivedAt: true, closedAt: true, timeline: true } });
+    assert.ok(orders.length > 0, 'nema servisnih naloga');
+    for (const o of orders) {
+      if (o.receivedAt) assert.ok(o.reportedAt <= o.receivedAt, `${o.number}: zaprimljeno prije prijave`);
+      if (o.closedAt) assert.ok((o.receivedAt ?? o.reportedAt) <= o.closedAt, `${o.number}: zatvoreno prije zaprimanja`);
+      const at = (Array.isArray(o.timeline) ? o.timeline : []).map((e) => String((e as { at?: unknown }).at ?? ''));
+      assert.deepEqual(at, [...at].sort(), `${o.number}: tijek naloga nije kronološki`);
+      if (at.length) assert.equal(at[0].slice(0, 10), o.reportedAt.toISOString().slice(0, 10), `${o.number}: prvi zapis tijeka nije na datum prijave`);
+    }
   } finally {
     await db.$disconnect();
   }

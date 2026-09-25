@@ -132,6 +132,17 @@ export async function pageAccess(module: Module, level: Exclude<Level, 'none'> =
   return u;
 }
 
+/**
+ * Stranica za svakog internog korisnika bez obzira na modul (npr. globalna pretraga — rezultati se
+ * sami sužavaju na module s pravom). Vanjski (MDM) korisnici idu na svoju početnu.
+ */
+export async function internalPageAccess(): Promise<SessionUser> {
+  const u = await getUser();
+  if (!u) redirect('/login');
+  if (isExternalRole(u.role)) redirect(userHome(u));
+  return u;
+}
+
 /** Radnje nad cijelom firmom (uvoz, izvoz, vraćanje kopije) — samo administrator. */
 export async function requireAdmin(): Promise<SessionUser> {
   const u = await requireUser();

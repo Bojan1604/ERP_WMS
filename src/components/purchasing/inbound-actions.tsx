@@ -9,6 +9,8 @@ import { Notice } from '@/components/ui/misc';
 import { ActionButton, FormError, useAction, type ServerAction } from '@/components/ui/action';
 import { useToast } from '@/components/ui/toast';
 import { REJECT_REASONS } from '@/domain/einvoice-inbound';
+import { acceptBookDefault, type AcceptBookPreview } from '@/domain/purchase-links';
+import { eur } from '@/lib/format';
 
 type WithWarning = { warning?: string | null } | undefined;
 
@@ -41,6 +43,7 @@ export function SupplierInvoiceDecision({
   eInvoice,
   canAccept,
   recentReceipts,
+  bookPreview = null,
   canReject,
   canPay,
   accept,
@@ -52,6 +55,8 @@ export function SupplierInvoiceDecision({
   canAccept: boolean;
   /** Broj primki istog dobavljača u 90 dana prije računa — tada je roba vjerojatno već knjižena primkom. */
   recentReceipts: number;
+  /** Što bi prihvaćanje knjižilo po pravilu troška robe (povezani račun) — `null` za nepovezani. */
+  bookPreview?: AcceptBookPreview | null;
   canReject: boolean;
   canPay: boolean;
   accept: ServerAction<{ id: string; book: boolean }, unknown>;
@@ -64,8 +69,9 @@ export function SupplierInvoiceDecision({
   const rej = useAction(reject);
   const trimmed = reason.trim();
   const [accepting, setAccepting] = useState(false);
-  // račun robe već zaprimljene primkom ne knjiži se ponovno (primka je knjižila „Nabava robe")
-  const [book, setBook] = useState(recentReceipts === 0);
+  // povezani račun za robu knjiži samo razliku iznad primki (pravilo max(primke, računi)); nepovezani uz nedavne primke — isključeno
+  const bookDefault = acceptBookDefault(recentReceipts, bookPreview, (v) => eur(v));
+  const [book, setBook] = useState(bookDefault.book);
   const acc = useAction(accept);
 
   return (
@@ -119,11 +125,7 @@ export function SupplierInvoiceDecision({
           </p>
           <div>
             <Checkbox label="Knjiži kao trošak" checked={book} onChange={(e) => setBook(e.target.checked)} />
-            <p className="mt-1 text-xs text-fg-3">
-              {recentReceipts > 0
-                ? `Dobavljač ima ${recentReceipts} ${recentReceipts === 1 ? 'primku' : 'primki'} u 90 dana prije računa — roba zaprimljena primkom već je knjižena kao trošak „Nabava robe". Uključite samo ako račun nije za tu robu (npr. usluga).`
-                : 'Za račun robe koja je zaprimljena primkom trošak je već knjižen primkom — tada isključite da se trošak ne zbroji dvaput.'}
-            </p>
+            <p className="mt-1 text-xs text-fg-3">{bookDefault.hint}</p>
           </div>
           <FormError error={acc.error} />
         </div>

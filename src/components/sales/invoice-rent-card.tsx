@@ -110,7 +110,8 @@ export function RentCard({
           ) : (
             '—'
           )}{' '}
-          za <b>{period ? periodLabel(period) : '—'}</b>. Ugovor, razdoblje i mjesečne cijene određuje modul Najam.
+          za <b>{period ? periodLabel(period) : '—'}</b>
+          {period ? ' ' : '. '}Ugovor, razdoblje i mjesečne cijene određuje modul Najam.
         </p>
       </Card>
     );

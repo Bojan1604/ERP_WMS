@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type InputHTMLAttributes } from 'react';
+import { useEffect, useRef, useState, type InputHTMLAttributes } from 'react';
 import { cn } from '@/lib/cn';
 import { controlClass } from '@/components/ui/field';
 import { parseNumber } from '@/domain/money';
@@ -30,6 +30,14 @@ export function NumberInput({
     if (cur !== value) setText(show(value));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
+  // roditelj je upisani broj ograničio (npr. na najviše dopušteno) a vrijednost je ostala ista kao prije —
+  // efekt gore se ne okida, pa se tekst prepisuje ovdje (nakon svakog upisa)
+  const sent = useRef<number | null | undefined>(undefined);
+  useEffect(() => {
+    const s = sent.current;
+    sent.current = undefined;
+    if (s !== undefined && s !== null && Number.isFinite(s) && s !== value) setText(show(value));
+  });
   return (
     <input
       {...rest}
@@ -38,7 +46,15 @@ export function NumberInput({
       onChange={(e) => {
         setText(e.target.value);
         const t = e.target.value.trim();
-        onValue(t === '' ? (nullable ? null : 0) : parseNumber(t));
+        const n = t === '' ? (nullable ? null : 0) : parseNumber(t);
+        if (t !== '') sent.current = n;
+        onValue(n);
+      }}
+      onBlur={(e) => {
+        // napuštanjem polja tekst uvijek pokazuje stvarnu (primijenjenu) vrijednost
+        const cur = text.trim() === '' ? null : parseNumber(text);
+        if (cur !== value) setText(show(value));
+        rest.onBlur?.(e);
       }}
       className={cn(controlClass, 'h-8 text-right tnum', className)}
     />

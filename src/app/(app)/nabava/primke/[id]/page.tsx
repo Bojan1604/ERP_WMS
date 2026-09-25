@@ -20,11 +20,16 @@ import { countLabel, plural } from '@/domain/plural';
 export default async function ReceiptPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await pageAccess('purchasing', 'view');
   const { id } = await params;
-  const [data, company, files] = await Promise.all([getReceipt(user.companyId, id), getCompany(user.companyId), listAttachments(db, user.companyId, 'receipt', [id])]);
+  const costs = canSeeCost(user.perms);
+  // prilozi primke otkrivaju nabavnu vrijednost — bez prava `costs` ne idu u klijent (kao API)
+  const [data, company, files] = await Promise.all([
+    getReceipt(user.companyId, id),
+    getCompany(user.companyId),
+    costs ? listAttachments(db, user.companyId, 'receipt', [id]) : Promise.resolve([]),
+  ]);
   if (!data) notFound();
   const { receipt, groups, count, blocked } = data;
   const canEdit = can(user.perms, 'purchasing', 'edit');
-  const costs = canSeeCost(user.perms);
   // ulazni računi povezani s primkom izravno ili preko narudžbenice
   const invoices = [...receipt.supplierInvoices, ...(receipt.order?.supplierInvoices ?? [])].filter((s, i, a) => a.findIndex((x) => x.id === s.id) === i);
   const invoiceOwn = invoices.find((s) => s.expense && s.goodsInvoice);
@@ -146,10 +151,12 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
         />
         {receipt.note && <p className="mt-6 whitespace-pre-line text-[11px]">{receipt.note}</p>}
       </DocumentShell>
-      <div className="no-print mx-auto mt-4 max-w-[210mm] rounded-lg bg-panel p-4 shadow-[var(--shadow-panel)]">
-        <p className="mb-2 text-sm font-medium text-fg-2">Prilozi (otpremnica, sken)</p>
-        <Attachments entity="receipt" id={id} canEdit={canEdit} initial={files} />
-      </div>
+      {costs && (
+        <div className="no-print mx-auto mt-4 max-w-[210mm] rounded-lg bg-panel p-4 shadow-[var(--shadow-panel)]">
+          <p className="mb-2 text-sm font-medium text-fg-2">Prilozi (otpremnica, sken)</p>
+          <Attachments entity="receipt" id={id} canEdit={canEdit} initial={files} />
+        </div>
+      )}
     </>
   );
 }

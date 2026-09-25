@@ -27,6 +27,16 @@ let s = 20260923;
 const rnd = () => ((s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296);
 const pick = <T,>(a: readonly T[]) => a[Math.floor(rnd() * a.length)];
 const int = (a: number, b: number) => a + Math.floor(rnd() * (b - a + 1));
+/** Valjani OIB (ISO 7064, MOD 11,10) iz prvih 10 znamenki — kontrolna znamenka se računa. */
+function oibFrom(first10: string) {
+  let a = 10;
+  for (const d of first10) {
+    a = (a + Number(d)) % 10;
+    if (a === 0) a = 10;
+    a = (a * 2) % 11;
+  }
+  return first10 + String((11 - a) % 10);
+}
 
 const tx = <T,>(fn: (t: Prisma.TransactionClient) => Promise<T>) => db.$transaction(fn, { timeout: 120_000, maxWait: 20_000 });
 
@@ -169,7 +179,7 @@ async function main() {
           city,
           address: `${pick(['Ulica kralja Tomislava', 'Obala', 'Trg bana Jelačića', 'Put Firula', 'Vukovarska'])} ${int(1, 120)}`,
           zip: pick(['10000', '21000', '51000', '52440', '23000']),
-          oib: String(10000000000 + int(0, 89999999999)).padStart(11, '0'),
+          oib: oibFrom(String(10000000000 + int(0, 89999999999)).padStart(11, '0').slice(0, 10)),
           email: `racuni@${name.toLowerCase().normalize('NFD').replace(/[^\w]+/g, '')}.hr`,
           phone: `+385 9${int(1, 9)} ${int(100, 999)} ${int(1000, 9999)}`,
           country: 'HR',
@@ -344,15 +354,29 @@ async function main() {
   const so = await db.serviceOrder.findMany({ where: { companyId } });
   const issues = ['Ne pali se nakon pada napona', 'Ekran ne reagira na dodir u donjem dijelu', 'Printer reže papir ukoso', 'Wi-Fi se stalno prekida'];
   for (const [i, o] of so.entries()) {
+    // kronologija: prijava ≤ zaprimanje ≤ zatvaranje (danas)
+    const received = addDays(TODAY, -int(3, 20));
+    const reported = addDays(received, -int(0, 2));
+    const status = (['DIAGNOSIS', 'AT_SUPPLIER', 'RECEIVED', 'REPAIRED'] as const)[i % 4];
+    // tijek naloga istim redom: prijava → zaprimanje → trenutni status (snimka stanja prije servisa ostaje)
+    const first = (Array.isArray(o.timeline) ? o.timeline[0] : null) as Prisma.JsonObject | null;
+    const step = (at: string, st: string, note: string | null) => ({ at: `${at}T09:00:00.000Z`, status: st, by: actor.name, note });
+    const timeline = [
+      { ...(first ?? {}), ...step(reported, 'REPORTED', 'Nalog otvoren') },
+      step(received, 'RECEIVED', null),
+      ...(status !== 'RECEIVED' ? [step(status === 'REPAIRED' ? TODAY : addDays(received, 1), status, null)] : []),
+    ];
     await db.serviceOrder.update({
       where: { id: o.id },
       data: {
+        reportedAt: fromISO(reported),
+        timeline,
         issue: issues[i % issues.length],
-        status: (['DIAGNOSIS', 'AT_SUPPLIER', 'RECEIVED', 'REPAIRED'] as const)[i % 4],
+        status,
         diagnosis: i % 4 === 3 ? 'Neispravna matična ploča' : null,
         closedAt: i % 4 === 3 ? fromISO(TODAY) : null,
         cost: i % 4 === 3 ? 45 : 0,
-        receivedAt: fromISO(addDays(TODAY, -int(3, 20))),
+        receivedAt: fromISO(received),
       },
     });
   }

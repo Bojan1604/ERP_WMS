@@ -1,5 +1,5 @@
 import 'server-only';
-import type { Tx } from '../db';
+import { db, type Tx } from '../db';
 import { audit } from '../audit';
 import type { Actor } from './items';
 import { num, r2 } from '@/domain/money';
@@ -248,21 +248,6 @@ type Reader = Pick<Tx, 'supplierInvoice' | 'goodsReceipt' | 'expense' | 'purchas
 /** Skupine s ulaznim računima: narudžbenice (i preko primki) te primke bez narudžbenice. */
 type LinkedGroup = { orderId: string } | { receiptId: string };
 
-async function goodsGroupsWithInvoices(tx: Reader, companyId: string): Promise<LinkedGroup[]> {
-  const invs = await tx.supplierInvoice.findMany({
-    where: { companyId, OR: [{ orderId: { not: null } }, { receiptId: { not: null } }] },
-    select: { orderId: true, receipt: { select: { id: true, orderId: true } } },
-  });
-  const orders = new Set<string>();
-  const receipts = new Set<string>();
-  for (const i of invs) {
-    if (i.orderId) orders.add(i.orderId);
-    else if (i.receipt?.orderId) orders.add(i.receipt.orderId);
-    else if (i.receipt) receipts.add(i.receipt.id);
-  }
-  return [...[...orders].sort().map((orderId): LinkedGroup => ({ orderId })), ...[...receipts].sort().map((receiptId): LinkedGroup => ({ receiptId }))];
-}
-
 export interface GoodsExpenseMismatch {
   group: LinkedGroup;
   /** Broj narudžbenice ili primke. */
@@ -277,59 +262,133 @@ export interface GoodsExpenseMismatch {
 
 /**
  * Skupine čiji vlastiti troškovi ulaznih računa ne odgovaraju pravilu max(primke, računi za robu)
- * — samo čitanje, isto stanje i pravilo kao reconcileOrderGoodsExpense.
+ * — samo čitanje, isto stanje i pravilo kao reconcileOrderGoodsExpense (loadGoodsGroup), ali
+ * skupno: nekoliko upita za cijelu firmu (ne po narudžbenici), pravilo se računa u memoriji.
  */
 export async function goodsExpenseMismatches(tx: Reader, companyId: string): Promise<GoodsExpenseMismatch[]> {
-  const out: GoodsExpenseMismatch[] = [];
-  for (const group of await goodsGroupsWithInvoices(tx, companyId)) {
-    const g = await loadGoodsGroup(tx as Tx, companyId, group);
-    const alloc = allocateGoodsExpense(g.receiptsBooked, g.rows);
+  // svi povezani računi firme (redom kao u loadGoodsGroup) i skupina kojoj pripadaju
+  const invs = await tx.supplierInvoice.findMany({
+    where: { companyId, OR: [{ orderId: { not: null } }, { receiptId: { not: null } }] },
+    orderBy: [{ issueDate: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+    select: {
+      id: true, internalNo: true, status: true, netAmount: true, vatAmount: true, paidDate: true, goodsInvoice: true, bookExpense: true,
+      orderId: true, receiptId: true, receipt: { select: { orderId: true } },
+      expense: { select: { netAmount: true, vatAmount: true } },
+    },
+  });
+  if (!invs.length) return [];
+  const orderIds = new Set<string>();
+  const loneReceipts = new Set<string>();
+  for (const i of invs) {
+    if (i.orderId) orderIds.add(i.orderId);
+    else if (i.receipt?.orderId) orderIds.add(i.receipt.orderId);
+    else if (i.receiptId && i.receipt) loneReceipts.add(i.receiptId);
+  }
+  // proknjižene primke skupina i njihovi troškovi (R)
+  const receipts = await tx.goodsReceipt.findMany({
+    where: { companyId, status: 'POSTED', OR: [{ orderId: { in: [...orderIds] } }, { id: { in: [...loneReceipts] } }] },
+    select: { id: true, orderId: true },
+  });
+  const booked = receipts.length
+    ? await tx.expense.groupBy({ by: ['receiptId'], where: { companyId, receiptId: { in: receipts.map((r) => r.id) } }, _sum: { netAmount: true } })
+    : [];
+  const bookedBy = new Map(booked.map((b) => [b.receiptId!, num(b._sum.netAmount ?? 0)]));
+  const postedOrderOf = new Map(receipts.map((r) => [r.id, r.orderId]));
+  const postedIds = new Set(receipts.map((r) => r.id));
+
+  const key = (g: LinkedGroup) => ('orderId' in g ? `o:${g.orderId}` : `r:${g.receiptId}`);
+  const groups = new Map<string, { group: LinkedGroup; receiptsBooked: number; invoices: typeof invs }>();
+  const groupOf = (g: LinkedGroup) => {
+    const k = key(g);
+    let e = groups.get(k);
+    if (!e) groups.set(k, (e = { group: g, receiptsBooked: 0, invoices: [] }));
+    return e;
+  };
+  for (const id of [...orderIds].sort()) groupOf({ orderId: id });
+  for (const id of [...loneReceipts].sort()) groupOf({ receiptId: id });
+  for (const r of receipts) {
+    const g = r.orderId && orderIds.has(r.orderId) ? groups.get(`o:${r.orderId}`) : loneReceipts.has(r.id) ? groups.get(`r:${r.id}`) : undefined;
+    if (g) g.receiptsBooked = r2(g.receiptsBooked + (bookedBy.get(r.id) ?? 0));
+  }
+  // članstvo kao u loadGoodsGroup: narudžbenica = računi s njom ili s njenom proknjiženom primkom;
+  // primka bez narudžbenice = računi s tom primkom bez narudžbenice
+  for (const i of invs) {
+    if (i.orderId) groupOf({ orderId: i.orderId }).invoices.push(i);
+    else if (i.receiptId && postedIds.has(i.receiptId) && postedOrderOf.get(i.receiptId)) groupOf({ orderId: postedOrderOf.get(i.receiptId)! }).invoices.push(i);
+    else if (i.receiptId && loneReceipts.has(i.receiptId)) groupOf({ receiptId: i.receiptId }).invoices.push(i);
+  }
+
+  const found: Array<Omit<GoodsExpenseMismatch, 'label' | 'href'>> = [];
+  for (const g of groups.values()) {
+    const rows: GoodsInvoiceRow[] = g.invoices.map((i) => ({
+      id: i.id,
+      net: num(i.netAmount),
+      vat: num(i.vatAmount),
+      goods: i.goodsInvoice === true,
+      books: i.status === 'ACCEPTED' && i.bookExpense,
+    }));
+    const alloc = allocateGoodsExpense(g.receiptsBooked, rows);
     const bad: GoodsExpenseMismatch['invoices'] = [];
-    let booked = 0;
+    let bookedSum = 0;
     let expected = 0;
     for (const [k, si] of g.invoices.entries()) {
       const a = alloc[k];
       const net = si.expense ? num(si.expense.netAmount) : 0;
       const vat = si.expense ? num(si.expense.vatAmount) : 0;
-      booked += net;
+      bookedSum += net;
       expected += a.ownNet;
       // trošak s iznosom 0 = kao nepostojeći (usklađivanje ga ionako briše)
       if (net !== a.ownNet || vat !== a.ownVat) {
         bad.push({ internalNo: si.internalNo, net, vat, invoicePaid: !!si.paidDate, expectedNet: a.ownNet, expectedVat: a.ownVat });
       }
     }
-    if (!bad.length) continue;
-    const ref =
-      'orderId' in group
-        ? await tx.purchaseOrder.findFirst({ where: { id: group.orderId, companyId }, select: { number: true } })
-        : await tx.goodsReceipt.findFirst({ where: { id: group.receiptId, companyId }, select: { number: true } });
-    out.push({
-      group,
-      label: ref?.number ?? '—',
-      href: 'orderId' in group ? `/nabava/narudzbenice/${group.orderId}` : `/nabava/primke/${group.receiptId}`,
-      booked: r2(booked),
-      expected: r2(expected),
-      invoices: bad,
-    });
+    if (bad.length) found.push({ group: g.group, booked: r2(bookedSum), expected: r2(expected), invoices: bad });
   }
-  return out;
+  if (!found.length) return [];
+  // brojevi dokumenata samo za skupine s odstupanjem
+  const oIds = found.flatMap((m) => ('orderId' in m.group ? [m.group.orderId] : []));
+  const rIds = found.flatMap((m) => ('receiptId' in m.group ? [m.group.receiptId] : []));
+  const [orders, lone] = await Promise.all([
+    oIds.length ? tx.purchaseOrder.findMany({ where: { companyId, id: { in: oIds } }, select: { id: true, number: true } }) : [],
+    rIds.length ? tx.goodsReceipt.findMany({ where: { companyId, id: { in: rIds } }, select: { id: true, number: true } }) : [],
+  ]);
+  const numberOf = new Map([...orders, ...lone].map((d) => [d.id, d.number]));
+  return found.map((m) => ({
+    ...m,
+    label: numberOf.get('orderId' in m.group ? m.group.orderId : m.group.receiptId) ?? '—',
+    href: 'orderId' in m.group ? `/nabava/narudzbenice/${m.group.orderId}` : `/nabava/primke/${m.group.receiptId}`,
+  }));
+}
+
+/** Usklađivanje jedne skupine s odstupanjem uz trag u dnevniku (prijašnji iznosi i plaćenost). */
+async function fixGoodsGroup(tx: Tx, actor: Actor, m: GoodsExpenseMismatch) {
+  await reconcileOrderGoodsExpense(tx, actor, m.group);
+  await audit(tx, actor, {
+    entity: 'orderId' in m.group ? 'purchaseOrder' : 'receipt',
+    entityId: 'orderId' in m.group ? m.group.orderId : m.group.receiptId,
+    action: 'goods-expense-fix',
+    summary: `Usklađivanje troška robe (${m.label}): vlastiti troškovi računa ${m.booked.toFixed(2)} € → ${m.expected.toFixed(2)} €`,
+    diff: { invoices: m.invoices },
+  });
 }
 
 /**
- * Usklađuje sve skupine s odstupanjem. Svaka skupina dobiva zapis u dnevniku s prijašnjim
- * iznosima (i plaćenošću) troškova koji se mijenjaju. Idempotentno: drugi prolaz ne mijenja ništa.
+ * Popravak iz Postavke → Podaci: odstupanja se traže jednim skupnim čitanjem, a svaka skupina
+ * se usklađuje u svojoj (kratkoj) transakciji — tisuće narudžbenica ne drže jednu dugu transakciju.
+ */
+export async function reconcileGoodsExpensesChunked(actor: Actor, run: <T>(fn: (tx: Tx) => Promise<T>) => Promise<T>): Promise<number> {
+  const list = await goodsExpenseMismatches(db, actor.companyId);
+  for (const m of list) await run((tx) => fixGoodsGroup(tx, actor, m));
+  return list.length;
+}
+
+/**
+ * Usklađuje sve skupine s odstupanjem (u jednoj transakciji — jednokratni posao pri pokretanju).
+ * Svaka skupina dobiva zapis u dnevniku s prijašnjim iznosima (i plaćenošću) troškova koji se
+ * mijenjaju. Idempotentno: drugi prolaz ne mijenja ništa.
  */
 export async function reconcileAllGoodsExpenses(tx: Tx, actor: Actor): Promise<number> {
   const list = await goodsExpenseMismatches(tx, actor.companyId);
-  for (const m of list) {
-    await reconcileOrderGoodsExpense(tx, actor, m.group);
-    await audit(tx, actor, {
-      entity: 'orderId' in m.group ? 'purchaseOrder' : 'receipt',
-      entityId: 'orderId' in m.group ? m.group.orderId : m.group.receiptId,
-      action: 'goods-expense-fix',
-      summary: `Usklađivanje troška robe (${m.label}): vlastiti troškovi računa ${m.booked.toFixed(2)} € → ${m.expected.toFixed(2)} €`,
-      diff: { invoices: m.invoices },
-    });
-  }
+  for (const m of list) await fixGoodsGroup(tx, actor, m);
   return list.length;
 }

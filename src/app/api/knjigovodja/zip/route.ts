@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { can } from '@/domain/permissions';
 import { requireAccess } from '@/server/auth';
 import { AuthError, DomainError } from '@/server/errors';
 import { buildAccountantZip } from '@/server/queries/accountant-export';
+import { accountantAccess } from '@/server/queries/accountant';
 import { today } from '@/domain/dates';
 
 const body = z.object({ keys: z.array(z.string().max(80)).min(1).max(5000) });
@@ -18,7 +18,7 @@ export async function POST(req: Request) {
     if (!req.headers.get('content-type')?.includes('application/json')) return new Response('Očekuje se JSON.', { status: 415 });
     const parsed = body.safeParse(await req.json().catch(() => null));
     if (!parsed.success) return new Response('Neispravan popis dokumenata.', { status: 400 });
-    const { buffer, xmlCount, attCount, rows } = await buildAccountantZip(user.companyId, parsed.data.keys, undefined, { out: can(user.perms, 'sales', 'view'), in: can(user.perms, 'purchasing', 'view') });
+    const { buffer, xmlCount, attCount, rows } = await buildAccountantZip(user.companyId, parsed.data.keys, undefined, accountantAccess(user.perms));
     return new Response(buffer as unknown as BodyInit, {
       headers: {
         'Content-Type': 'application/zip',

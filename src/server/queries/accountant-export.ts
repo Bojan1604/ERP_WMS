@@ -4,34 +4,42 @@ import { assert } from '../errors';
 import { invoiceUbl } from '../fiscal/ubl-source';
 import { renderDocumentPdf } from '../pdf';
 import { ZipTooLargeError, ZipWriter, ZIP_MAX_BYTES, uniqueName } from '../zip';
-import { accountantRowsByIds } from './accountant';
+import { accountantRowsByIds, NOT_GOODS_INVOICE, type AccountantAccess } from './accountant';
 import { ACCOUNTANT_CSV_COLUMNS, ACCOUNTANT_ROW_CAP, fileStem, parseKeys } from '@/domain/accountant';
 import { toCsv } from '@/lib/csv';
 
 /**
  * ZIP za knjigovođu: popis.csv, eRačun XML i PDF svakog izdanog izlaznog računa i
  * spremljeni prilozi (izlazni/prilozi/…, ulazni/<broj>/… uz priloge knjiženog troška). Svaki ključ se
- * provjerava na firmu korisnika; nepostojeći se ne tiho preskaču.
+ * provjerava na firmu korisnika; nepostojeći se ne tiho preskaču. Bez prava `costs` iznosi računa za
+ * robu nisu u popisu, a njihovi prilozi (i prilozi njihova troška) ne idu u arhivu.
  */
-export async function buildAccountantZip(companyId: string, keys: string[], maxBytes = ZIP_MAX_BYTES, allowed: { out: boolean; in: boolean } = { out: true, in: true }) {
+export async function buildAccountantZip(companyId: string, keys: string[], maxBytes = ZIP_MAX_BYTES, allowed: AccountantAccess = { out: true, in: true }) {
   const ids = parseKeys(keys);
   assert((allowed.out || !ids.out.length) && (allowed.in || !ids.in.length), 'Nemate pravo na neke od označenih dokumenata.');
   assert(ids.out.length + ids.in.length > 0, 'Označite barem jedan dokument.');
   assert(ids.out.length <= ACCOUNTANT_ROW_CAP && ids.in.length <= ACCOUNTANT_ROW_CAP, `Najviše ${ACCOUNTANT_ROW_CAP} dokumenata po smjeru u jednoj arhivi.`);
-  const rows = await accountantRowsByIds(companyId, ids);
+  const costs = allowed.costs !== false;
+  const rows = await accountantRowsByIds(companyId, ids, costs);
   assert(rows.length === ids.out.length + ids.in.length, 'Neki dokumenti ne postoje.');
 
   // veličina priloga provjerava se prije učitavanja sadržaja
   // troškovi knjiženi iz označenih ulaznih računa — njihovi prilozi idu u mapu ulaznog računa
-  const expenses = ids.in.length
-    ? await db.expense.findMany({ where: { companyId, supplierInvoiceId: { in: ids.in } }, select: { id: true, supplierInvoiceId: true } })
+  // bez prava `costs` prilozi računa za robu (i njihova troška) otkrivaju nabavnu vrijednost — ne idu u arhivu
+  const inAttIds = !ids.in.length
+    ? []
+    : costs
+      ? ids.in
+      : (await db.supplierInvoice.findMany({ where: { companyId, id: { in: ids.in }, ...NOT_GOODS_INVOICE }, select: { id: true } })).map((r) => r.id);
+  const expenses = inAttIds.length
+    ? await db.expense.findMany({ where: { companyId, supplierInvoiceId: { in: inAttIds } }, select: { id: true, supplierInvoiceId: true } })
     : [];
   const expenseOf = new Map(expenses.map((e) => [e.id, e.supplierInvoiceId!]));
   const attWhere = {
     companyId,
     OR: [
       ...(ids.out.length ? [{ entity: 'invoice', entityId: { in: ids.out } }] : []),
-      ...(ids.in.length ? [{ entity: 'supplierInvoice', entityId: { in: ids.in } }] : []),
+      ...(inAttIds.length ? [{ entity: 'supplierInvoice', entityId: { in: inAttIds } }] : []),
       ...(expenses.length ? [{ entity: 'expense', entityId: { in: expenses.map((e) => e.id) } }] : []),
     ],
   };

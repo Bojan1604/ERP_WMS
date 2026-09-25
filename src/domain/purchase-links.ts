@@ -32,6 +32,7 @@
  */
 
 import { r2 } from './money';
+import { countLabel } from './plural';
 
 /** Kategorija troška robe (trošak primke i zadana kategorija računa s narudžbenice). */
 export const PURCHASE_CATEGORY = 'Nabava robe';
@@ -99,6 +100,49 @@ export function receiptEffect(receiptsBooked: number, invoices: GoodsInvoiceRow[
   const v = Math.max(0, value);
   const invoiceReduced = r2(goodsOwn(receiptsBooked, invoices) - goodsOwn(receiptsBooked + v, invoices));
   return { invoiceReduced, totalIncrease: r2(v - invoiceReduced) };
+}
+
+/**
+ * Što bi prihvaćanje računa `id` s „Knjiži kao trošak" knjižilo (dijalog prihvaćanja) — isto pravilo:
+ * račun se u skupini računa kao da se knjiži. Račun za robu povezan s primkama knjiži samo razliku.
+ */
+export function acceptPreview(receiptsBooked: number, invoices: GoodsInvoiceRow[], id: string, goods: boolean) {
+  const rows = invoices.map((i) => (i.id === id ? { ...i, goods, books: true } : i));
+  const a = allocateGoodsExpense(receiptsBooked, rows).find((x) => x.id === id);
+  return a ? { covered: a.covered, ownNet: a.ownNet, mode: a.mode } : null;
+}
+
+export interface AcceptBookPreview {
+  /** Račun je povezan s narudžbenicom/primkom (vrijedi pravilo max(primke, računi za robu)). */
+  linked: boolean;
+  /** Račun za robu (troši trošak primki). */
+  goods: boolean;
+  mode: InvoiceExpenseMode;
+  /** Vlastiti trošak koji bi se knjižio; `null` = iznos se ne prikazuje (bez prava `costs`). */
+  ownNet: number | null;
+}
+
+/**
+ * Zadana kvačica „Knjiži kao trošak" i objašnjenje u dijalogu prihvaćanja. Povezani račun se po
+ * zadanom knjiži — pravilo troška robe ionako knjiži samo razliku iznad primki (nikad dvaput).
+ * Nepovezani račun dobavljača s nedavnim primkama po zadanom se ne knjiži (roba je vjerojatno već
+ * knjižena primkom, a bez veze pravilo to ne zna).
+ */
+export function acceptBookDefault(recentReceipts: number, p: AcceptBookPreview | null, money: (v: number) => string): { book: boolean; hint: string } {
+  const amt = (v: number | null) => (v === null ? '' : ` (${money(v)})`);
+  if (p?.linked && p.goods) {
+    if (p.mode === 'receipt') return { book: true, hint: 'Račun je za robu s primke — trošak robe u cijelosti nose primke, pa se ništa ne knjiži dvaput.' };
+    if (p.mode === 'partial') return { book: true, hint: `Knjižit će se samo razlika iznad primke${amt(p.ownNet)}.` };
+    return { book: true, hint: `Primke još nemaju knjiženi trošak — knjiži se osnovica računa${amt(p.ownNet)}; kasnija primka je umanjuje (trošak robe nikad dvaput).` };
+  }
+  if (p?.linked) return { book: true, hint: `Račun nije za robu (npr. prijevoz, usluga) — knjiži se cijela osnovica kao zaseban trošak${amt(p.ownNet)}.` };
+  if (recentReceipts > 0) {
+    return {
+      book: false,
+      hint: `Dobavljač ima ${countLabel(recentReceipts, 'primku', 'primke', 'primki')} u 90 dana prije računa, a račun nije povezan s narudžbenicom ni primkom — roba zaprimljena primkom možda je već knjižena kao trošak „Nabava robe". Povežite račun s narudžbenicom/primkom (tada se knjiži samo razlika) ili uključite samo ako račun nije za tu robu (npr. usluga).`,
+    };
+  }
+  return { book: true, hint: 'Za račun robe koja je zaprimljena primkom povežite ga s narudžbenicom ili primkom — tada se knjiži samo razlika iznad primke.' };
 }
 
 /** Odgovara li osnovica računa vrijednosti robe (primki ili narudžbenice): razlika do 1 % ili 1 €. */

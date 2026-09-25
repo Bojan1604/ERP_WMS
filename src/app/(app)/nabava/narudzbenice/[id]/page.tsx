@@ -25,10 +25,17 @@ import { deleteOrderAction, orderStatusAction, receiveLineAction } from '../acti
 export default async function OrderPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await pageAccess('purchasing', 'view');
   const { id } = await params;
-  const [order, lookups, files] = await Promise.all([getOrder(user.companyId, id), getLookups(user.companyId), listAttachments(db, user.companyId, 'purchaseOrder', [id])]);
+  const costs = canSeeCost(user.perms);
+  // prilozi narudžbenice (ponuda/račun dobavljača) otkrivaju nabavnu vrijednost — bez prava `costs` ne idu u klijent (kao API)
+  const [order, lookups, files] = await Promise.all([
+    getOrder(user.companyId, id),
+    getLookups(user.companyId),
+    costs ? listAttachments(db, user.companyId, 'purchaseOrder', [id]) : Promise.resolve([]),
+  ]);
   if (!order) notFound();
   const canEdit = can(user.perms, 'purchasing', 'edit');
-  const costs = canSeeCost(user.perms);
+  // trošak računa bez vlastitog troška: knjižen primkom samo ako postoji knjižena primka
+  const receiptBooked = order.receipts.some((r) => r.status !== 'CANCELLED' && r.expense);
   // stanje troška robe (pravilo max(primke, računi za robu)) za dijalog zaprimanja — samo uz pravo `costs`
   const plan = costs ? await goodsExpensePlan(db, user.companyId, { orderId: id }) : null;
   const goodsPlan = plan ? { receiptsBooked: plan.receiptsBooked, invoices: plan.rows } : null;
@@ -262,7 +269,15 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
                       <td>
                         <SupplierInvoiceStatusBadge status={s.status} paid={!!s.paidDate} />
                       </td>
-                      <td>{s.expense ? <Badge tone="info">vlastiti trošak</Badge> : <span className="text-fg-3">primkom</span>}</td>
+                      <td>
+                        {s.expense ? (
+                          <Badge tone="info">vlastiti trošak</Badge>
+                        ) : receiptBooked ? (
+                          <span className="text-fg-3">primkom</span>
+                        ) : (
+                          <span className="text-fg-3">nije knjiženo</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -272,9 +287,11 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
             )}
           </Card>
 
-          <Card title="Prilozi">
-            <Attachments entity="purchaseOrder" id={id} canEdit={canEdit} initial={files} empty="Nema priloga — priložite ponudu ili račun dobavljača (PDF, slika)." />
-          </Card>
+          {costs && (
+            <Card title="Prilozi">
+              <Attachments entity="purchaseOrder" id={id} canEdit={canEdit} initial={files} empty="Nema priloga — priložite ponudu ili račun dobavljača (PDF, slika)." />
+            </Card>
+          )}
         </div>
 
         <Card title="Podaci">

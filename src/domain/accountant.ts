@@ -84,9 +84,9 @@ export interface AccountantCsvRow {
   partner: string;
   oib: string | null;
   kind: AccountantKind;
-  net: number;
-  vat: number;
-  total: number;
+  net: number | null;
+  vat: number | null;
+  total: number | null;
   status: string;
 }
 

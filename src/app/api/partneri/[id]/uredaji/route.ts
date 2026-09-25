@@ -5,6 +5,8 @@ import { csvOrXlsx } from '@/server/xlsx';
 import { BILLING_LABEL } from '@/domain/billing';
 import { today } from '@/domain/dates';
 import { eur } from '@/lib/format';
+import type { ExportColumn } from '@/lib/csv';
+import { can } from '@/domain/permissions';
 
 /** Popis uređaja kod klijenta (C3) — isti pogled kao stranica: CSV, Excel ili PDF. */
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -17,7 +19,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     return new Response(e instanceof AuthError ? e.message : 'Greška', { status: e instanceof AuthError ? e.status : 500 });
   }
   const { id } = await params;
-  const sheet = await clientSheet(user.companyId, id, { view, contractId, limit: null });
+  const sheet = await clientSheet(user.companyId, id, { view, contractId, limit: null, rentals: can(user.perms, 'rentals', 'view') });
   if (!sheet) return new Response('Partner ili ugovor ne postoji.', { status: 404 });
   const slug = sheet.partner.name.normalize('NFD').replace(/[^\w]+/g, '-').replace(/^-|-$/g, '').toLowerCase().slice(0, 40);
   const terms = sheet.contracts
@@ -32,8 +34,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       { label: 'Model', value: (r) => r.model },
       { label: 'Status', value: (r) => r.status.name },
       { label: 'Kod klijenta od', value: (r) => r.since, type: 'date' },
-      { label: 'Ugovor', value: (r) => r.contract },
-      { label: 'Mjesečni najam', value: (r) => r.monthly, type: 'money' },
+      // bez prava na najam nema stupaca ugovora i najma
+      ...(sheet.rentals
+        ? ([
+            { label: 'Ugovor', value: (r) => r.contract },
+            { label: 'Mjesečni najam', value: (r) => r.monthly, type: 'money' },
+          ] satisfies ExportColumn<(typeof sheet.rows)[number]>[])
+        : []),
       { label: 'Prodajna cijena', value: (r) => (r.monthly === null ? r.price : null), type: 'money' },
       { label: 'Jamstvo do', value: (r) => r.warrantyEnd, type: 'date' },
     ],

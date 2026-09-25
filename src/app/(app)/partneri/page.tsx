@@ -118,7 +118,14 @@ export default async function PartnersPage({ searchParams }: { searchParams: Pro
                     <>
                       <td className="num">{p.invoices ? integer(p.invoices) : <span className="text-fg-4">—</span>}</td>
                       <td className="num">{p.turnover ? eur(p.turnover) : <span className="text-fg-4">—</span>}</td>
-                      <td className="num">{p.open ? <span className="font-medium">{eur(p.open)}</span> : <span className="text-fg-4">—</span>}</td>
+                      <td className="num">
+                        {p.open ? <span className="block font-medium">{eur(p.open)}</span> : !p.overpaid && <span className="text-fg-4">—</span>}
+                        {p.overpaid > 0 && (
+                          <span className="block text-xs text-warn" title="Preplata — kupac je platio više od iznosa računa">
+                            povrat {eur(p.overpaid)}
+                          </span>
+                        )}
+                      </td>
                     </>
                   )}
                 </tr>

@@ -16,6 +16,7 @@ import { withUserLock } from '@/server/import/upload';
 import { assertDemo, confirmDanger, deleteEverything, deleteTransactions, resetDemo } from '@/server/services/danger';
 import { removeStoredFiles } from '@/server/mdm/wipe';
 import { cleanAuditLog, fixIntegrity, resetDefaultStatuses } from '@/server/services/maintenance';
+import { reconcileGoodsExpensesChunked } from '@/server/services/goods-expense';
 
 const adminOnly = (u: SessionUser) => {
   if (u.role !== 'ADMIN') throw new AuthError('Ovu radnju smije samo administrator.', 403);
@@ -131,7 +132,9 @@ export const cleanLogAction = userAction(z.object({ days: z.preprocess(emptyToNu
 // ---------------------------------------------------------------- održavanje
 
 export const fixIntegrityAction = userAction(z.object({}), async (_i, user) => {
-  const fixed = await transaction((tx) => fixIntegrity(tx, user));
+  const fixed = await transaction((tx) => fixIntegrity(tx, user, { goods: false }));
+  // trošak robe: skupno čitanje, pa svaka narudžbenica u svojoj kratkoj transakciji (svaka ima zapis u dnevniku)
+  fixed['goods-expense'] = await reconcileGoodsExpensesChunked(user, transaction);
   const total = Object.values(fixed).reduce((a, b) => a + b, 0);
   return { message: total ? `Popravljeno ${total} zapisa.` : 'Nije bilo ničega za automatski popravak.' };
 }, adminOnly);

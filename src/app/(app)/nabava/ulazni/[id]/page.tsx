@@ -72,6 +72,17 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
                 eInvoice={eInvoice}
                 canAccept={si.status === 'RECEIVED'}
                 recentReceipts={receipts}
+                bookPreview={
+                  si.acceptPreview
+                    ? {
+                        linked: si.acceptPreview.linked,
+                        goods: si.acceptPreview.goods,
+                        mode: si.acceptPreview.mode,
+                        // iznos računa za robu je nabavna vrijednost — bez prava `costs` se ne šalje
+                        ownNet: !costs && (hideAmounts || si.acceptPreview.goods) ? null : si.acceptPreview.ownNet,
+                      }
+                    : null
+                }
                 canReject={!rejected && !si.paidDate}
                 canPay={!rejected && !si.paidDate && !payLocked}
                 accept={acceptSupplierInvoiceAction}

@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { Search } from 'lucide-react';
-import { pageAccess } from '@/server/auth';
+import { internalPageAccess } from '@/server/auth';
 import { globalSearch } from '@/server/queries/search';
 import { Badge, COLOR_TONE, Empty, PageHeader } from '@/components/ui/misc';
 import { SearchFilter } from '@/components/ui/filters';
@@ -46,7 +46,8 @@ function Hit({ href, title, sub, right }: { href: string; title: ReactNode; sub?
 }
 
 export default async function SearchPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
-  const user = await pageAccess('dashboard');
+  // pretraga za svakog internog korisnika; globalSearch vraća samo module s pravom pregleda
+  const user = await internalPageAccess();
   const q = ((await searchParams).q ?? '').trim();
   const r = q ? await globalSearch(user.companyId, user.perms, q) : null;
   if (r?.exactDeviceId) redirect(`/skladiste/${r.exactDeviceId}`);

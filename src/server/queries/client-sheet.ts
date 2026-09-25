@@ -26,12 +26,14 @@ export function readSheetParams(params: Params | URLSearchParams) {
  * za kupljene; nabavne cijene se ne čitaju. Uvjeti ugovora za podnožje.
  * Zbrojevi se računaju u bazi (ne iz prikazanih redaka); `limit: null` = svi retci (izvoz),
  * inače stranica od `skip`. Uvjeti ugovora obuhvaćaju sve ugovore pogleda, ne samo stranice.
+ * Bez prava na najam (`rentals: false`) podaci ugovora (broj, mjesečni najam, uvjeti) se ne vraćaju.
  */
 export async function clientSheet(
   companyId: string,
   partnerId: string,
-  opts: { view: SheetView; contractId?: string | null; limit?: number | null; skip?: number },
+  opts: { view: SheetView; contractId?: string | null; limit?: number | null; skip?: number; rentals?: boolean },
 ) {
+  const rentals = opts.rentals !== false;
   const limit = opts.limit === undefined ? SHEET_MAX : opts.limit;
   const [partner, contract] = await Promise.all([
     db.partner.findFirst({ where: { id: partnerId, companyId } }),
@@ -64,7 +66,7 @@ export async function clientSheet(
       },
     }),
   ]);
-  const contractIds = contractRefs.map((c) => c.contractId);
+  const contractIds = rentals ? contractRefs.map((c) => c.contractId) : [];
   const total = contract || opts.view === 'najam' ? rent : opts.view === 'prodano' ? sold : all;
   const [terms, sums] = contractIds.length
     ? await Promise.all([
@@ -86,10 +88,11 @@ export async function clientSheet(
     status: i.status,
     since: i.issueDate ? toISO(i.issueDate) : null,
     warrantyEnd: deviceWarrantyEnd(i),
-    contractId: i.contractItem?.contractId ?? null,
-    contract: i.contractItem ? (numberBy.get(i.contractItem.contractId) ?? null) : null,
-    monthly: i.contractItem ? num(i.contractItem.monthly) : null,
-    price: i.salePrice === null ? null : num(i.salePrice),
+    contractId: rentals ? (i.contractItem?.contractId ?? null) : null,
+    contract: rentals && i.contractItem ? (numberBy.get(i.contractItem.contractId) ?? null) : null,
+    monthly: rentals && i.contractItem ? num(i.contractItem.monthly) : null,
+    // uređaj u najmu: cijena je najam (bez prava na najam ništa), ne prodajna cijena
+    price: i.salePrice === null || (!rentals && i.contractItem) ? null : num(i.salePrice),
   }));
   return {
     partner,
@@ -100,7 +103,9 @@ export async function clientSheet(
     rows,
     /** Ima još redaka iza prikazanih (stranica). */
     truncated: !!limit && total > (opts.skip ?? 0) + rows.length,
-    monthly: r2(num(monthlySum._sum.monthly)),
+    monthly: rentals ? r2(num(monthlySum._sum.monthly)) : 0,
+    /** Smije li se prikazati najam (ugovor, mjesečno, uvjeti). */
+    rentals,
     sales: r2(num(salesSum._sum.salePrice)),
     contracts: terms.map((c) => ({ ...c, startDate: toISO(c.startDate), endDate: c.endDate ? toISO(c.endDate) : null, ...(sumBy.get(c.id) ?? { monthly: 0, devices: 0 }) })),
   };

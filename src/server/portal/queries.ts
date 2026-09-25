@@ -84,9 +84,44 @@ const deviceSelect = {
   serviceOrders: { where: { status: { in: OPEN } }, select: { id: true, number: true, status: true }, take: 1 },
 } satisfies Prisma.ItemSelect;
 
-export type PortalDevice = Prisma.ItemGetPayload<{ select: typeof deviceSelect }> & { warrantyEnd: string | null };
+export type PortalDevice = Prisma.ItemGetPayload<{ select: typeof deviceSelect }> & { warrantyEnd: string | null; prevState: string | null };
 
-const withWarranty = <T extends Prisma.ItemGetPayload<{ select: typeof deviceSelect }>>(r: T) => ({ ...r, warrantyEnd: deviceWarrantyEnd(r) });
+type DeviceRow = Prisma.ItemGetPayload<{ select: typeof deviceSelect }>;
+
+/**
+ * Jamstvo i vlasništvo prije servisa (`prevState`): uređaj na servisu (ili drugom stanju osim najma/prodaje)
+ * za klijenta je i dalje „najam" ili „kupnja". Stanje prije servisa je u snimci pri otvaranju zadnjeg
+ * naloga, a za naloge otvorene promjenom statusa — skidanje s ugovora u povijesti uređaja
+ * (isto pravilo kao `previousState` u services/service.ts). Jedan upit za cijelu stranicu.
+ */
+async function withWarranty(companyId: string, rows: DeviceRow[]): Promise<PortalDevice[]> {
+  const other = rows.filter((r) => r.state !== 'RENTED' && r.state !== 'SOLD').map((r) => r.id);
+  const prev = new Map<string, string>();
+  if (other.length) {
+    const orders = await db.serviceOrder.findMany({
+      where: { companyId, itemId: { in: other } },
+      orderBy: { createdAt: 'desc' },
+      distinct: ['itemId'],
+      select: { itemId: true, createdAt: true, timeline: true },
+    });
+    const noSnap: Array<{ itemId: string; createdAt: Date }> = [];
+    for (const o of orders) {
+      const first = Array.isArray(o.timeline) ? (o.timeline[0] as { prev?: { state?: unknown } } | null) : null;
+      const st = first?.prev?.state;
+      if (typeof st === 'string') prev.set(o.itemId!, st);
+      else noSnap.push({ itemId: o.itemId!, createdAt: o.createdAt });
+    }
+    if (noSnap.length) {
+      const removed = await db.itemEvent.findMany({
+        where: { OR: noSnap.map((o) => ({ itemId: o.itemId, type: 'CONTRACT' as const, refType: 'contract', at: { gte: new Date(o.createdAt.getTime() - 60_000) } })) },
+        select: { itemId: true },
+      });
+      const rented = new Set(removed.map((e) => e.itemId));
+      for (const o of noSnap) prev.set(o.itemId, rented.has(o.itemId) ? 'RENTED' : 'SOLD');
+    }
+  }
+  return rows.map((r) => ({ ...r, warrantyEnd: deviceWarrantyEnd(r), prevState: prev.get(r.id) ?? null }));
+}
 
 /** Popis uređaja klijenta (straničenje u bazi) s brojačima za podnožje. */
 export async function listPortalDevices(s: PortalScope, f: PortalDeviceFilters, page: { skip: number; take: number }) {
@@ -101,13 +136,13 @@ export async function listPortalDevices(s: PortalScope, f: PortalDeviceFilters, 
   ]);
   const inWarranty = inWarrantyIds.length ? await db.item.count({ where: { AND: [where, { id: { in: inWarrantyIds } }] } }) : 0;
   const count = (st: string) => byState.find((g) => g.state === st)?._count._all ?? 0;
-  return { rows: rows.map(withWarranty), total, all, stats: { rented: count('RENTED'), sold: count('SOLD'), inService, inWarranty } };
+  return { rows: await withWarranty(s.companyId, rows), total, all, stats: { rented: count('RENTED'), sold: count('SOLD'), inService, inWarranty } };
 }
 
 /** Svi uređaji po filtrima — za izvoz (Excel/PDF). */
 export async function exportPortalDevices(s: PortalScope, f: PortalDeviceFilters) {
   const rows = await db.item.findMany({ where: await deviceWhere(s, f), orderBy: [{ issueDate: { sort: 'desc', nulls: 'last' } }, { serial: 'asc' }], select: deviceSelect, take: 20_000 });
-  return rows.map(withWarranty);
+  return withWarranty(s.companyId, rows);
 }
 
 /** Modeli klijentovih uređaja — za filtar. */
@@ -120,7 +155,9 @@ export async function portalModels(s: PortalScope) {
 
 /** Jedan uređaj klijenta (za prijavu kvara) — `null` ako nije njegov ili nije aktivan. */
 export function portalDevice(s: PortalScope, itemId: string) {
-  return db.item.findFirst({ where: { AND: [baseDeviceWhere(s), { id: itemId }] }, select: deviceSelect }).then((r) => (r ? withWarranty(r) : null));
+  return db.item
+    .findFirst({ where: { AND: [baseDeviceWhere(s), { id: itemId }] }, select: deviceSelect })
+    .then(async (r) => (r ? (await withWarranty(s.companyId, [r]))[0] : null));
 }
 
 // ---------------------------------------------------------------- prijave (servisni nalozi)

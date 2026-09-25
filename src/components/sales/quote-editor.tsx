@@ -14,6 +14,7 @@ import { customerVat } from '@/domain/tax';
 import { addDays } from '@/domain/dates';
 import { PROFORMA_TITLES } from '@/domain/documents';
 import { modelQuotePrice, saveQuoteAction } from '@/app/(app)/prodaja/ponude/actions';
+import { customerPrices } from '@/app/(app)/prodaja/racuni/actions';
 import { DevicePicker } from './device-picker';
 import { CatalogPicker } from './catalog-picker';
 import { LinesTable, editorLineCount } from './lines-table';
@@ -65,6 +66,7 @@ export function QuoteEditor({
   const [validTouched, setValidTouched] = useState(!!initial.id);
   const { run, pending } = useAction(saveQuoteAction);
   const price = useAction(modelQuotePrice, { refresh: false });
+  const prices = useAction(customerPrices, { refresh: false });
   const toast = useToast();
   const set = (patch: Partial<QuoteEditorValue>) => setV((cur) => ({ ...cur, ...patch }));
 
@@ -79,7 +81,34 @@ export function QuoteEditor({
     if (picked && !partners.some((x) => x.id === picked.id)) setPartners((cur) => [...cur, picked]);
     const p = picked ?? partners.find((x) => x.id === id);
     if (!p) return set({ partnerId: null });
+    // kao na računu: dogovorene cijene prethodnog kupca ne vrijede za novog — stavke koje nisu ručno
+    // mijenjane dobivaju cijenu novog kupca ili standardnu
+    if (p.id !== v.partnerId && v.lines.some((l) => (l.itemId || l.modelId) && (l.agreedPrice || !l.priceEdited))) void repriceFor(p.id);
     set({ partnerId: p.id, vatRate: customerVat(p, company).rate });
+  };
+
+  const repriceFor = async (partnerId: string) => {
+    const withModel = v.lines.filter((l) => (l.itemId || l.modelId) && (l.agreedPrice || !l.priceEdited));
+    if (!withModel.length) return;
+    const r = await prices.run({ partnerId, lines: withModel.map((l) => ({ key: l.key, itemId: l.itemId ?? null, modelId: l.modelId ?? null, lineType: l.lineType === 'RENT' ? 'RENT' : 'SALE' })) });
+    if (!r.ok || !r.data) return;
+    const found = r.data as Record<string, { price: number; agreed: boolean }>;
+    const next = new Map<string, EditorLine>();
+    let agreed = 0;
+    let reset = 0;
+    for (const l of v.lines) {
+      const p = found[l.key];
+      // bez dogovorene cijene mijenja se samo stavka koja je nosila dogovorenu cijenu
+      if (!p || (!p.agreed && !l.agreedPrice)) continue;
+      if (p.agreed) agreed++;
+      else reset++;
+      // ponuda: najam je mjesečni (1 mjesec)
+      next.set(l.key, { ...l, unitPrice: p.price, ...(l.lineType === 'RENT' ? { monthly: p.price } : {}), agreedPrice: p.agreed, priceEdited: false });
+    }
+    if (!next.size) return;
+    setV((cur) => ({ ...cur, lines: cur.lines.map((l) => next.get(l.key) ?? l) }));
+    const msg = [agreed ? `dogovorena cijena na ${agreed} ${plural(agreed, 'stavci', 'stavke', 'stavki')}` : null, reset ? `standardna cijena vraćena na ${reset} ${plural(reset, 'stavci', 'stavke', 'stavki')}` : null].filter(Boolean).join(', ');
+    toast('ok', `Cjenik kupca: ${msg}.`);
   };
 
   const addModel = async (modelId: string) => {

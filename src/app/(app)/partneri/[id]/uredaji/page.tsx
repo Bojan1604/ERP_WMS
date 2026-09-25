@@ -14,6 +14,7 @@ import { formatDate, today } from '@/domain/dates';
 import { seasonLabel } from '@/domain/plan';
 import { amount, integer } from '@/lib/format';
 import { queryWithout } from '@/lib/list-params';
+import { can } from '@/domain/permissions';
 
 export const metadata = { title: 'Popis uređaja' };
 
@@ -31,12 +32,13 @@ export default async function PartnerDevicesDoc({ params, searchParams }: { para
   const { id } = await params;
   // dokument po stranicama od SHEET_MAX uređaja (zbrojevi preko svih; izvoz sadrži sve)
   const pg = readPage(sp, SHEET_MAX);
-  const [sheet, company] = await Promise.all([clientSheet(user.companyId, id, { view, contractId, skip: pg.skip }), getCompany(user.companyId)]);
+  const [sheet, company] = await Promise.all([clientSheet(user.companyId, id, { view, contractId, skip: pg.skip, rentals: can(user.perms, 'rentals', 'view') }), getCompany(user.companyId)]);
   if (!sheet) notFound();
   const { partner, contract, rows, counts } = sheet;
   const now = today();
   const shownView = contract ? 'najam' : view;
-  const rent = shownView !== 'prodano';
+  // bez prava na najam nema ugovora, mjesečnog najma ni uvjeta ugovora
+  const rent = shownView !== 'prodano' && sheet.rentals;
   const qs = queryWithout(sp).toString();
   const pages = Math.ceil(sheet.total / SHEET_MAX);
   const back = contract ? { href: `/najam/ugovori/${contract.id}`, label: `Ugovor ${contract.number}` } : { href: `/partneri/${id}?tab=uredaji`, label: partner.name };
@@ -89,8 +91,17 @@ export default async function PartnerDevicesDoc({ params, searchParams }: { para
         footer={<p>Popis je informativan i prikazuje stanje na dan {formatDate(now)} Molimo da odstupanja javite u roku od 8 dana.</p>}
       >
         <DocTable
-          head={['#', 'Serijski broj', 'Kategorija', 'Model', 'Kod klijenta od', 'Ugovor', 'Jamstvo do', shownView === 'prodano' ? 'Cijena' : shownView === 'sve' ? 'Mjesečno / cijena' : 'Mjesečno']}
-          align={['right', 'left', 'left', 'left', 'left', 'left', 'left', 'right']}
+          head={[
+            '#',
+            'Serijski broj',
+            'Kategorija',
+            'Model',
+            'Kod klijenta od',
+            ...(sheet.rentals ? ['Ugovor'] : []),
+            'Jamstvo do',
+            shownView === 'prodano' || !sheet.rentals ? 'Cijena' : shownView === 'sve' ? 'Mjesečno / cijena' : 'Mjesečno',
+          ]}
+          align={['right', 'left', 'left', 'left', 'left', ...(sheet.rentals ? (['left'] as const) : []), 'left', 'right']}
           rows={rows.map((d, i) => [
             pg.skip + i + 1,
             <span key="s" className="font-mono">
@@ -99,7 +110,7 @@ export default async function PartnerDevicesDoc({ params, searchParams }: { para
             d.category ?? '—',
             d.model,
             formatDate(d.since),
-            d.contract ?? '—',
+            ...(sheet.rentals ? [d.contract ?? '—'] : []),
             formatDate(d.warrantyEnd),
             d.monthly !== null ? `${amount(d.monthly)} / mj` : d.price !== null ? amount(d.price) : '—',
           ])}

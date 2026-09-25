@@ -127,8 +127,11 @@ export async function integrityCheck(companyId: string): Promise<IntegrityFindin
   return out.filter((f) => f.count > 0);
 }
 
-/** Popravak sigurnih nalaza. Vraća broj popravljenih zapisa po provjeri. */
-export async function fixIntegrity(tx: Tx, actor: Actor): Promise<Record<string, number>> {
+/**
+ * Popravak sigurnih nalaza. Vraća broj popravljenih zapisa po provjeri. S `goods: false` trošak robe
+ * se ne usklađuje u ovoj transakciji (akcija ga radi poslije, po skupinama — reconcileGoodsExpensesChunked).
+ */
+export async function fixIntegrity(tx: Tx, actor: Actor, opts: { goods?: boolean } = {}): Promise<Record<string, number>> {
   const c = actor.companyId;
   const fixed: Record<string, number> = {};
   fixed['state-mismatch'] = await tx.$executeRaw`
@@ -142,7 +145,7 @@ export async function fixIntegrity(tx: Tx, actor: Actor): Promise<Record<string,
     SELECT ${c}, 'INVOICE'::"Series", i."year", MAX(i."seq") FROM "Invoice" i WHERE i."companyId" = ${c} AND i."seq" IS NOT NULL GROUP BY i."year"
     ON CONFLICT ("companyId", "series", "year") DO UPDATE SET "last" = GREATEST("DocumentCounter"."last", EXCLUDED."last")
     WHERE "DocumentCounter"."last" < EXCLUDED."last"`;
-  fixed['goods-expense'] = await reconcileAllGoodsExpenses(tx, actor);
+  if (opts.goods !== false) fixed['goods-expense'] = await reconcileAllGoodsExpenses(tx, actor);
   const total = Object.values(fixed).reduce((a, b) => a + b, 0);
   await audit(tx, actor, { entity: 'company', entityId: c, action: 'integrity-fix', summary: `Provjera dosljednosti: automatski popravljeno ${total} zapisa`, diff: fixed });
   return fixed;

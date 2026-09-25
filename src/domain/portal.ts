@@ -37,16 +37,25 @@ export function generatePortalPassword(rand: (n: number) => Uint8Array, length =
   }
 }
 
-/** Vrsta uređaja kod klijenta iz vrste statusa. */
-export function portalDeviceKind(state: string, statusName: string): string {
+/**
+ * Vrsta uređaja kod klijenta — vlasništvo (najam / kupnja), ne stanje servisa. Uređaj na servisu
+ * zadržava vrstu iz stanja prije servisa (`prevState`); stanje servisa je zasebno (`portalDeviceState`).
+ */
+export function portalDeviceKind(state: string, statusName: string, prevState?: string | null): string {
   if (state === 'RENTED') return 'najam';
   if (state === 'SOLD') return 'kupnja';
+  if (prevState === 'RENTED') return 'najam';
+  if (prevState === 'SOLD') return 'kupnja';
   return statusName.toLowerCase();
 }
 
+/** Uređaj je na servisu bez otvorenog naloga — popravljen je i čeka povrat klijentu. */
+export const portalAwaitingReturn = (d: { state: string; openOrderLabel: string | null }) => d.state === 'SERVICE' && !d.openOrderLabel;
+
 /** Stanje uređaja za klijenta (stupac „Stanje" i izvoz). */
-export function portalDeviceState(d: { openOrderLabel: string | null; warrantyEnd: string | null }, today: string): string {
+export function portalDeviceState(d: { openOrderLabel: string | null; warrantyEnd: string | null; state?: string }, today: string): string {
   if (d.openOrderLabel) return `u servisu · ${d.openOrderLabel}`;
+  if (d.state && portalAwaitingReturn({ state: d.state, openOrderLabel: d.openOrderLabel })) return 'na servisu · čeka povrat';
   if (d.warrantyEnd && d.warrantyEnd >= today) return 'u jamstvu';
   if (d.warrantyEnd) return 'jamstvo isteklo';
   return 'aktivan';

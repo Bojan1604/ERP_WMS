@@ -6,7 +6,9 @@ import { getLookups } from '@/server/queries/lookups';
 import { partnerOptionsByIds } from '@/server/queries/partner-options';
 import { PartnerMultiFilter } from '@/components/partners/partner-combobox';
 import { business, marginGroupsPage, marginTotals, marginYears, modelMargins, readMarginFilters, soldItems, type MarginFilters, type MarginGroup } from '@/server/queries/margins';
-import { PageHeader, Card, Stat, TableWrap, Empty, Badge } from '@/components/ui/misc';
+import { PageHeader, Card, TableWrap, Empty, Badge } from '@/components/ui/misc';
+// pločice s iznosima: veličina prema širini (iznos s „€" ostaje u jednom retku, kao na nadzornoj ploči)
+import { KpiTile } from '@/components/dashboard/panels';
 import { Tabs } from '@/components/ui/tabs';
 import { DateRangeFilter, FilterBar, MultiSelectFilter, SearchFilter, SegmentFilter } from '@/components/ui/filters';
 import { ExportButtons } from '@/components/ui/export-buttons';
@@ -96,14 +98,14 @@ async function TotalsStats({ companyId, f }: { companyId: string; f: MarginFilte
   const t = await marginTotals(companyId, f);
   return (
     <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-8">
-      <Stat label="Prodanih uređaja" value={integer(t.sold)} />
-      {t.unpriced > 0 && <Stat label="Bez prodajne cijene" value={integer(t.unpriced)} tone="warn" hint="nije povezano s računom" />}
-      <Stat label="Prihod" value={eur(t.revenue)} />
-      <Stat label="Nabavna vrijednost" value={eur(t.cost)} />
-      <Stat label="Profit" value={eur(t.profit)} tone={t.profit >= 0 ? 'ok' : 'bad'} />
-      <Stat label="Bruto marža" value={pct(t.margin)} hint="udio u prihodu" />
-      <Stat label="Prosj. nabavna" value={eur(t.avgCost)} />
-      <Stat label="Prosj. prodajna" value={eur(t.avgPrice)} />
+      <KpiTile label="Prodanih uređaja" value={integer(t.sold)} />
+      {t.unpriced > 0 && <KpiTile label="Bez prodajne cijene" value={<span className="text-warn">{integer(t.unpriced)}</span>} hint="nije povezano s računom" />}
+      <KpiTile label="Prihod" value={eur(t.revenue)} />
+      <KpiTile label="Nabavna vrijednost" value={eur(t.cost)} />
+      <KpiTile label="Profit" value={eur(t.profit)} tone={t.profit >= 0 ? 'ok' : 'bad'} />
+      <KpiTile label="Bruto marža" value={pct(t.margin)} hint="udio u prihodu" />
+      <KpiTile label="Prosj. nabavna" value={eur(t.avgCost)} />
+      <KpiTile label="Prosj. prodajna" value={eur(t.avgPrice)} />
     </div>
   );
 }
@@ -120,12 +122,12 @@ async function BusinessView({ companyId, f }: { companyId: string; f: MarginFilt
   return (
     <>
       <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <Stat label="Prihodi bez PDV-a" value={eur(d.revenue)} hint={`${integer(d.invoices)} ${plural(d.invoices, 'račun', 'računa', 'računa')}`} />
-        <Stat label="Rashodi bez PDV-a" value={eur(d.expense)} tone="bad" hint={`${integer(d.expenseN)} ${plural(d.expenseN, 'stavka', 'stavke', 'stavki')}`} />
-        <Stat label="Rezultat" value={eur(result)} tone={result >= 0 ? 'ok' : 'bad'} hint={`${pct(d.revenue ? (result / d.revenue) * 100 : null)} od prihoda`} />
-        <Stat label="Naplaćeno" value={eur(d.paid)} tone="ok" hint={`${pct(d.revenue ? (d.paid / d.revenue) * 100 : null)} prihoda`} />
-        <Stat label="Nenaplaćeno" value={eur(d.open)} tone="warn" hint={`od toga kasni ${eur(d.late)}`} />
-        <Stat label="Bruto marža na opremi" value={pct(d.equipment.margin)} hint={`${eur(eqMargin)} na ${eur(d.equipment.cost)} nabave`} />
+        <KpiTile label="Prihodi bez PDV-a" value={eur(d.revenue)} hint={`${integer(d.invoices)} ${plural(d.invoices, 'račun', 'računa', 'računa')}`} />
+        <KpiTile label="Rashodi bez PDV-a" value={eur(d.expense)} tone="bad" hint={`${integer(d.expenseN)} ${plural(d.expenseN, 'stavka', 'stavke', 'stavki')}`} />
+        <KpiTile label="Rezultat" value={eur(result)} tone={result >= 0 ? 'ok' : 'bad'} hint={`${pct(d.revenue ? (result / d.revenue) * 100 : null)} od prihoda`} />
+        <KpiTile label="Naplaćeno" value={eur(d.paid)} tone="ok" hint={`${pct(d.revenue ? (d.paid / d.revenue) * 100 : null)} prihoda`} />
+        <KpiTile label="Nenaplaćeno" value={<span className="text-warn">{eur(d.open)}</span>} hint={`od toga kasni ${eur(d.late)}`} />
+        <KpiTile label="Bruto marža na opremi" value={pct(d.equipment.margin)} hint={`${eur(eqMargin)} na ${eur(d.equipment.cost)} nabave`} />
       </div>
       <Card title="Prihodi, rashodi i rezultat po mjesecima" className="mb-4">
         {d.months.some((m) => m.income || m.expense) ? (

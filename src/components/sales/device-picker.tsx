@@ -218,7 +218,7 @@ export function DevicePicker({
           </select>
         )}
         {supplierFilter && (
-          <PartnerCombobox role="supplier" className="w-48" value={supplierId || null} onChange={(id) => setSupplierId(id ?? '')} placeholder="Svi dobavljači" allowEmpty />
+          <PartnerCombobox role="supplier" className="w-48 [&_[role=combobox]>span]:text-fg" value={supplierId || null} onChange={(id) => setSupplierId(id ?? '')} placeholder="Svi dobavljači" allowEmpty />
         )}
         {statusOpts.length > 1 && (
           <select value={statusId} onChange={(e) => setStatusId(e.target.value)} className={cn(controlClass, 'h-8 w-auto max-w-44')} aria-label="Status">

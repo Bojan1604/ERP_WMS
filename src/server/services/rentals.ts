@@ -348,7 +348,9 @@ export async function updateContractTerms(tx: Tx, actor: Actor, id: string, inpu
   const next = await tx.contract.findUniqueOrThrow({ where: { id } });
   const [oldTerms, newTerms] = [toTerms(c), toTerms(next)];
   const res: Rebased[] = [];
-  if (JSON.stringify({ ...oldTerms, closedAt: null }) !== JSON.stringify({ ...newTerms, closedAt: null })) {
+  // kraj ugovora (i stanje) ne mijenja način naplate — obračun ga poštuje sam; preračun planova samo za uvjete naplate
+  const billingTerms = (t: typeof oldTerms) => JSON.stringify({ ...t, endDate: null, closedAt: null, status: null, pausedSince: null });
+  if (billingTerms(oldTerms) !== billingTerms(newTerms)) {
     const now = today();
     const [items, returned, coveredBy] = await Promise.all([
       tx.contractItem.findMany({ where: { contractId: id } }),

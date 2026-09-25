@@ -2,8 +2,7 @@ import 'server-only';
 import { db } from '../db';
 import { assert, DomainError } from '../errors';
 import type { SessionUser } from '../auth';
-import { accountantRowsByIds } from '../queries/accountant';
-import { can } from '@/domain/permissions';
+import { accountantAccess, accountantRowsByIds } from '../queries/accountant';
 import { ACCOUNTANT_ROW_CAP, parseKeys } from '@/domain/accountant';
 import { fillTemplate, invoiceMailTemplate, readTemplates, type MailTemplateKind } from '@/domain/mail';
 import { quoteDocTitle, type MailKind, type PdfKind } from '@/domain/documents';
@@ -77,6 +76,10 @@ export async function resolveDoc(user: Pick<SessionUser, 'companyId' | 'perms'>,
       // predložak prema vrsti i stanju (odobrenje, storno, predujam, plaćen/otvoren); iznos je otvoreni
       const pick = invoiceMailTemplate({ kind: inv.kind, stornoed: inv.stornoed, total: num(inv.grandTotal), advance: num(inv.advanceAmount), open: num(inv.openAmount) });
       const amount = reminder ? num(inv.openAmount) : pick.amount;
+      // stornirani račun: veza je broj storna
+      const storno = inv.stornoed
+        ? await db.invoice.findFirst({ where: { companyId, refInvoiceId: inv.id, kind: 'STORNO' }, select: { number: true }, orderBy: { createdAt: 'desc' } })
+        : null;
       return {
         kind,
         entityId: inv.id,
@@ -90,7 +93,7 @@ export async function resolveDoc(user: Pick<SessionUser, 'companyId' | 'perms'>,
           iznos: eur(amount, cur),
           datum: d(inv.date),
           dospijece: d(inv.dueDate) || d(inv.date),
-          veza: inv.refInvoice?.number ?? '',
+          veza: (storno?.number ?? inv.refInvoice?.number) ?? '',
         },
         pdf: { kind: kind === 'delivery' ? 'delivery' : 'invoice', id: inv.id },
       };
@@ -141,9 +144,9 @@ export async function resolveDoc(user: Pick<SessionUser, 'companyId' | 'perms'>,
       const ids = parseKeys(keys);
       assert(ids.out.length + ids.in.length > 0, 'Označite barem jedan dokument.');
       assert(ids.out.length <= ACCOUNTANT_ROW_CAP && ids.in.length <= ACCOUNTANT_ROW_CAP, `Najviše ${ACCOUNTANT_ROW_CAP} dokumenata po smjeru u jednoj arhivi.`);
-      const allowed = { out: can(user.perms, 'sales', 'view'), in: can(user.perms, 'purchasing', 'view') };
+      const allowed = accountantAccess(user.perms);
       assert((allowed.out || !ids.out.length) && (allowed.in || !ids.in.length), 'Nemate pravo na neke od označenih dokumenata.');
-      const rows = await accountantRowsByIds(companyId, ids);
+      const rows = await accountantRowsByIds(companyId, ids, allowed.costs);
       assert(rows.length === ids.out.length + ids.in.length, 'Neki dokumenti ne postoje.');
       const dates = rows.map((r) => r.date).sort();
       const list = rows.slice(0, 60).map((r) => `- ${r.dir === 'out' ? 'Izlazni' : 'Ulazni'} ${r.number} · ${r.partner} · ${eur(r.total, cur)}`);

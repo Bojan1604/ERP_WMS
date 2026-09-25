@@ -80,7 +80,7 @@ export type Fact = { k: string; v: string } | null | false | undefined;
 export type SumRow = { k: string; v: string; strong?: boolean } | null | false | undefined;
 
 const lbl = (t: string): Content => ({ text: t.toUpperCase(), fontSize: 7, color: GREY, characterSpacing: 0.4 });
-const row = (t: string, o: Record<string, unknown> = {}): Content => ({ text: t, fontSize: 8.5, color: '#3a3a3c', ...o }) as Content;
+const row = (t: string, o: Record<string, unknown> = {}): Content => ({ text: t, fontSize: 8.5, lineHeight: 1.1, color: '#3a3a3c', ...o }) as Content;
 const compact = <T>(a: Array<T | null | false | undefined | ''>): T[] => a.filter(Boolean) as T[];
 
 /**
@@ -111,14 +111,14 @@ function header(company: PdfCompany, title: string, number: string | null | unde
           width: '*',
           alignment: 'right',
           stack: [
-            { text: title.toUpperCase(), fontSize: 15, bold: true, characterSpacing: 1.2 },
-            ...(number ? [{ text: `br. ${number}`, fontSize: 12, bold: true, color: '#3a3a3c', margin: [0, 2, 0, 0] }] : []),
+            { text: title.toUpperCase(), fontSize: 14, bold: true, characterSpacing: 1.2 },
+            ...(number ? [{ text: `br. ${number}`, fontSize: 11, bold: true, color: '#3a3a3c', margin: [0, 1, 0, 0] }] : []),
           ],
         },
       ],
       columnGap: 20,
     } as ContentColumns,
-    { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 523, y2: 0, lineWidth: 1.2, lineColor: DARK }], margin: [0, 10, 0, 0] },
+    { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 523, y2: 0, lineWidth: 1.2, lineColor: DARK }], margin: [0, 8, 0, 0] },
   ];
 }
 
@@ -127,7 +127,7 @@ function parties(party: PdfParty | null, company: PdfCompany, partyLabel: string
   const left: Content[] = party
     ? compact<Content>([
         lbl(partyLabel),
-        { text: party.name || '—', fontSize: 11, bold: true, margin: [0, 2, 0, 3] },
+        { text: party.name || '—', fontSize: 10.5, bold: true, margin: [0, 1, 0, 2] },
         party.address ? row(party.address) : null,
         party.zip || party.city ? row([party.zip, party.city].filter(Boolean).join(' ')) : null,
         row(countryName(party.country)),
@@ -140,7 +140,7 @@ function parties(party: PdfParty | null, company: PdfCompany, partyLabel: string
   const vatId = company.vatRegistered === false ? null : company.vatId || (company.oib && own === 'HR' ? `HR${company.oib}` : null);
   const right = compact<Content>([
     lbl('Izdavatelj'),
-    { text: company.name, fontSize: 11, bold: true, margin: [0, 2, 0, 3] },
+    { text: company.name, fontSize: 10.5, bold: true, margin: [0, 1, 0, 2] },
     company.address ? row(company.address) : null,
     company.zip || company.city ? row([company.zip, company.city].filter(Boolean).join(' ')) : null,
     row(countryName(company.country)),
@@ -152,7 +152,7 @@ function parties(party: PdfParty | null, company: PdfCompany, partyLabel: string
     extra ? row(extra, { color: GREY, margin: [0, 3, 0, 0] }) : null,
   ]);
   return {
-    margin: [0, 14, 0, 0],
+    margin: [0, 10, 0, 0],
     columns: [
       { width: '*', stack: left },
       { width: '*', alignment: 'right', stack: right },
@@ -165,10 +165,10 @@ function factsBar(facts: Fact[]): Content | null {
   const f = compact<{ k: string; v: string }>(facts);
   if (!f.length) return null;
   return {
-    margin: [0, 12, 0, 0],
+    margin: [0, 10, 0, 0],
     table: {
       widths: f.map(() => '*'),
-      body: [f.map((x) => ({ stack: [lbl(x.k), { text: x.v, fontSize: 9, bold: true, margin: [0, 2, 0, 0] }], fillColor: LIGHT, margin: [0, 5, 0, 5] }))],
+      body: [f.map((x) => ({ stack: [lbl(x.k), { text: x.v, fontSize: 9, bold: true, margin: [0, 1, 0, 0] }], fillColor: LIGHT, margin: [0, 4, 0, 4] }))],
     },
     layout: { defaultBorder: false, paddingLeft: () => 7, paddingRight: () => 5, paddingTop: () => 0, paddingBottom: () => 0 },
   } as Content;
@@ -186,7 +186,7 @@ export interface TableSpec {
 export function itemsTable(t: TableSpec): Content {
   const right = new Set(t.right ?? []);
   return {
-    margin: [0, 12, 0, 0],
+    margin: [0, 10, 0, 0],
     table: {
       headerRows: 1,
       widths: t.widths,
@@ -205,23 +205,24 @@ export function itemsTable(t: TableSpec): Content {
       hLineWidth: (i: number, node: { table: { body: unknown[] } }) => (i === 0 || i === node.table.body.length ? 0.6 : 0),
       vLineWidth: () => 0,
       hLineColor: () => LINE,
-      paddingTop: () => 4,
-      paddingBottom: () => 4,
+      paddingTop: () => 2.5,
+      paddingBottom: () => 2.5,
       paddingLeft: (i: number) => (i === 0 ? 4 : 5),
       paddingRight: () => 5,
     },
   } as unknown as Content;
 }
 
-/** Napomene lijevo, zbrojevi u okviru desno. */
-export function sums(rows: SumRow[], notes: Array<string | null | undefined | false> = []): Content | null {
+/** Napomene (i dodatni blokovi, npr. porezna tablica i fiskalizacija) lijevo, zbrojevi u okviru desno. */
+export function sums(rows: SumRow[], notes: Array<string | null | undefined | false> = [], extra: Array<Content | null | undefined | false> = []): Content | null {
   const r = compact<{ k: string; v: string; strong?: boolean }>(rows);
   const n = compact<string>(notes);
-  if (!r.length && !n.length) return null;
+  const x = compact<Content>(extra);
+  if (!r.length && !n.length && !x.length) return null;
   return {
-    margin: [0, 10, 0, 0],
+    margin: [0, 8, 0, 0],
     columns: [
-      { width: '*', stack: n.map((t, i) => ({ text: t, fontSize: 8, color: '#555', margin: [0, i ? 3 : 2, 16, 0] })) },
+      { width: '*', stack: [...n.map((t, i) => ({ text: t, fontSize: 8, color: '#555', margin: [0, i ? 3 : 2, 16, 0] }) as Content), ...x] },
       r.length
         ? {
             width: 220,
@@ -232,7 +233,7 @@ export function sums(rows: SumRow[], notes: Array<string | null | undefined | fa
                 { text: x.v, fontSize: x.strong ? 11 : 8.5, bold: !!x.strong, color: x.strong ? '#fff' : '#111', alignment: 'right', fillColor: x.strong ? DARK : LIGHT, noWrap: true },
               ]),
             },
-            layout: { defaultBorder: false, paddingLeft: () => 9, paddingRight: () => 9, paddingTop: () => 3.5, paddingBottom: () => 3.5 },
+            layout: { defaultBorder: false, paddingLeft: () => 9, paddingRight: () => 9, paddingTop: () => 3, paddingBottom: () => 3 },
           }
         : { width: 0, text: '' },
     ],
@@ -241,15 +242,15 @@ export function sums(rows: SumRow[], notes: Array<string | null | undefined | fa
 }
 
 /** Okvir s naslovom (podaci za plaćanje, fiskalizacija, opis kvara…) i neobaveznom slikom desno. */
-export function box(title: string, lines: Content[], side?: Content | null): Content {
+export function box(title: string, lines: Content[], side?: Content | null, margin: [number, number, number, number] = [0, 10, 0, 0]): Content {
   return {
-    margin: [0, 14, 0, 0],
+    margin,
     unbreakable: true,
     table: {
       widths: side ? ['*', 'auto'] : ['*'],
       body: [[{ stack: [lbl(title), ...lines], margin: [2, 2, 2, 2] }, ...(side ? [{ stack: [side], margin: [2, 2, 2, 2] }] : [])]],
     },
-    layout: { hLineWidth: () => 0.6, vLineWidth: () => 0.6, hLineColor: () => LINE, vLineColor: () => LINE, paddingLeft: () => 8, paddingRight: () => 8, paddingTop: () => 6, paddingBottom: () => 6 },
+    layout: { hLineWidth: () => 0.6, vLineWidth: () => 0.6, hLineColor: () => LINE, vLineColor: () => LINE, paddingLeft: () => 8, paddingRight: () => 8, paddingTop: () => 4, paddingBottom: () => 4 },
   } as unknown as Content;
 }
 
@@ -267,7 +268,7 @@ function signatures(labels: string[]): Content {
     width: 200,
     stack: [{ canvas: [{ type: 'line', x1: 0, y1: 0, x2: 200, y2: 0, lineWidth: 0.5, lineColor: GREY }] }, { text: t, fontSize: 8, color: GREY, margin: [0, 4, 0, 0], alignment: 'center' }],
   });
-  return { margin: [0, 34, 0, 0], unbreakable: true, columns: [line(labels[0] ?? ''), { width: '*', text: '' }, labels[1] ? line(labels[1]) : { width: 200, text: '' }] } as ContentColumns;
+  return { margin: [0, 30, 0, 0], unbreakable: true, columns: [line(labels[0] ?? ''), { width: '*', text: '' }, labels[1] ? line(labels[1]) : { width: 200, text: '' }] } as ContentColumns;
 }
 
 export interface DocShell {
@@ -292,10 +293,10 @@ export function documentDefinition(d: DocShell): TDocumentDefinitions {
   const footLines = compact<string>([d.footer, d.company.invoiceFooter?.trim(), d.company.legalFooter?.trim()]);
   return {
     pageSize: 'A4',
-    pageMargins: [36, 36, 36, 30 + footLines.length * 11 + 12],
+    pageMargins: [36, 30, 36, 24 + footLines.length * 10 + 10],
     info: { title: d.docTitle ?? [d.title, d.number].filter(Boolean).join(' '), author: d.company.name, subject: d.title },
     footer: (page: number, pages: number) => ({
-      margin: [36, 4, 36, 0],
+      margin: [36, 2, 36, 0],
       stack: compact<Content>([
         ...footLines.map((t, i) => ({ text: t, fontSize: i === footLines.length - 1 && d.company.legalFooter ? 6.8 : 7.2, color: GREY, alignment: 'center', margin: [0, i ? 2 : 0, 0, 0] }) as Content),
         pages > 1 ? ({ text: `${page} / ${pages}`, fontSize: 7, color: GREY, alignment: 'right', margin: [0, 2, 0, 0] } as Content) : null,

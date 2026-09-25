@@ -6,7 +6,7 @@
 
 import { r2 } from './money';
 
-export const MAIL_TEMPLATE_KINDS = ['invoice', 'invoicePaid', 'advance', 'creditNote', 'storno', 'quote', 'proforma', 'delivery', 'service', 'accountant', 'reminder'] as const;
+export const MAIL_TEMPLATE_KINDS = ['invoice', 'invoicePaid', 'invoiceCovered', 'invoiceStornoed', 'advance', 'creditNote', 'storno', 'quote', 'proforma', 'delivery', 'service', 'accountant', 'reminder'] as const;
 export type MailTemplateKind = (typeof MAIL_TEMPLATE_KINDS)[number];
 
 export interface MailTemplate {
@@ -18,6 +18,8 @@ export type MailTemplates = Record<MailTemplateKind, MailTemplate>;
 export const MAIL_TEMPLATE_LABEL: Record<MailTemplateKind, string> = {
   invoice: 'Račun',
   invoicePaid: 'Plaćeni račun',
+  invoiceCovered: 'Račun podmiren predujmom',
+  invoiceStornoed: 'Stornirani račun',
   advance: 'Račun za predujam',
   creditNote: 'Odobrenje',
   storno: 'Storno računa',
@@ -33,6 +35,8 @@ export const MAIL_TEMPLATE_LABEL: Record<MailTemplateKind, string> = {
 export const MAIL_VARIABLES: Record<MailTemplateKind, string[]> = {
   invoice: ['broj', 'kupac', 'iznos', 'datum', 'dospijece', 'firma'],
   invoicePaid: ['broj', 'kupac', 'iznos', 'datum', 'firma'],
+  invoiceCovered: ['broj', 'kupac', 'iznos', 'datum', 'firma'],
+  invoiceStornoed: ['broj', 'kupac', 'iznos', 'datum', 'veza', 'firma'],
   advance: ['broj', 'kupac', 'iznos', 'datum', 'firma'],
   creditNote: ['broj', 'kupac', 'iznos', 'datum', 'veza', 'firma'],
   storno: ['broj', 'kupac', 'iznos', 'datum', 'veza', 'firma'],
@@ -53,6 +57,14 @@ export const MAIL_DEFAULTS: MailTemplates = {
   invoicePaid: {
     subject: 'Račun {broj}',
     body: 'Poštovani,\n\nu prilogu šaljemo račun {broj} od {datum} na iznos {iznos}.\nRačun je plaćen — hvala na uplati.\n\nLijep pozdrav,\n{firma}',
+  },
+  invoiceCovered: {
+    subject: 'Račun {broj}',
+    body: 'Poštovani,\n\nu prilogu šaljemo račun {broj} od {datum} na iznos {iznos}.\nRačun je u cijelosti podmiren uplaćenim predujmom — nema iznosa za platiti.\n\nLijep pozdrav,\n{firma}',
+  },
+  invoiceStornoed: {
+    subject: 'Račun {broj} (storniran)',
+    body: 'Poštovani,\n\nu prilogu šaljemo račun {broj} od {datum} na iznos {iznos}.\nRačun je storniran (storno {veza}) i ne treba ga plaćati.\n\nLijep pozdrav,\n{firma}',
   },
   advance: {
     subject: 'Račun za predujam {broj}',
@@ -95,7 +107,8 @@ export const MAIL_DEFAULTS: MailTemplates = {
 /**
  * Predložak i iznos za slanje izdanog računa prema vrsti i stanju: odobrenje i storno
  * imaju svoje predloške (iznos bez predznaka), račun za predujam svoj, plaćeni račun
- * zahvaljuje na uplati, a otvoreni račun navodi otvoreni iznos (ne ukupni).
+ * zahvaljuje na uplati, stornirani i predujmom podmireni navode iznos računa, a otvoreni
+ * račun navodi otvoreni iznos (ne ukupni).
  */
 export function invoiceMailTemplate(inv: {
   kind: 'INVOICE' | 'ADVANCE' | 'STORNO' | 'CREDIT_NOTE';
@@ -107,8 +120,12 @@ export function invoiceMailTemplate(inv: {
   if (inv.kind === 'CREDIT_NOTE') return { template: 'creditNote', amount: Math.abs(inv.total) };
   if (inv.kind === 'STORNO') return { template: 'storno', amount: Math.abs(inv.total) };
   if (inv.kind === 'ADVANCE') return { template: 'advance', amount: inv.total };
-  if (inv.open > 0.005 || inv.stornoed) return { template: 'invoice', amount: inv.open };
-  // otvoreno 0: plaćen (ili podmiren predujmom/odobrenjem) — iznos računa umanjen za predujam
+  // storniran: navodi se iznos računa i da je storniran (ne „za platiti 0,00")
+  if (inv.stornoed) return { template: 'invoiceStornoed', amount: inv.total };
+  if (inv.open > 0.005) return { template: 'invoice', amount: inv.open };
+  // u cijelosti pokriven predujmom: iznos računa i „podmiren predujmom"
+  if (inv.advance > 0.005 && inv.total - inv.advance <= 0.005) return { template: 'invoiceCovered', amount: inv.total };
+  // otvoreno 0: plaćen (ili podmiren odobrenjem) — iznos računa umanjen za predujam
   return { template: 'invoicePaid', amount: Math.max(0, r2(inv.total - inv.advance)) };
 }
 

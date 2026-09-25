@@ -279,7 +279,7 @@ export async function setSupplierInvoicesPaid(tx: Tx, actor: Actor, ids: string[
 export async function deleteSupplierInvoice(tx: Tx, actor: Actor, id: string) {
   const si = await tx.supplierInvoice.findFirst({
     where: { id, companyId: actor.companyId },
-    select: { id: true, internalNo: true, number: true, source: true, status: true, orderId: true, receiptId: true },
+    select: { id: true, internalNo: true, number: true, source: true, status: true, orderId: true, receiptId: true, supplierId: true },
   });
   assert(si, 'Ulazni račun ne postoji.');
   // prihvaćen/odbijen eRačun je javljen posredniku (i Poreznoj upravi) — zapis ostaje
@@ -287,9 +287,24 @@ export async function deleteSupplierInvoice(tx: Tx, actor: Actor, id: string) {
   await tx.expense.deleteMany({ where: { supplierInvoiceId: id, companyId: actor.companyId } });
   await tx.attachment.deleteMany({ where: { companyId: actor.companyId, entity: 'supplierInvoice', entityId: id } });
   await tx.supplierInvoice.delete({ where: { id } });
+  // račun nastao iz podataka računa na narudžbenici: brišu se i ti podaci, inače bi ga sljedeća primka ponovno stvorila
+  const cleared = si.orderId
+    ? await tx.purchaseOrder.updateMany({
+        where: { id: si.orderId, companyId: actor.companyId, supplierId: si.supplierId, supplierInvoiceNo: si.number },
+        data: {
+          supplierInvoiceNo: null, supplierInvoiceDate: null, supplierInvoiceDueDate: null, supplierInvoiceCurrency: null,
+          supplierInvoiceNet: null, supplierInvoiceVat: null, supplierInvoiceTotal: null,
+        },
+      })
+    : { count: 0 };
   // drugi računi iste narudžbenice sada možda moraju knjižiti robu (max(primke, računi za robu))
   if (si.orderId || si.receiptId) await reconcileOrderGoodsExpense(tx, actor, { orderId: si.orderId, receiptId: si.receiptId });
-  await audit(tx, actor, { entity: 'supplierInvoice', entityId: id, action: 'delete', summary: `Ulazni račun ${si.internalNo} (${si.number}) obrisan` });
+  await audit(tx, actor, {
+    entity: 'supplierInvoice',
+    entityId: id,
+    action: 'delete',
+    summary: `Ulazni račun ${si.internalNo} (${si.number}) obrisan${cleared.count ? ' — obrisani i podaci računa na narudžbenici' : ''}`,
+  });
   return si;
 }
 

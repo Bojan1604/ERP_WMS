@@ -26,7 +26,7 @@ export async function GET(req: Request) {
     },
   });
   // brojke po dijelovima, da upit s IN ostane razumne veličine
-  const stats = new Map<string, { open: number; devices: number; contracts: number; invoices: number; turnover: number }>();
+  const stats = new Map<string, { open: number; overpaid: number; devices: number; contracts: number; invoices: number; turnover: number }>();
   for (let i = 0; i < rows.length; i += 2000) {
     const part = await partnerStats(user.companyId, rows.slice(i, i + 2000).map((r) => r.id));
     for (const [k, v] of part) stats.set(k, v);
@@ -38,6 +38,7 @@ export async function GET(req: Request) {
         { label: 'Računa', value: (r) => stats.get(r.id)?.invoices ?? 0, type: 'int' },
         { label: 'Promet', value: (r) => stats.get(r.id)?.turnover ?? 0, type: 'money' },
         { label: 'Otvoreno', value: (r) => stats.get(r.id)?.open ?? 0, type: 'money' },
+        { label: 'Preplata (za povrat)', value: (r) => stats.get(r.id)?.overpaid ?? 0, type: 'money' },
       ]
     : [];
   return csvOrXlsx(

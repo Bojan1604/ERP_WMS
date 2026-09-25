@@ -93,7 +93,7 @@ export default async function PartnerPage({ params, searchParams }: { params: Pr
       {tab === 'racuni' && canSales ? (
         <InvoicesTab companyId={user.companyId} partnerId={id} params={sp} overdueDays={company.overdueDays} />
       ) : tab === 'uredaji' ? (
-        <DevicesTab companyId={user.companyId} partnerId={id} params={sp} />
+        <DevicesTab companyId={user.companyId} partnerId={id} params={sp} rentals={canRentals} />
       ) : tab === 'ugovori' && canRentals ? (
         <ContractsTab companyId={user.companyId} partnerId={id} />
       ) : tab === 'cjenik' ? (

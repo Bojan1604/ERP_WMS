@@ -8,11 +8,30 @@ import { paymentState, type PaymentState } from '@/domain/invoice';
 import { fromISO, toISO } from '@/domain/dates';
 import { num } from '@/domain/money';
 import { escapeLike } from '@/lib/like';
+import { can, canSeeCost, type PermissionMap } from '@/domain/permissions';
 
 /**
  * Knjigovođa: izdani izlazni računi i ulazni računi u razdoblju. Filtriranje i
  * zbrojevi idu u bazi; popis je po smjeru ograničen na ACCOUNTANT_ROW_CAP redaka.
+ * Bez prava „nabavne cijene i marže" (`costs`) iznosi ulaznih računa za robu su `null`, ne ulaze u
+ * zbrojeve, a njihovi prilozi ne idu u ZIP (kao Knjiga URA na /nabava/ulazni).
  */
+
+/** Što korisnik smije vidjeti: izlazne (prodaja), ulazne (nabava) i iznose računa za robu (`costs`). */
+export interface AccountantAccess {
+  out: boolean;
+  in: boolean;
+  costs?: boolean;
+}
+
+export const accountantAccess = (perms: PermissionMap): Required<AccountantAccess> => ({
+  out: can(perms, 'sales', 'view'),
+  in: can(perms, 'purchasing', 'view'),
+  costs: canSeeCost(perms),
+});
+
+/** Ulazni računi čiji iznosi ne otkrivaju nabavnu vrijednost robe. */
+export const NOT_GOODS_INVOICE: Prisma.SupplierInvoiceWhereInput = { OR: [{ goodsInvoice: null }, { goodsInvoice: false }] };
 
 export interface AccountantRow {
   key: string;
@@ -25,9 +44,10 @@ export interface AccountantRow {
   partner: string;
   oib: string | null;
   kind: AccountantKind;
-  net: number;
-  vat: number;
-  total: number;
+  /** `null` — iznos računa za robu skriven (korisnik bez prava `costs`). */
+  net: number | null;
+  vat: number | null;
+  total: number | null;
   status: string;
   statusTone: PaymentState['tone'];
   sentAt: string | null;
@@ -109,6 +129,7 @@ const inSelect = {
   paidDate: true,
   accountantSentAt: true,
   source: true,
+  goodsInvoice: true,
   supplierOib: true,
   supplier: { select: { name: true, oib: true } },
 } satisfies Prisma.SupplierInvoiceSelect;
@@ -144,7 +165,7 @@ async function orderedKeys(where: Where, take: number) {
 }
 
 /** Retci za zadane uvjete — zajedničko za popis, ZIP i ispis. */
-export async function loadAccountantRows(companyId: string, where: Where, take = ACCOUNTANT_ROW_CAP): Promise<AccountantRow[]> {
+export async function loadAccountantRows(companyId: string, where: Where, take = ACCOUNTANT_ROW_CAP, costs = true): Promise<AccountantRow[]> {
   const [company, outs, ins] = await Promise.all([
     getCompany(companyId),
     where.out ? db.invoice.findMany({ where: where.out, select: outSelect, orderBy: OUT_ORDER, take }) : [],
@@ -193,6 +214,7 @@ export async function loadAccountantRows(companyId: string, where: Where, take =
     });
   }
   for (const r of ins) {
+    const hide = !costs && r.goodsInvoice === true;
     rows.push({
       key: rowKey('in', r.id),
       dir: 'in',
@@ -203,13 +225,14 @@ export async function loadAccountantRows(companyId: string, where: Where, take =
       partner: r.supplier.name,
       oib: r.supplier.oib ?? r.supplierOib,
       kind: 'INBOUND',
-      net: num(r.netAmount),
-      vat: num(r.vatAmount),
-      total: num(r.total),
+      net: hide ? null : num(r.netAmount),
+      vat: hide ? null : num(r.vatAmount),
+      total: hide ? null : num(r.total),
       status: r.paidDate ? 'Plaćeno' : 'Nije plaćeno',
       statusTone: r.paidDate ? 'positive' : 'warning',
       sentAt: r.accountantSentAt ? r.accountantSentAt.toISOString() : null,
-      attachments: inAtt.get(r.id) ?? 0,
+      // prilozi računa za robu (račun dobavljača) otkrivaju nabavnu vrijednost
+      attachments: hide ? 0 : (inAtt.get(r.id) ?? 0),
       fiscal: null,
       // ulazni eRačun (preuzet od posrednika) — oznaka u stupcu eRačun
       eInvoice: r.source === 'EINVOICE' ? 'INBOUND' : null,
@@ -219,7 +242,7 @@ export async function loadAccountantRows(companyId: string, where: Where, take =
 }
 
 /** Uvjeti popisa za filtre i prava korisnika (izlazne vidi samo tko vidi prodaju, ulazne tko vidi nabavu). */
-async function accountantWhere(companyId: string, f: AccountantFilters, allowed: { out: boolean; in: boolean }) {
+async function accountantWhere(companyId: string, f: AccountantFilters, allowed: AccountantAccess) {
   const d0 = directionsOf(f);
   const dirs = { out: d0.out && allowed.out, in: d0.in && allowed.in };
   const partnerIds = await partnerIdsFor(companyId, f.q);
@@ -234,14 +257,17 @@ async function accountantWhere(companyId: string, f: AccountantFilters, allowed:
 export async function listAccountant(
   companyId: string,
   f: AccountantFilters,
-  allowed: { out: boolean; in: boolean } = { out: true, in: true },
+  allowed: AccountantAccess = { out: true, in: true },
   page?: { skip: number; take: number },
 ) {
   const { dirs, where } = await accountantWhere(companyId, f, allowed);
+  const costs = allowed.costs !== false;
   const wOut = where.out;
   const wIn = where.in;
+  // zbrojevi ulaznih bez prava `costs` — bez računa za robu (broj dokumenata ostaje pun)
+  const wInSum = wIn && !costs ? { AND: [wIn, NOT_GOODS_INVOICE] } : wIn;
   const loadPage = async () => {
-    if (!page) return loadAccountantRows(companyId, where);
+    if (!page) return loadAccountantRows(companyId, where, ACCOUNTANT_ROW_CAP, costs);
     // redoslijed samo po ključevima, zatim puni retci jedne stranice
     const keys = (await orderedKeys(where, Math.min(page.skip + page.take, ACCOUNTANT_ROW_CAP))).slice(page.skip, page.skip + page.take);
     const outIds = keys.filter((k) => k.dir === 'out').map((k) => k.id);
@@ -249,38 +275,44 @@ export async function listAccountant(
     return loadAccountantRows(companyId, {
       out: wOut && outIds.length ? { AND: [wOut, { id: { in: outIds } }] } : null,
       in: wIn && inIds.length ? { AND: [wIn, { id: { in: inIds } }] } : null,
-    });
+    }, ACCOUNTANT_ROW_CAP, costs);
   };
-  const [rows, outAgg, outNotSent, inAgg, inNotSent] = await Promise.all([
+  const [rows, outAgg, outNotSent, inAgg, inSum, inNotSent] = await Promise.all([
     loadPage(),
     wOut ? db.invoice.aggregate({ where: wOut, _count: { _all: true }, _sum: { netTotal: true, vatTotal: true, grandTotal: true } }) : null,
     wOut && f.sent !== 'da' ? db.invoice.count({ where: { AND: [wOut, { accountantSentAt: null }] } }) : 0,
-    wIn ? db.supplierInvoice.aggregate({ where: wIn, _count: { _all: true }, _sum: { netAmount: true, vatAmount: true, total: true } }) : null,
+    wIn ? db.supplierInvoice.aggregate({ where: wIn, _count: { _all: true } }) : null,
+    wInSum ? db.supplierInvoice.aggregate({ where: wInSum, _sum: { netAmount: true, vatAmount: true, total: true } }) : null,
     wIn && f.sent !== 'da' ? db.supplierInvoice.count({ where: { AND: [wIn, { accountantSentAt: null }] } }) : 0,
   ]);
   const out: DirTotals = outAgg
     ? { count: outAgg._count._all, net: num(outAgg._sum.netTotal), vat: num(outAgg._sum.vatTotal), total: num(outAgg._sum.grandTotal), notSent: outNotSent }
     : EMPTY;
   const inb: DirTotals = inAgg
-    ? { count: inAgg._count._all, net: num(inAgg._sum.netAmount), vat: num(inAgg._sum.vatAmount), total: num(inAgg._sum.total), notSent: inNotSent }
+    ? { count: inAgg._count._all, net: num(inSum?._sum.netAmount), vat: num(inSum?._sum.vatAmount), total: num(inSum?._sum.total), notSent: inNotSent }
     : EMPTY;
   // broj redaka u popisu (straničenje): najviše ACCOUNTANT_ROW_CAP po smjeru
   const listed = Math.min(out.count, ACCOUNTANT_ROW_CAP) + Math.min(inb.count, ACCOUNTANT_ROW_CAP);
-  return { rows, totals: { out, in: inb }, listed, capped: out.count > ACCOUNTANT_ROW_CAP || inb.count > ACCOUNTANT_ROW_CAP, dirs };
+  return { rows, totals: { out, in: inb, inGoodsHidden: !costs }, listed, capped: out.count > ACCOUNTANT_ROW_CAP || inb.count > ACCOUNTANT_ROW_CAP, dirs };
 }
 
 /** „Označi sve po filtru": ključevi svih dokumenata popisa (najviše ACCOUNTANT_ROW_CAP po smjeru), redom popisa. */
-export async function accountantKeysByFilter(companyId: string, f: AccountantFilters, allowed: { out: boolean; in: boolean }) {
+export async function accountantKeysByFilter(companyId: string, f: AccountantFilters, allowed: AccountantAccess) {
   const { where } = await accountantWhere(companyId, f, allowed);
   return (await orderedKeys(where, ACCOUNTANT_ROW_CAP)).map((k) => rowKey(k.dir, k.id));
 }
 
 /** Retci za označene ključeve — uvijek suženo na firmu; izlazni samo izdani. */
-export function accountantRowsByIds(companyId: string, ids: { out: string[]; in: string[] }) {
-  return loadAccountantRows(companyId, {
-    out: ids.out.length ? { companyId, status: 'ISSUED', id: { in: ids.out } } : null,
-    in: ids.in.length ? { companyId, id: { in: ids.in } } : null,
-  });
+export function accountantRowsByIds(companyId: string, ids: { out: string[]; in: string[] }, costs = true) {
+  return loadAccountantRows(
+    companyId,
+    {
+      out: ids.out.length ? { companyId, status: 'ISSUED', id: { in: ids.out } } : null,
+      in: ids.in.length ? { companyId, id: { in: ids.in } } : null,
+    },
+    ACCOUNTANT_ROW_CAP,
+    costs,
+  );
 }
 
 /** Izdani izlazni računi za skupni ispis (A4, jedan po stranici) — podaci kao na stranici računa. */

@@ -1,7 +1,6 @@
 import { requireAccess } from '@/server/auth';
-import { can } from '@/domain/permissions';
 import { getCompany } from '@/server/queries/lookups';
-import { listAccountant, type AccountantRow } from '@/server/queries/accountant';
+import { accountantAccess, listAccountant, type AccountantRow } from '@/server/queries/accountant';
 import { csvOrXlsx } from '@/server/xlsx';
 import type { ExportColumn } from '@/lib/csv';
 import { ACCOUNTANT_KIND_LABEL, accountantEInvoiceLabel, readAccountantFilters } from '@/domain/accountant';
@@ -20,7 +19,7 @@ export async function GET(req: Request) {
   const sp = Object.fromEntries(new URL(req.url).searchParams);
   const f = readAccountantFilters(sp);
   const [list, company] = await Promise.all([
-    listAccountant(user.companyId, f, { out: can(user.perms, 'sales', 'view'), in: can(user.perms, 'purchasing', 'view') }),
+    listAccountant(user.companyId, f, accountantAccess(user.perms)),
     getCompany(user.companyId),
   ]);
   const columns: ExportColumn<AccountantRow>[] = [
