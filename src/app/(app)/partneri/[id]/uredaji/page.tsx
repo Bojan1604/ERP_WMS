@@ -7,7 +7,8 @@ import { DocumentShell, DocTable } from '@/components/doc/document';
 import { PrintButton } from '@/components/ui/print-button';
 import { ExportButtons } from '@/components/ui/export-buttons';
 import { SegmentFilter } from '@/components/ui/filters';
-import { Notice, PageHeader } from '@/components/ui/misc';
+import { PageHeader } from '@/components/ui/misc';
+import { Pagination, readPage } from '@/components/ui/pagination';
 import { BILLING_LABEL, CONTRACT_STATUS_LABEL } from '@/domain/billing';
 import { formatDate, today } from '@/domain/dates';
 import { seasonLabel } from '@/domain/plan';
@@ -28,13 +29,16 @@ export default async function PartnerDevicesDoc({ params, searchParams }: { para
   // popis ugovora otvara se s ugovora (pravo najma), popis partnera s partnera
   const user = await pageAccess(contractId ? 'rentals' : 'partners');
   const { id } = await params;
-  const [sheet, company] = await Promise.all([clientSheet(user.companyId, id, { view, contractId }), getCompany(user.companyId)]);
+  // dokument po stranicama od SHEET_MAX uređaja (zbrojevi preko svih; izvoz sadrži sve)
+  const pg = readPage(sp, SHEET_MAX);
+  const [sheet, company] = await Promise.all([clientSheet(user.companyId, id, { view, contractId, skip: pg.skip }), getCompany(user.companyId)]);
   if (!sheet) notFound();
   const { partner, contract, rows, counts } = sheet;
   const now = today();
   const shownView = contract ? 'najam' : view;
   const rent = shownView !== 'prodano';
   const qs = queryWithout(sp).toString();
+  const pages = Math.ceil(sheet.total / SHEET_MAX);
   const back = contract ? { href: `/najam/ugovori/${contract.id}`, label: `Ugovor ${contract.number}` } : { href: `/partneri/${id}?tab=uredaji`, label: partner.name };
 
   return (
@@ -67,7 +71,7 @@ export default async function PartnerDevicesDoc({ params, searchParams }: { para
             />
           </div>
         )}
-        {sheet.truncated && <Notice tone="warn">Prikazano je prvih {integer(SHEET_MAX)} uređaja — za cijeli popis koristite izvoz u Excel.</Notice>}
+        {pages > 1 && <Pagination page={pg.page} pageSize={SHEET_MAX} total={sheet.total} params={sp} basePath={`/partneri/${id}/uredaji`} />}
       </div>
       <DocumentShell
         company={company}
@@ -75,7 +79,8 @@ export default async function PartnerDevicesDoc({ params, searchParams }: { para
         number={contract ? contract.number : null}
         meta={[
           ['Datum', formatDate(now)],
-          [shownView === 'prodano' ? 'Prodanih uređaja' : shownView === 'sve' ? 'Uređaja' : 'Uređaja u najmu', integer(rows.length)],
+          [shownView === 'prodano' ? 'Prodanih uređaja' : shownView === 'sve' ? 'Uređaja' : 'Uređaja u najmu', integer(sheet.total)],
+          ...(pages > 1 ? ([['Stranica', `${pg.page} / ${pages}`]] as Array<[string, string]>) : []),
           ...(rent && sheet.monthly > 0 ? ([['Mjesečno', `${amount(sheet.monthly)} EUR`]] as Array<[string, string]>) : []),
         ]}
         party={partner}
@@ -87,7 +92,7 @@ export default async function PartnerDevicesDoc({ params, searchParams }: { para
           head={['#', 'Serijski broj', 'Kategorija', 'Model', 'Kod klijenta od', 'Ugovor', 'Jamstvo do', shownView === 'prodano' ? 'Cijena' : shownView === 'sve' ? 'Mjesečno / cijena' : 'Mjesečno']}
           align={['right', 'left', 'left', 'left', 'left', 'left', 'left', 'right']}
           rows={rows.map((d, i) => [
-            i + 1,
+            pg.skip + i + 1,
             <span key="s" className="font-mono">
               {d.serial}
             </span>,

@@ -65,6 +65,7 @@ function providerOf(c: { eInvoiceProvider: string; eInvoiceApiKey: string | null
 async function ublOf(companyId: string, invoiceId: string) {
   const u = await invoiceUbl(companyId, invoiceId);
   if (!u?.xml) throw new Error('eRačun XML se ne može izraditi (račun nije izdan).');
+  if (u.issues.length) throw new Error(`eRačun nije potpun: ${u.issues.join(' ')}`);
   return u;
 }
 
@@ -249,7 +250,10 @@ export async function resetEInvoiceTrace(invoiceId: string, actor: Actor): Promi
     const saved = await setStatus(inv.id, { updatedAt: inv.updatedAt }, { ...rest, status: einvoiceRoute ? 'UNKNOWN' : undefined }, null, {
       eInvoiceStatusAt: null,
       eReportedAt: null,
-      ...(inv.zki ? {} : { fiscalStatus: einvoiceRoute ? 'FAILED' : 'NOT_REQUIRED', fiscalizedAt: null, fiscalError: einvoiceRoute ? 'Trag slanja eRačuna poništen — pošaljite ga ponovno ručno.' : null }),
+      // brojač pokušaja kreće ispočetka (CIS račun zadržava svoje pokušaje fiskalizacije)
+      ...(inv.zki
+        ? {}
+        : { fiscalStatus: einvoiceRoute ? 'FAILED' : 'NOT_REQUIRED', fiscalizedAt: null, fiscalAttempts: 0, fiscalError: einvoiceRoute ? 'Trag slanja eRačuna poništen — pošaljite ga ponovno ručno.' : null }),
     });
     if (!saved) return { ok: false, message: 'Račun se u međuvremenu promijenio (slanje ili prijava) — osvježite stranicu i pokušajte ponovno.' };
     await log(inv.companyId, inv.id, true, { request: 'reset', response: `Trag slanja poništen (bio: ${meta.id ?? '—'})` });

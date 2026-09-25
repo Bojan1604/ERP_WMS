@@ -40,6 +40,8 @@ test('KPD: oblik NN.NN.NN i zadane šifre po vrsti stavke', () => {
   assert.equal(defaultKpd({ lineType: 'SALE', kind: 'DEVICE', company }), '26.20.11');
   assert.equal(defaultKpd({ lineType: 'RENT', kind: 'DEVICE', modelKpd: '26.20.16', modelKpdRent: '77.33.02', company }), '77.33.02');
   assert.equal(defaultKpd({ lineType: 'RENT', kind: 'DEVICE', modelKpd: '26.20.16', company }), '77.33.01');
+  // najam bez KPD-a za najam (model i firma) ne uzima KPD robe s modela
+  assert.equal(defaultKpd({ lineType: 'RENT', kind: 'DEVICE', modelKpd: '26.20.16', company: {} }), null);
   assert.equal(defaultKpd({ lineType: 'SALE', kind: 'SERVICE', serviceKpd: null, company }), '62.90.10');
   assert.equal(defaultKpd({ lineType: 'SALE', kind: 'SERVICE', serviceKpd: '95.10.01', company }), '95.10.01');
   assert.equal(defaultKpd({ lineType: 'SERVICE', kind: 'MANUAL', company }), '62.90.10');

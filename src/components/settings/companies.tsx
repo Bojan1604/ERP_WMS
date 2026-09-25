@@ -138,16 +138,16 @@ export function CompaniesManager({ companies, users, currentId, meId }: { compan
             <tbody>
               {companies.map((c) => (
                 <tr key={c.id}>
-                  <td className="font-medium">
+                  <td data-label="" className="font-medium">
                     <Building2 className="mr-1.5 inline size-4 text-fg-3" />
                     {c.name}
                   </td>
-                  <td>{c.country}</td>
-                  <td>{c.currency}</td>
-                  <td className="num">{integer(c.items)}</td>
-                  <td className="num">{integer(c.invoices)}</td>
-                  <td className="num">{integer(c.partners)}</td>
-                  <td className="whitespace-nowrap text-right">
+                  <td data-label="Država">{c.country}</td>
+                  <td data-label="Valuta">{c.currency}</td>
+                  <td data-label="Uređaja" className="num">{integer(c.items)}</td>
+                  <td data-label="Računa" className="num">{integer(c.invoices)}</td>
+                  <td data-label="Partnera" className="num">{integer(c.partners)}</td>
+                  <td data-label="" className="whitespace-nowrap text-right">
                     {c.id === currentId ? (
                       <Badge tone="ok">trenutno odabrana</Badge>
                     ) : (
@@ -186,14 +186,14 @@ export function CompaniesManager({ companies, users, currentId, meId }: { compan
               <tbody>
                 {users.map((u) => (
                   <tr key={u.id} className={u.active ? '' : 'opacity-60'}>
-                    <td>
+                    <td data-label="">
                       <span className="font-medium">{u.name}</span>
                       {u.id === meId && <span className="ml-1 text-xs text-fg-3">(vi)</span>}
                       {u.isAdmin && <Badge tone="brand" className="ml-1.5">admin</Badge>}
                       <span className="block text-xs text-fg-3">{u.email}</span>
                     </td>
                     {companies.map((c) => (
-                      <td key={c.id} className="text-center">
+                      <td key={c.id} data-label={c.name} className="text-center">
                         <AccessToggle user={u} companyId={c.id} />
                       </td>
                     ))}

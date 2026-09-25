@@ -97,6 +97,7 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
     netTotal: num(inv.netTotal),
     paidTotal: num(inv.paidTotal),
     creditedTotal: num(inv.creditedTotal),
+    advanceAmount: num(inv.advanceAmount),
     openAmount: num(inv.openAmount),
     vatRate: num(inv.vatRate),
     payments: inv.payments.map((p) => ({ id: p.id, date: toISO(p.date), amount: num(p.amount), method: p.method, note: p.note, createdBy: p.createdBy })),
@@ -106,7 +107,8 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
     id: inv.id,
     number: inv.number,
     kind: inv.kind,
-    route: meta.route ?? (inv.zki ? 'CIS' : 'NONE'),
+    // račun izdan bez posrednika, a kasnije poslan / prijavljen ručno: put je eRačun (ne „bez fiskalizacije")
+    route: !inv.zki && (meta.id || meta.reportType) ? 'EINVOICE' : (meta.route ?? (inv.zki ? 'CIS' : 'NONE')),
     paymentMethod: inv.paymentMethod,
     status: inv.fiscalStatus,
     zki: inv.zki,
@@ -165,7 +167,12 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
       </div>
       <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0 overflow-x-auto">
-          <InvoiceDocument inv={toDocData(inv)} company={company} party={inv.partner} />
+          {/* postavke firme u trenutku izdavanja (preslika na računu), nacrt i stariji računi — trenutne */}
+          <InvoiceDocument
+            inv={toDocData(inv)}
+            company={{ ...company, vatRegistered: inv.sellerVatRegistered ?? company.vatRegistered, vatOnPayment: inv.vatOnPayment ?? company.vatOnPayment }}
+            party={inv.partner}
+          />
         </div>
         <aside className="no-print space-y-4">
           {receivable && (
@@ -222,6 +229,31 @@ function LinksCard({ inv }: { inv: InvoiceDetail }) {
         <Link prefetch={false} href={`/prodaja/racuni/${inv.refInvoice.id}`} className="link">
           {KIND_SHORT[inv.refInvoice.kind]} {inv.refInvoice.number}
         </Link>
+      </li>,
+    );
+  for (const u of inv.advanceUses)
+    items.push(
+      <li key={`adv-${u.advanceId}`} className="flex justify-between gap-2">
+        <span>
+          Uračunat predujam:{' '}
+          <Link prefetch={false} href={`/prodaja/racuni/${u.advance.id}`} className="link">
+            {u.advance.number}
+          </Link>
+        </span>
+        <span className="tnum text-fg-3">{eur(num(u.amount))}</span>
+      </li>,
+    );
+  for (const u of inv.advanceUsedBy)
+    items.push(
+      <li key={`used-${u.invoice.id}`} className="flex justify-between gap-2">
+        <span>
+          Uračunat u:{' '}
+          <Link prefetch={false} href={`/prodaja/racuni/${u.invoice.id}`} className="link">
+            {KIND_SHORT.INVOICE} {u.invoice.number}
+          </Link>
+          {u.invoice.stornoed && <span className="text-fg-3"> (storniran)</span>}
+        </span>
+        <span className="tnum text-fg-3">{eur(num(u.amount))}</span>
       </li>,
     );
   for (const c of inv.corrections)
@@ -301,7 +333,7 @@ function editorValue(inv: InvoiceDetail, showCost: boolean): InvoiceEditorValue 
     taxExemptReason: inv.taxExemptReason ?? '',
     discountPct: num(inv.discountPct),
     discountAmount: num(inv.discountAmount),
-    advanceAmount: num(inv.advanceAmount),
+    advances: inv.advanceUses.map((u) => ({ advanceId: u.advanceId, amount: num(u.amount) })),
     charges: (Array.isArray(inv.charges) ? (inv.charges as unknown as ChargeInput[]) : []).map((c) => ({
       kind: c.kind,
       label: c.label ?? '',

@@ -5,7 +5,7 @@ import { optInRange } from '@/lib/zod-checks';
 import { action } from '@/server/action';
 import { db, transaction } from '@/server/db';
 import { zBool, zDate, zId, zMoney, zOptDate, zOptId, zOptInt, zOptText } from '@/server/zod';
-import { convertQuote, convertQuoteToContract, deleteQuote, saveQuote, setQuoteStatus, QUOTE_KIND_LABEL } from '@/server/services/quotes';
+import { convertQuote, convertQuoteToContract, deleteQuote, saveQuote, setQuoteStatus, QUOTE_KIND_LABEL, quoteAdj } from '@/server/services/quotes';
 import { getCompany } from '@/server/queries/lookups';
 import { num, r2 } from '@/domain/money';
 import { priceFromMargin, suggestedRent } from '@/domain/pricing';
@@ -42,7 +42,7 @@ export const saveQuoteAction = action({ module: 'sales', level: 'edit' }, zQuote
   transaction(async (tx) => {
     const q = await saveQuote(tx, user, id, input);
     const label = QUOTE_KIND_LABEL[q.kind];
-    return { message: id ? `${label} je spremljen(a).` : `${label} ${q.number} je izrađen(a).`, redirect: `/prodaja/ponude/${q.id}`, data: { id: q.id } };
+    return { message: id ? `${label} je ${quoteAdj(q.kind, 'spremljen')}.` : `${label} ${q.number} je ${quoteAdj(q.kind, 'izrađen')}.`, redirect: `/prodaja/ponude/${q.id}`, data: { id: q.id } };
   }),
 );
 

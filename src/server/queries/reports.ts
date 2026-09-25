@@ -72,6 +72,12 @@ export async function runReport(def: ReportDef, companyId: string, f: ReportFilt
   if (def.requiresCost && !ctx.canSeeCost) return { columns: [{ key: 'x', label: '' }], rows: [], totals: null, note: 'Za ovaj izvještaj potrebno je pravo na nabavne cijene i marže.' };
   const res = await def.run(companyId, f, ctx);
   const columns = ctx.canSeeCost ? res.columns : res.columns.filter((c) => !c.cost);
+  // zbroj uvijek preko svih redaka (ne samo prikazane stranice)
   const totals = res.totals === undefined ? autoTotals(columns, res.rows) : res.totals;
-  return { ...res, columns, totals, chart: !ctx.canSeeCost && res.chartCost ? undefined : res.chart };
+  const chart = !ctx.canSeeCost && res.chartCost ? undefined : res.chart;
+  // ekran dobiva jednu stranicu (izvještaj ju je možda već odrezao u bazi — tada javlja rowCount); izvoz sve
+  if (ctx.page && res.rowCount === undefined) {
+    return { ...res, columns, totals, chart, rows: res.rows.slice(ctx.page.skip, ctx.page.skip + ctx.page.take), rowCount: res.rows.length };
+  }
+  return { ...res, columns, totals, chart };
 }

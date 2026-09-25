@@ -311,7 +311,7 @@ export async function getSupplierInvoice(companyId: string, id: string) {
   });
   // trošak robe knjižen primkom (povezana primka ili primke povezane narudžbenice) i zadana odluka „račun za robu"
   const ctx = await goodsInvoiceContext(db, companyId, { id: si.id, orderId: si.orderId, receiptId: si.receiptId, netAmount: num(si.netAmount) });
-  return { ...si, attachments, receiptExpenses: ctx.receiptExpenses, defaultGoods: ctx.defaultGoods };
+  return { ...si, attachments, receiptExpenses: ctx.receiptExpenses, defaultGoods: ctx.defaultGoods, goodsRule: { refs: ctx.refs, others: ctx.otherGoodsInvoices } };
 }
 
 /**

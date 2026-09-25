@@ -14,6 +14,7 @@ import {
   testFiscalConnectionAction,
   uploadFiscalCertAction,
 } from '@/app/(app)/postavke/fiskalizacija/actions';
+import { FileInput } from '@/components/ui/file-input';
 
 export interface FiscalSettingsValue {
   fiscalEnabled: boolean;
@@ -133,7 +134,7 @@ export function CertCard({ cert, warnings, canEdit }: { cert: CertSummary | null
           {({ pending, error }) => (
             <div className="space-y-2">
               <Field label={cert ? 'Zamijeni certifikat (.p12 / .pfx)' : 'Datoteka certifikata (.p12 / .pfx)'}>
-                <input type="file" name="file" accept=".p12,.pfx,application/x-pkcs12" required className="block w-full text-sm" />
+                <FileInput name="file" accept=".p12,.pfx,application/x-pkcs12" required buttonLabel="Odaberi certifikat" />
               </Field>
               <Field label="Lozinka certifikata" hint="Sprema se šifrirana (AES-256-GCM) i nikad se ne prikazuje.">
                 <Input type="password" name="password" required autoComplete="off" />

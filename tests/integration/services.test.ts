@@ -66,7 +66,8 @@ test('izdavanje: redni brojevi po godini, datum mora pratiti broj', async () => 
   await assert.rejects(mk('2026-02-03'), /redni broj mora pratiti datum/);
   // neuspjeli pokušaj ne troši broj (transakcija se poništila)
   assert.equal((await mk('2026-02-05')).number, '3/T1/1');
-  assert.equal((await mk('2027-01-02')).number, '1/T1/1');
+  // nova godina — brojevi kreću od 1 (prošla godina: datum u budućnosti se ne izdaje)
+  assert.equal((await mk('2025-12-30')).number, '1/T1/1');
 });
 
 test('istovremeno izdavanje nikad ne daje isti broj', async () => {
@@ -248,18 +249,6 @@ test('najam: pauza naplate jednog uređaja u mjesecu; fakturirano se ne može pa
 
 test('gotovina s odbijenim predujmom naplaćuje otvoreni iznos; predujam karticom je plaćen pri izdavanju', async () => {
   const s = await setup();
-  const inv = await transaction(async (tx) => {
-    const d = await createDraft(tx, s.actor, {
-      type: 'SERVICE', partnerId: s.partner.id, date: today(), vatRate: 25, advanceAmount: 50, paymentMethod: 'CASH',
-      lines: [{ kind: 'MANUAL', description: 'Usluga', qty: 1, unitPrice: 100 }],
-    });
-    await issueInvoice(tx, s.actor, d.id);
-    return tx.invoice.findUniqueOrThrow({ where: { id: d.id } });
-  });
-  assert.equal(inv.status, 'ISSUED');
-  assert.equal(inv.paidTotal.toNumber(), 75); // 125 − 50 predujma
-  assert.equal(inv.openAmount.toNumber(), 0);
-
   const adv = await transaction(async (tx) => {
     const d = await createDraft(tx, s.actor, {
       type: 'SERVICE', kind: 'ADVANCE', partnerId: s.partner.id, date: today(), vatRate: 25, paymentMethod: 'CARD',
@@ -270,6 +259,19 @@ test('gotovina s odbijenim predujmom naplaćuje otvoreni iznos; predujam kartico
   });
   assert.equal(adv.paidTotal.toNumber(), 50);
   assert.equal(adv.openAmount.toNumber(), 0);
+
+  const inv = await transaction(async (tx) => {
+    const d = await createDraft(tx, s.actor, {
+      type: 'SERVICE', partnerId: s.partner.id, date: today(), vatRate: 25, advances: [{ advanceId: adv.id, amount: 50 }], paymentMethod: 'CASH',
+      lines: [{ kind: 'MANUAL', description: 'Usluga', qty: 1, unitPrice: 100 }],
+    });
+    await issueInvoice(tx, s.actor, d.id);
+    return tx.invoice.findUniqueOrThrow({ where: { id: d.id } });
+  });
+  assert.equal(inv.status, 'ISSUED');
+  assert.equal(inv.advanceAmount.toNumber(), 50);
+  assert.equal(inv.paidTotal.toNumber(), 75); // 125 − 50 predujma
+  assert.equal(inv.openAmount.toNumber(), 0);
 });
 
 test('stavka najma: ručno promijenjena cijena se čuva, mjesečna se preračunava; PDV samo uz kategoriju S', async () => {
@@ -322,7 +324,9 @@ test('pauza ugovora: rate dospjele u pauzi se ni nakon nastavka ne traže', asyn
   const { contract } = await rentContract(s, 'UG-PZ', 4, [s.items[0].id]);
   await transaction((tx) => issueInstallments(tx, s.actor, [{ contractId: contract.id, period: monthAgo(4) }]));
   await transaction((tx) => setContractStatus(tx, s.actor, contract.id, 'PAUSED'));
-  assert.equal((await periodsOf(s.companyId)).length, 0, 'pauzirani ugovor nema rata');
+  // pauzirani ugovor traži samo neizdane rate od prije pauze (QA t2 #10)
+  const beforePause = [monthAgo(3), monthAgo(2), monthAgo(1), ...(today().endsWith('-01') ? [] : [monthAgo(0)])];
+  assert.deepEqual((await periodsOf(s.companyId)).map(([p]) => p), beforePause, 'pauzirani ugovor: rate prije pauze');
   // pauza je počela prije dva mjeseca (usred mjeseca)
   await db.contract.update({ where: { id: contract.id }, data: { pausedSince: fromISO(`${monthAgo(2)}-10`) } });
   await transaction((tx) => setContractStatus(tx, s.actor, contract.id, 'ACTIVE'));

@@ -3,10 +3,8 @@ import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { pageAccess } from '@/server/auth';
 import { getCompany, modelLabel } from '@/server/queries/lookups';
-import { getServiceOrder } from '@/server/queries/service';
-import { toISO } from '@/domain/dates';
+import { deviceWarrantyEnd, getServiceOrder } from '@/server/queries/service';
 import { num } from '@/domain/money';
-import { warrantyEnd } from '@/domain/pricing';
 import { DocTable, DocumentShell, docDate } from '@/components/doc/document';
 import { PrintButton } from '@/components/ui/print-button';
 import { SERVICE_STATUS } from '@/components/service/labels';
@@ -32,7 +30,7 @@ export default async function ServicePrintPage({ params, searchParams }: { param
   const [o, company] = await Promise.all([getServiceOrder(user.companyId, id), getCompany(user.companyId)]);
   if (!o) notFound();
   const item = o.item;
-  const wEnd = item ? warrantyEnd(toISO(item.warrantyStart ?? item.issueDate), item.warrantyMonths) : null;
+  const wEnd = item ? deviceWarrantyEnd(item) : null;
 
   const rows = [
     [item ? modelLabel(item.model) : '—', o.serial ?? '—', o.underWarranty ? `da${wEnd ? ` (do ${docDate(wEnd)})` : ''}` : 'ne', delivery && o.replacement ? 'zamijenjen' : ''],
@@ -71,8 +69,7 @@ export default async function ServicePrintPage({ params, searchParams }: { param
         <Section title="Opis kvara">{o.issue}</Section>
         {delivery && (
           <>
-            <Section title="Dijagnoza">{o.diagnosis}</Section>
-            <Section title="Poduzeto">{o.action}</Section>
+            {/* dijagnoza i poduzeta akcija su interne (kao na portalu) — klijent vidi rješenje i poruku */}
             <Section title="Rješenje">{o.solution}</Section>
           </>
         )}

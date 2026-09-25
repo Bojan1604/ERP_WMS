@@ -5,12 +5,11 @@ import { getCompany, getLookups, getPartnerOptions, modelLabel } from './lookups
 import { addDays, fromISO, today } from '@/domain/dates';
 import { num } from '@/domain/money';
 import { grossMargin, suggestedRent, suggestedSalePrice } from '@/domain/pricing';
-import { parseMulti } from '@/lib/list-params';
+import { parseDateRange, parseMulti } from '@/lib/list-params';
 import { EINVOICE_FILTER, einvoiceFilterValues, type EInvoiceFilter } from '@/domain/sales-lines';
 
 type Params = Record<string, string | string[] | undefined>;
 const str = (v: string | string[] | undefined) => (typeof v === 'string' ? v.trim() : '');
-const isDate = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
 
 // ================================================================ računi — filtri
 
@@ -35,6 +34,8 @@ const KINDS = ['INVOICE', 'ADVANCE', 'STORNO', 'CREDIT_NOTE', 'STORNOED'] as con
 const PAYS = ['open', 'overdue', 'notdue', 'partial', 'paid', 'draft'] as const;
 
 export function readInvoiceFilters(sp: Params): InvoiceFilters {
+  // neispravan datum (npr. 2026-13-45) se zanemaruje, obrnut raspon se okreće — kao na ostalim popisima
+  const range = parseDateRange(sp);
   return {
     q: str(sp.q),
     year: str(sp.godina) || today().slice(0, 4),
@@ -43,8 +44,8 @@ export function readInvoiceFilters(sp: Params): InvoiceFilters {
     kind: parseMulti(sp, 'dokument', KINDS),
     pay: parseMulti(sp, 'naplata', PAYS),
     einvoice: parseMulti(sp, 'eracun', EINVOICE_FILTER),
-    from: str(sp.od),
-    to: str(sp.do),
+    from: range.from ?? '',
+    to: range.to ?? '',
     excluded: str(sp.iskljuceni) === '1',
     sort: str(sp.sort),
   };
@@ -99,8 +100,8 @@ export function invoiceWhere(companyId: string, f: InvoiceFilters, overdueDays: 
     const { values, none } = einvoiceFilterValues(f.einvoice);
     and.push({ OR: [...(values.length ? [{ eInvoiceStatus: { in: values } }] : []), ...(none ? [{ status: 'ISSUED' as const, eInvoiceStatus: null }] : [])] });
   }
-  if (isDate(f.from)) and.push({ date: { gte: fromISO(f.from) } });
-  if (isDate(f.to)) and.push({ date: { lte: fromISO(f.to) } });
+  if (f.from) and.push({ date: { gte: fromISO(f.from) } });
+  if (f.to) and.push({ date: { lte: fromISO(f.to) } });
   if (f.q) {
     and.push({
       OR: [
@@ -174,6 +175,8 @@ export const invoiceListSelect = {
   netTotal: true,
   grandTotal: true,
   paidTotal: true,
+  creditedTotal: true,
+  advanceAmount: true,
   openAmount: true,
   paidDate: true,
   stornoed: true,
@@ -312,6 +315,8 @@ export async function getInvoice(companyId: string, id: string) {
       corrections: { where: { status: 'ISSUED' }, orderBy: { date: 'asc' }, select: { id: true, number: true, kind: true, date: true, grandTotal: true, eInvoiceStatus: true } },
       contract: { select: { id: true, number: true } },
       quote: { select: { id: true, number: true } },
+      advanceUses: { orderBy: { createdAt: 'asc' }, select: { advanceId: true, amount: true, advance: { select: { id: true, number: true, date: true } } } },
+      advanceUsedBy: { where: { invoice: { status: 'ISSUED' } }, orderBy: { createdAt: 'asc' }, select: { amount: true, invoice: { select: { id: true, number: true, date: true, stornoed: true } } } },
     },
   });
 }
@@ -446,14 +451,21 @@ export async function searchDevices(companyId: string, s: DeviceSearch): Promise
       ...(s.warehouseId ? { warehouseId: s.warehouseId } : {}),
       ...(s.supplierId ? { supplierId: s.supplierId } : {}),
       ...(s.statusId ? { statusId: s.statusId } : {}),
+      // „Epson TM-m30III": svaka riječ mora se naći u serijskom, marki, nazivu ili šifri modela (marka + model zajedno)
       ...(q
         ? {
-            OR: [
-              { serial: { contains: q, mode: 'insensitive' } },
-              { model: { name: { contains: q, mode: 'insensitive' } } },
-              { model: { brand: { contains: q, mode: 'insensitive' } } },
-              { model: { code: { contains: q, mode: 'insensitive' } } },
-            ],
+            AND: q
+              .split(/\s+/)
+              .filter(Boolean)
+              .slice(0, 6)
+              .map((w) => ({
+                OR: [
+                  { serial: { contains: w, mode: 'insensitive' as const } },
+                  { model: { name: { contains: w, mode: 'insensitive' as const } } },
+                  { model: { brand: { contains: w, mode: 'insensitive' as const } } },
+                  { model: { code: { contains: w, mode: 'insensitive' as const } } },
+                ],
+              })),
           }
         : {}),
     },
@@ -529,6 +541,61 @@ export async function searchDevices(companyId: string, s: DeviceSearch): Promise
       kpdRent: i.model.kpdRent,
     };
   });
+}
+
+/**
+ * Cijene stavki za kupca (promjena kupca i „Primijeni cjenik kupca"): dogovorena cijena
+ * kupca po modelu, inače cijena modela / izračun iz marže (prodaja) ili najam uređaja /
+ * modela / % nabavne (mjesečni najam; uređaj na ugovoru — cijena s ugovora).
+ */
+export async function linePrices(
+  companyId: string,
+  partnerId: string,
+  lines: Array<{ key: string; itemId?: string | null; modelId?: string | null; lineType?: 'SALE' | 'RENT' | null }>,
+): Promise<Record<string, { price: number; agreed: boolean }>> {
+  const itemIds = [...new Set(lines.map((l) => l.itemId).filter((x): x is string => !!x))];
+  const [company, items] = await Promise.all([
+    getCompany(companyId),
+    itemIds.length
+      ? db.item.findMany({
+          where: { companyId, id: { in: itemIds } },
+          select: { id: true, modelId: true, cost: true, marginPct: true, rentPrice: true, contractItem: { select: { monthly: true } } },
+        })
+      : [],
+  ]);
+  const itemById = new Map(items.map((i) => [i.id, i]));
+  const modelOf = (l: (typeof lines)[number]) => l.modelId ?? (l.itemId ? itemById.get(l.itemId)?.modelId : null) ?? null;
+  const modelIds = [...new Set(lines.map(modelOf).filter((x): x is string => !!x))];
+  const [models, agreements] = modelIds.length
+    ? await Promise.all([
+        db.deviceModel.findMany({ where: { companyId, id: { in: modelIds } }, select: { id: true, salePrice: true, rentPrice: true, marginPct: true } }),
+        db.priceAgreement.findMany({ where: { companyId, partnerId, modelId: { in: modelIds } }, select: { modelId: true, salePrice: true, rentPrice: true } }),
+      ])
+    : [[], []];
+  const modelById = new Map(models.map((m) => [m.id, m]));
+  const agreedBy = new Map(agreements.map((a) => [a.modelId, a]));
+  const n = (v: Prisma.Decimal | null | undefined) => (v == null ? null : num(v));
+  const out: Record<string, { price: number; agreed: boolean }> = {};
+  for (const l of lines) {
+    const modelId = modelOf(l);
+    const m = modelId ? modelById.get(modelId) : undefined;
+    if (!m) continue;
+    const item = l.itemId ? itemById.get(l.itemId) : undefined;
+    const a = agreedBy.get(m.id);
+    const cost = item ? num(item.cost) : 0;
+    // stavka modela bez dogovorene i bez cijene modela: nabavna nije poznata — cijena se ne predlaže
+    if (!item && !a && !(l.lineType === 'RENT' ? n(m.rentPrice) : n(m.salePrice))) continue;
+    if (l.lineType === 'RENT') {
+      const r = item?.contractItem
+        ? { price: num(item.contractItem.monthly), source: 'contract' }
+        : suggestedRent({ agreed: n(a?.rentPrice), itemRent: n(item?.rentPrice), modelRent: n(m.rentPrice), cost, fallbackPct: num(company.rentFallbackPct) });
+      out[l.key] = { price: r.price, agreed: r.source === 'agreed' };
+    } else {
+      const p = suggestedSalePrice({ agreed: n(a?.salePrice), modelPrice: n(m.salePrice), cost, itemMargin: n(item?.marginPct), modelMargin: n(m.marginPct), companyMargin: num(company.defaultMarginPct) });
+      out[l.key] = { price: p.price, agreed: p.source === 'agreed' };
+    }
+  }
+  return out;
 }
 
 /** Bez prava „costs" nabavna cijena i marža ne idu u preglednik. */

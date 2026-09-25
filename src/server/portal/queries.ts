@@ -4,6 +4,7 @@ import { db } from '../db';
 import type { PortalScope } from './session';
 import { attachmentMeta } from '../services/attachments';
 import { deviceWarrantyEnd } from '../queries/service';
+import { escapeLike } from '@/lib/like';
 import { OPEN_SERVICE_STATUSES } from '@/components/service/labels';
 import { dateRangeWhere, paramStr, parseDateRange, type SearchParams } from '@/lib/list-params';
 import { isPortalWarranty, type PortalWarranty } from '@/domain/portal';
@@ -61,7 +62,7 @@ export function parsePortalDeviceFilters(sp: SearchParams | URLSearchParams): Po
 async function deviceWhere(s: PortalScope, f: PortalDeviceFilters): Promise<Prisma.ItemWhereInput> {
   const and: Prisma.ItemWhereInput[] = [baseDeviceWhere(s)];
   if (f.q) {
-    const ci = { contains: f.q, mode: 'insensitive' as const };
+    const ci = { contains: escapeLike(f.q), mode: 'insensitive' as const };
     and.push({ OR: [{ serial: ci }, { model: { OR: [{ name: ci }, { brand: ci }] } }] });
   }
   if (f.model) and.push({ modelId: f.model });

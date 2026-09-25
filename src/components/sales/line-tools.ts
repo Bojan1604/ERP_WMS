@@ -38,7 +38,8 @@ export function deviceToLine(d: DeviceOpt, opts: { lineType: LineType; months: n
     itemId: d.id,
     modelId: d.modelId,
     description: rent ? `Najam ${d.model}` : d.model,
-    unit: rent ? 'mj' : 'kom',
+    // količina je broj uređaja — jedinica „kom" i za najam (cijena = mjesečno × mjeseci naplate)
+    unit: 'kom',
     kpd: autoKpd({ kind: 'DEVICE', modelId: d.modelId }, opts.lineType, opts.company, opts.models),
     qty: 1,
     unitPrice: rent ? r2(monthly * opts.months) : d.price,
@@ -69,7 +70,7 @@ export function switchLineType(l: EditorLine, to: LineType, ctx: { docType: stri
   if (to === 'RENT') {
     const monthly = l.suggestRent ?? l.unitPrice;
     const withPrefix = l.kind === 'DEVICE' || l.kind === 'MODEL' ? (/^najam\b/i.test(l.description) ? l.description : `Najam ${l.description}`) : l.description;
-    return { ...l, lineType, kpd, monthly, months: ctx.months, unitPrice: r2(monthly * ctx.months), unit: l.unit === 'kom' ? 'mj' : l.unit, warrantyMonths: null, description: withPrefix, agreedPrice: false };
+    return { ...l, lineType, kpd, monthly, months: ctx.months, unitPrice: r2(monthly * ctx.months), unit: l.unit, warrantyMonths: null, description: withPrefix, agreedPrice: false };
   }
   const price = l.suggestSale ?? (l.monthly ?? l.unitPrice);
   return {

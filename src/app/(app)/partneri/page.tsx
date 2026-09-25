@@ -20,6 +20,7 @@ export default async function PartnersPage({ searchParams }: { searchParams: Pro
   const page = readPage(params, 50);
   // promet, računi i otvoreno pripadaju prodaji
   const canSales = can(user.perms, 'sales');
+  const canRentals = can(user.perms, 'rentals');
   const [{ rows, total }, totals] = await Promise.all([
     listPartners(user.companyId, params, page),
     canSales ? partnerTotals(user.companyId, params) : null,
@@ -65,7 +66,7 @@ export default async function PartnersPage({ searchParams }: { searchParams: Pro
                 <th>E-adresa / telefon</th>
                 <th>Uloga</th>
                 <th className="num">Uređaja</th>
-                <th className="num">Ugovora</th>
+                {canRentals && <th className="num">Ugovora</th>}
                 {canSales && (
                   <>
                     <th className="num">Računa</th>
@@ -112,7 +113,7 @@ export default async function PartnersPage({ searchParams }: { searchParams: Pro
                     {p.isSupplier && <Badge tone="info">dobavljač</Badge>}
                   </td>
                   <td className="num">{p.devices ? integer(p.devices) : <span className="text-fg-4">—</span>}</td>
-                  <td className="num">{p.contracts ? integer(p.contracts) : <span className="text-fg-4">—</span>}</td>
+                  {canRentals && <td className="num">{p.contracts ? integer(p.contracts) : <span className="text-fg-4">—</span>}</td>}
                   {canSales && (
                     <>
                       <td className="num">{p.invoices ? integer(p.invoices) : <span className="text-fg-4">—</span>}</td>

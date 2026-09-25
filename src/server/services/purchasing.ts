@@ -5,7 +5,7 @@ import { DomainError, assert } from '../errors';
 import { nextDocNumber } from '../numbering';
 import { audit } from '../audit';
 import { statusFor, type Actor } from './items';
-import { fromISO, today } from '@/domain/dates';
+import { formatDate, fromISO, today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import { supplierVat } from '@/domain/tax';
 import { receiptBooksExpense } from '@/domain/purchase-links';
@@ -291,7 +291,7 @@ export async function receiveGoods(tx: Tx, actor: Actor, input: ReceiveInput) {
   // (narudžbenica je zaključana — istovremeno povezivanje računa čeka, pa se trošak ne knjiži dvaput)
   if (order) await lockPurchaseDocs(tx, actor.companyId, { orderId: order.id });
   const invoiceOwnExpenses = order
-    ? await tx.expense.count({ where: { companyId: actor.companyId, source: 'SUPPLIER_INVOICE', supplierInvoice: { orderId: order.id } } })
+    ? await tx.expense.count({ where: { companyId: actor.companyId, source: 'SUPPLIER_INVOICE', supplierInvoice: { orderId: order.id, goodsInvoice: true } } })
     : 0;
   const booked = receiptBooksExpense({ bookExpense: input.bookExpense !== false, total, invoiceOwnExpenses });
   if (booked) {
@@ -384,7 +384,7 @@ export async function cancelReceipt(tx: Tx, actor: Actor, id: string, reason?: s
 
   // popis obrisanih serijskih brojeva ostaje na primci radi traga
   const trace = items.map((i) => `${[i.model.brand, i.model.name].filter(Boolean).join(' ')}: ${i.serial}`).join('\n');
-  const note = [receipt.note, `Stornirano ${today()} (${actor.name})${reason ? ` — ${reason}` : ''}. Obrisano uređaja: ${items.length}.`, trace]
+  const note = [receipt.note, `Stornirano ${formatDate(today())} (${actor.name})${reason ? ` — ${reason}` : ''}. Obrisano uređaja: ${items.length}.`, trace]
     .filter(Boolean)
     .join('\n');
   await tx.goodsReceipt.update({ where: { id }, data: { status: 'CANCELLED', note } });

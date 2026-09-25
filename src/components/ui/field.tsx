@@ -6,34 +6,8 @@ export const controlClass =
   'transition-[border-color,box-shadow] focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20 ' +
   'disabled:bg-muted disabled:text-fg-3';
 
-export function Field({
-  label,
-  children,
-  hint,
-  error,
-  required,
-  className,
-}: {
-  label?: ReactNode;
-  children: ReactNode;
-  hint?: ReactNode;
-  error?: string | null;
-  required?: boolean;
-  className?: string;
-}) {
-  return (
-    <label className={cn('block min-w-0', className)}>
-      {label && (
-        <span className="mb-1 block text-sm font-medium text-fg-2">
-          {label}
-          {required && <span className="text-bad-strong"> *</span>}
-        </span>
-      )}
-      {children}
-      {error ? <span className="mt-1 block text-xs text-bad-strong">{error}</span> : hint ? <span className="mt-1 block text-xs text-fg-3">{hint}</span> : null}
-    </label>
-  );
-}
+// oznaka polja je klijentska (poništava aktivaciju oznake za gumbe složenih kontrola — vidi field-label.tsx)
+export { Field } from './field-label';
 
 export function Input({ className, ...p }: InputHTMLAttributes<HTMLInputElement>) {
   return <input {...p} className={cn(controlClass, 'h-8', p.type === 'number' && 'text-right', className)} />;

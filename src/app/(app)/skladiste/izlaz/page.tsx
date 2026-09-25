@@ -3,6 +3,7 @@ import { getLookups } from '@/server/queries/lookups';
 import { outCounts } from '@/server/queries/warehouse';
 import { can, canSeeCost } from '@/domain/permissions';
 import { PageHeader } from '@/components/ui/misc';
+import { readPage } from '@/components/ui/pagination';
 import { Tabs } from '@/components/ui/tabs';
 import { ManualReturnSection, ReservedSection, ReturningSection, ReturnSection } from '@/components/warehouse/out-sections';
 
@@ -36,7 +37,7 @@ export default async function OutPage({ searchParams }: { searchParams: Promise<
       ) : tab === 'rucni' ? (
         <ManualReturnSection companyId={c} canOps={canOps} q={q} />
       ) : (
-        <ReservedSection companyId={c} canOps={canOps} canSell={can(user.perms, 'sales', 'edit')} canRent={can(user.perms, 'rentals', 'edit')} canSeeCost={canSeeCost(user.perms)} />
+        <ReservedSection companyId={c} canOps={canOps} canSell={can(user.perms, 'sales', 'edit')} canRent={can(user.perms, 'rentals', 'edit')} canSeeCost={canSeeCost(user.perms)} page={readPage(sp, 100)} params={sp} />
       )}
     </>
   );

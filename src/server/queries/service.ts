@@ -5,11 +5,12 @@ import { addDays, fromISO, toISO, today } from '@/domain/dates';
 import { warrantyEnd } from '@/domain/pricing';
 import { num } from '@/domain/money';
 import { parseMulti } from '@/lib/list-params';
+import { escapeLike } from '@/lib/like';
 import { LONG_SERVICE_DAYS, OPEN_SERVICE_STATUSES, SERVICE_STATUS } from '@/components/service/labels';
 
 type Params = Record<string, string | string[] | undefined>;
 const str = (v: string | string[] | undefined) => (typeof v === 'string' && v.trim() ? v.trim() : null);
-const ci = (q: string) => ({ contains: q, mode: 'insensitive' as const });
+const ci = (q: string) => ({ contains: escapeLike(q), mode: 'insensitive' as const });
 const OPEN = OPEN_SERVICE_STATUSES as ServiceStatus[];
 
 /**

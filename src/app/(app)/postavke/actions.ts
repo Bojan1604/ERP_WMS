@@ -32,7 +32,7 @@ const schema = z.object({
   quoteValidDays: zInt.refine((v) => v >= 0 && v <= 365, 'Valjanost ponude mora biti 0–365 dana'),
   defaultMarginPct: zMoney,
   defaultWarrantyMonths: zInt.refine((v) => v >= 0 && v <= 240, 'Neispravno jamstvo'),
-  rentFallbackPct: zMoney,
+  rentFallbackPct: zMoney.refine((v) => v >= 0 && v <= 100, 'Mora biti između 0 i 100 %'),
   invoicePremises: zReq('Oznaka poslovnog prostora'),
   invoiceDevice: zReq('Oznaka naplatnog uređaja'),
   invoiceSeparator: zText.pipe(z.string().min(1, 'Razdjelnik je obavezan').max(3)),

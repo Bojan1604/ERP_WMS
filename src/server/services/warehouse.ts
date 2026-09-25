@@ -97,14 +97,23 @@ export async function requestStatusChange(tx: Tx, actor: Actor, input: StatusCha
   });
 }
 
+/** Je li zahtjev podnio ovaj korisnik (id iz zahtjeva; stariji zahtjevi bez id-a — po imenu). */
+export function isOwnRequest(r: { payload: unknown; requestedBy: string }, actor: { id: string; name: string }) {
+  const requesterId = (r.payload as { requesterId?: unknown } | null)?.requesterId;
+  return typeof requesterId === 'string' ? requesterId === actor.id : r.requestedBy === actor.name;
+}
+
 /**
  * Odobravanje ili odbijanje zahtjeva za promjenu statusa. Odbiti se može i
  * zahtjev za zaprimanje; odobrava se zaprimanjem (`approveReceiveRequest`).
+ * Načelo „četiri oka": nitko (ni administrator) ne odobrava vlastiti zahtjev — odobrava ga
+ * drugi korisnik s pravom; vlastiti zahtjev se smije odbiti (povlačenje).
  */
 export async function resolveApproval(tx: Tx, actor: Actor, id: string, approve: boolean, note: string | null) {
   const r = await tx.approvalRequest.findFirst({ where: { id, companyId: actor.companyId } });
   assert(r, 'Zahtjev ne postoji.');
   assert(r.status === 'PENDING', 'Zahtjev je već riješen.');
+  assert(!approve || !isOwnRequest(r, actor), 'Vlastiti zahtjev ne možete odobriti — odobrava ga drugi korisnik s pravom na skladište.');
   if (!approve) assert(note, 'Upišite razlog odbijanja.');
   assert(!approve || r.kind === 'STATUS_CHANGE', 'Zahtjev za zaprimanje odobrava se zaprimanjem robe („Provjeri i zaprimi").');
   let applied = 0;

@@ -105,7 +105,7 @@ export async function resolveDoc(user: Pick<SessionUser, 'companyId' | 'perms'>,
         title: `Servisni nalog ${o.number}`,
         template: 'service',
         vars: { ...base, broj: o.number, kupac: o.partner?.name ?? '', status: SERVICE_STATUS[o.status].label, datum: d(o.reportedAt) },
-        // zatvoreni nalog ide kao nalog za dostavu (dijagnoza, rješenje, zamjena)
+        // zatvoreni nalog ide kao nalog za dostavu (rješenje, zamjena; dijagnoza je interna)
         pdf: { kind: isOpenService(o.status) ? 'service' : 'service-delivery', id: o.id },
       };
     }

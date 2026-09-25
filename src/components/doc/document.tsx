@@ -15,6 +15,8 @@ export interface DocCompany {
   web?: string | null;
   logo?: string | null;
   invoiceFooter?: string | null;
+  /** Pravni podaci (sud, MBS, temeljni kapital) u podnožju svih dokumenata. */
+  legalFooter?: string | null;
 }
 
 export interface DocParty {
@@ -120,6 +122,7 @@ export function DocumentShell({
       <footer className="mt-8 border-t border-black/15 pt-2 text-[10px] text-black/55">
         {footer}
         {company.invoiceFooter && <p className="mt-1">{company.invoiceFooter}</p>}
+        {company.legalFooter?.trim() && <p className="mt-1 text-[9.5px]">{company.legalFooter}</p>}
       </footer>
     </article>
   );

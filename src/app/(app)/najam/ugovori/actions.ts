@@ -12,6 +12,7 @@ import { deleteContract, unskipInstallment } from '@/server/services/contract-ad
 import { deviceCandidates, hideCostSource, type Candidate } from '@/server/queries/rentals';
 import { canSeeCost } from '@/domain/permissions';
 import { validatePlan } from '@/domain/plan';
+import { formatDate } from '@/domain/dates';
 import type { PlanPeriodInput } from '@/domain/billing';
 import { addSchema, createSchema, itemsPatchSchema, termsSchema } from '../schemas';
 
@@ -41,8 +42,8 @@ export const createContractAction = action({ module: 'rentals', level: 'edit' },
 });
 
 export const updateTermsAction = action({ module: 'rentals', level: 'edit' }, termsSchema.extend({ id: zId }), async ({ id, ...terms }, user) => {
-  await transaction((tx) => updateContractTerms(tx, user, id, terms));
-  return { message: 'Uvjeti ugovora spremljeni.' };
+  const r = await transaction((tx) => updateContractTerms(tx, user, id, terms));
+  return { message: `Uvjeti ugovora spremljeni.${r.from ? ` Nova naplata vrijedi od ${formatDate(r.from)} — izdana i prošla razdoblja ostaju po starim uvjetima.` : ''}` };
 });
 
 export const contractStatusAction = action(
@@ -71,8 +72,8 @@ export const itemsPatchAction = action({ module: 'rentals', level: 'edit' }, ite
   if (input.status !== undefined) patch.status = input.status === 'PAUSED' ? 'PAUSED' : null;
   if (input.billing !== undefined) patch.billing = input.billing;
   if (input.season !== undefined) patch.season = input.season;
-  await transaction((tx) => updateContractItems(tx, user, input.contractId, input.ids, patch));
-  return { message: `Izmijenjeno uređaja: ${input.ids.length}.` };
+  const r = await transaction((tx) => updateContractItems(tx, user, input.contractId, input.ids, patch));
+  return { message: `Izmijenjeno uređaja: ${input.ids.length}.${r.from ? ` Nova naplata vrijedi od ${formatDate(r.from)} — izdana i prošla razdoblja ostaju po starim uvjetima.` : ''}` };
 });
 
 export const pausePeriodAction = action(

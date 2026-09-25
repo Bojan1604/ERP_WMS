@@ -1,4 +1,4 @@
-import { addDays, addMonths, monthsBetween, parts, period as mkPeriod, periodStart, today, ymd, type ISODate, type Period } from './dates';
+import { addDays, addMonths, monthsBetween, parts, period as mkPeriod, periodEnd, periodStart, today, ymd, type ISODate, type Period } from './dates';
 import { r2 } from './money';
 
 /**
@@ -36,7 +36,8 @@ export const BILLING_LABEL: Record<BillingCode, string> = {
 
 export const BILLING_MODE_LABEL: Record<BillingModeCode, string> = {
   IN_ADVANCE: 'Unaprijed — na početku razdoblja',
-  IN_ARREARS: 'Unatrag — po isteku razdoblja',
+  // rata dospijeva mjesec nakon početka razdoblja (kod mjesečne naplate = po isteku mjeseca)
+  IN_ARREARS: 'Unatrag — mjesec nakon početka razdoblja',
 };
 
 export const CONTRACT_STATUS_LABEL: Record<ContractStatusCode, string> = {
@@ -67,6 +68,11 @@ export interface ContractTerms {
    * zaostale rate). Uvezeni zatvoreni ugovori ga nemaju — za njih se ne traži ništa.
    */
   closedAt?: ISODate | null;
+  /**
+   * Početak pauze ugovora (status PAUSED). Rate čija je odluka o naplati prije
+   * pauze (vidi `pauseDecisionDate`) i dalje se traže; stara pauza bez datuma — ništa.
+   */
+  pausedSince?: ISODate | null;
 }
 
 export interface PlanPeriodInput {
@@ -89,6 +95,8 @@ export interface ContractDevice {
   paused?: Period[] | null;
   /** Uređaj skinut s ugovora: zadnji dan u najmu (naplata staje s tim datumom). */
   endDate?: ISODate | null;
+  /** Početak pauze uređaja (status PAUSED) — rate prije pauze i dalje se traže. */
+  pausedSince?: ISODate | null;
 }
 
 export interface PlanPeriod {
@@ -104,8 +112,14 @@ export interface Charge {
   period: Period;
   amount: number;
   billing: BillingCode;
-  /** Broj mjeseci koje rata pokriva. */
+  /**
+   * Broj mjeseci koje rata naplaćuje: mjeseci razdoblja rate unutar sezone i do
+   * kraja razdoblja plana (kraj ugovora, skidanje uređaja) — kvartal sa samo
+   * jednim sezonskim mjesecom naplaćuje jedan mjesec.
+   */
   months: number;
+  /** Mjeseci koje rata naplaćuje (YYYY-MM, uzlazno; `months` = njihov broj). */
+  covers: Period[];
   /** Mjesečna cijena na kojoj se temelji. */
   monthly: number;
 }
@@ -183,29 +197,51 @@ export function deviceCharges(c: ContractTerms, d: ContractDevice, fromPeriod: P
   return all.filter((ch) => !paused.has(ch.period));
 }
 
-/** Zaduženja prema planu, uključujući pauzirana (za prikaz rasporeda i provjeru pauze). */
+/**
+ * Mjeseci koje rata razdoblja plana `s` s početkom `p` naplaćuje: od `p` kroz
+ * `span` mjeseci, ali ne nakon kraja razdoblja plana i samo mjeseci u sezoni.
+ */
+function coveredMonths(s: PlanPeriod, p: Period, span: number): Period[] {
+  const end = s.to ? s.to.slice(0, 7) : '';
+  const out: Period[] = [];
+  for (let k = 0; k < Math.max(1, span); k++) {
+    const m = k ? addMonths(`${p}-01`, k).slice(0, 7) : p;
+    if (end && m > end) break;
+    if (inSeason(s.season, Number(m.slice(5, 7)))) out.push(m);
+  }
+  return out;
+}
+
+/**
+ * Zaduženja prema planu, uključujući pauzirana (za prikaz rasporeda i provjeru pauze).
+ * Rata se računa samo za mjesece koje stvarno pokriva (`coveredMonths`): sezona
+ * unutar kvartala/polugodišta/godine i kraj ugovora ili skidanje uređaja usred
+ * razdoblja razmjerno smanjuju ratu; razdoblje bez takvih mjeseci nema ratu.
+ */
 export function scheduledCharges(c: ContractTerms, d: ContractDevice, fromPeriod: Period, toPeriod: Period): Charge[] {
   if (!billable(c, d)) return [];
   const out: Charge[] = [];
+  const push = (s: PlanPeriod, p: Period, covers: Period[]) => {
+    if (covers.length) out.push({ period: p, amount: r2(s.price * covers.length), billing: s.billing, months: covers.length, covers, monthly: s.price });
+  };
   for (const s of devicePlan(c, d)) {
     const step = billingMonths(s.billing);
     if (step === 0) {
+      // jednokratno: jedna rata za cijelo razdoblje (bez kraja = jedan mjesec)
       const p = s.from.slice(0, 7);
-      const months = monthsBetween(s.from, s.to || null);
-      if (p >= fromPeriod && p <= toPeriod && inSeason(s.season, Number(p.slice(5, 7)))) {
-        out.push({ period: p, amount: r2(s.price * months), billing: s.billing, months, monthly: s.price });
-      }
+      if (p >= fromPeriod && p <= toPeriod) push(s, p, coveredMonths(s, p, monthsBetween(s.from, s.to || null)));
       continue;
     }
     const [y, m] = parts(s.from);
-    for (let k = 0; k < 600; k++) {
+    // razdoblja prije `fromPeriod` se preskaču izravno (ista razdoblja kao korak po korak)
+    const behind = Number(fromPeriod.slice(0, 4)) * 12 + Number(fromPeriod.slice(5, 7)) - (y * 12 + m);
+    for (let k = behind > 0 ? Math.ceil(behind / step) : 0; k < 600; k++) {
       const start = ymd(y, m + k * step, 1);
       const p = start.slice(0, 7);
       if (s.to && start > s.to) break;
       if (p > toPeriod) break;
       if (p < fromPeriod) continue;
-      if (!inSeason(s.season, Number(p.slice(5, 7)))) continue;
-      out.push({ period: p, amount: r2(s.price * step), billing: s.billing, months: step, monthly: s.price });
+      push(s, p, coveredMonths(s, p, step));
     }
   }
   return out.sort((a, b) => a.period.localeCompare(b.period));
@@ -221,7 +257,9 @@ export function deviceActiveIn(c: ContractTerms, d: ContractDevice, p: Period): 
   const last = ymd(Number(p.slice(0, 4)), Number(p.slice(5, 7)), 31);
   for (const s of devicePlan(c, d)) {
     if (last < s.from) continue;
-    if (s.to && first > s.to) continue;
+    // jednokratno bez kraja naplaćuje (i obračunava) samo svoj prvi mjesec
+    const to = s.to || (s.billing === 'ONCE' ? periodEnd(s.from.slice(0, 7)) : '');
+    if (to && first > to) continue;
     if (inSeason(s.season, Number(p.slice(5, 7)))) return s;
   }
   return null;
@@ -244,7 +282,7 @@ export function pausedMonths(c: ContractTerms, d: ContractDevice, year: number):
   const paused = new Set(d.paused);
   for (const ch of scheduledCharges(c, d, `${year - 1}-01`, `${year}-12`)) {
     if (!paused.has(ch.period)) continue;
-    for (let k = 0; k < Math.max(1, ch.months); k++) out.add(addMonths(`${ch.period}-01`, k).slice(0, 7));
+    for (const m of ch.covers) out.add(m);
   }
   return out;
 }
@@ -304,6 +342,16 @@ export interface PendingInstallment {
   lines: Array<Charge & { itemId: string }>;
 }
 
+// skup razdoblja po nizu — uređaji učitani zajedno dijele isti niz preskočenih razdoblja
+const periodSets = new WeakMap<readonly Period[], ReadonlySet<Period>>();
+const NO_PERIODS: ReadonlySet<Period> = new Set();
+function periodSet(list: Period[] | null | undefined): ReadonlySet<Period> {
+  if (!list?.length) return NO_PERIODS;
+  let set = periodSets.get(list);
+  if (!set) periodSets.set(list, (set = new Set(list)));
+  return set;
+}
+
 /**
  * Rate koje su dospjele, a nisu fakturirane.
  *
@@ -319,31 +367,59 @@ export function pendingInstallments(
   now: ISODate = today(),
   lookbackMonths = 24,
 ): PendingInstallment[] {
-  // pauziran ugovor ne traži rate; zatvoren (raskinut/istekao u programu) traži zaostale do kraja
-  if (c.status === 'PAUSED') return [];
-  if (c.status !== 'ACTIVE' && !(c.closedAt && c.endDate)) return [];
+  // pauziran ugovor traži samo rate odlučene prije pauze; zatvoren (raskinut/istekao u programu) zaostale do kraja
+  if (c.status === 'PAUSED' && !c.pausedSince) return [];
+  if (c.status !== 'ACTIVE' && c.status !== 'PAUSED' && !(c.closedAt && c.endDate)) return [];
+  const terms: ContractTerms = c.status === 'PAUSED' ? { ...c, status: 'ACTIVE' } : c;
   const limit = addMonths(now, -lookbackMonths);
   const from = limit.slice(0, 7);
   const to = addMonths(now, 1).slice(0, 7);
   const byPeriod = new Map<Period, PendingInstallment>();
   // isti uređaj može biti i na ugovoru i među skinutima (vraćen pa ponovno dodan) — rata jednom
   const seen = new Set<string>();
+  // uređaji s istim uvjetima (cijena, plan, status, pauze, kraj) imaju iste rate — računaju se jednom
+  const memo = new Map<string, Array<{ ch: Charge; due: ISODate }>>();
 
-  for (const d of devices) {
-    const skipped = new Set(d.skipped ?? []);
-    for (const ch of deviceCharges(c, d, from, to)) {
-      const due = installmentDate(c, ch.period);
-      if (due > now || due < limit) continue;
-      const key = `${d.itemId}|${ch.period}`;
-      if (skipped.has(ch.period) || covered.has(key) || seen.has(key)) continue;
+  for (const d0 of devices) {
+    // pauziran uređaj s poznatim početkom pauze: rate prije pauze ostaju za izdati
+    const devicePause = d0.status === 'PAUSED' && d0.pausedSince ? d0.pausedSince : null;
+    const key0 = JSON.stringify([d0.monthly, d0.plan ?? null, d0.status ?? null, devicePause, d0.endDate ?? null, d0.paused ?? null]);
+    let due = memo.get(key0);
+    if (!due) {
+      const d = devicePause ? { ...d0, status: null } : d0;
+      const pausedAt = [c.status === 'PAUSED' ? c.pausedSince : null, devicePause].filter((x): x is ISODate => !!x).sort()[0] ?? null;
+      due = [];
+      for (const ch of deviceCharges(terms, d, from, to)) {
+        const at = installmentDate(terms, ch.period);
+        if (at > now || at < limit) continue;
+        if (pausedAt && pauseDecisionDate(terms, ch.period) >= pausedAt) continue;
+        due.push({ ch, due: at });
+      }
+      memo.set(key0, due);
+    }
+    if (!due.length) continue;
+    const skipped = periodSet(d0.skipped);
+    for (const { ch, due: at } of due) {
+      if (skipped.has(ch.period)) continue;
+      const key = `${d0.itemId}|${ch.period}`;
+      if (covered.has(key) || seen.has(key)) continue;
       seen.add(key);
-      const row = byPeriod.get(ch.period) ?? { period: ch.period, dueDate: due, amount: 0, lines: [] };
-      row.lines.push({ ...ch, itemId: d.itemId });
+      const row = byPeriod.get(ch.period) ?? { period: ch.period, dueDate: at, amount: 0, lines: [] };
+      row.lines.push({ ...ch, itemId: d0.itemId });
       row.amount = r2(row.amount + ch.amount);
       byPeriod.set(ch.period, row);
     }
   }
   return [...byPeriod.values()].sort((a, b) => a.period.localeCompare(b.period));
+}
+
+/**
+ * Dan koji odlučuje pada li rata u pauzu: kod naplate unaprijed datum rate, a kod
+ * naplate unatrag početak razdoblja koje rata pokriva (usluga pružena prije pauze
+ * naplaćuje se i kad rata dospije u pauzi).
+ */
+export function pauseDecisionDate(c: ContractTerms, p: Period): ISODate {
+  return c.billingMode === 'IN_ARREARS' ? periodStart(p) : installmentDate(c, p);
 }
 
 /**
@@ -359,20 +435,26 @@ export function periodsInPause(c: ContractTerms, d: ContractDevice, since: ISODa
   const dev: ContractDevice = { ...d, status: null, paused: [] };
   const out: Period[] = [];
   for (const ch of scheduledCharges(terms, dev, addMonths(since, -1).slice(0, 7), until.slice(0, 7))) {
-    const at = c.billingMode === 'IN_ARREARS' ? periodStart(ch.period) : installmentDate(terms, ch.period);
+    const at = pauseDecisionDate(terms, ch.period);
     if (at >= since && at < until) out.push(ch.period);
   }
   return [...new Set(out)].sort();
 }
 
-/** Sljedeći datum naplate (od danas) — najraniji među uređajima. */
-export function nextBillingDate(c: ContractTerms, devices: ContractDevice[], now: ISODate = today()): ISODate | null {
+/**
+ * Sljedeći datum naplate (od danas) — najraniji među uređajima. Rate koje su već
+ * fakturirane (`covered`: `itemId|YYYY-MM`) ili izdane izvan programa (`skipped`)
+ * se preskaču: nakon izdane rate sljedeća je prva NEIZDANA.
+ */
+export function nextBillingDate(c: ContractTerms, devices: ContractDevice[], now: ISODate = today(), covered?: ReadonlySet<string>): ISODate | null {
   if (c.status !== 'ACTIVE') return null;
   const from = addMonths(now, -1).slice(0, 7);
   const to = addMonths(now, 24).slice(0, 7);
   let best: ISODate | null = null;
   for (const d of devices) {
+    const skipped = new Set(d.skipped ?? []);
     for (const ch of deviceCharges(c, d, from, to)) {
+      if (skipped.has(ch.period) || covered?.has(`${d.itemId}|${ch.period}`)) continue;
       const due = installmentDate(c, ch.period);
       if (due >= now) {
         if (!best || due < best) best = due;

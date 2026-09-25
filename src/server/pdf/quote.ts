@@ -49,7 +49,10 @@ export function quoteHub3(q: LoadedQuote, c: LoadedCompany, total: number): stri
   });
 }
 
-/** Stavke za ispis; uz „bez serijskih brojeva" iste stavke se spajaju u jedan redak s količinom. */
+/**
+ * Stavke za ispis: isti uređaji (model, cijena) uvijek su jedan redak s količinom i serijskima
+ * ispod (kao na računu); uz „bez serijskih brojeva" spajaju se i ostale iste stavke.
+ */
 function quoteRows(q: LoadedQuote) {
   const lines = q.lines.map((l) => ({
     description: l.description,
@@ -61,14 +64,13 @@ function quoteRows(q: LoadedQuote) {
     unitPrice: num(l.unitPrice),
     discountPct: num(l.discountPct),
   }));
-  if (!q.hideSerials) return { lines, rows: lines.map((l) => ({ ...l, serials: l.serial ? [l.serial] : [] })) };
   const rows: Array<(typeof lines)[number] & { serials: string[] }> = [];
   const idx = new Map<string, number>();
   for (const l of lines) {
-    const key = [l.code ?? '', l.description, l.unitPrice, l.discountPct, l.unit, l.rent].join('|');
-    const i = idx.get(key);
+    const key = q.hideSerials || l.serial ? [l.code ?? '', l.description, l.unitPrice, l.discountPct, l.unit, l.rent].join('|') : null;
+    const i = key === null ? undefined : idx.get(key);
     if (i === undefined) {
-      idx.set(key, rows.length);
+      if (key !== null) idx.set(key, rows.length);
       rows.push({ ...l, serials: l.serial ? [l.serial] : [] });
     } else {
       rows[i].qty += l.qty;
@@ -102,7 +104,8 @@ export function quoteDefinition(q: LoadedQuote, c: LoadedCompany, hub3Img: strin
         ...(!q.hideSerials && l.serials.length ? [{ text: `SN: ${l.serials.join(', ')}`, fontSize: 7.5, color: GREY, margin: [0, 2, 0, 0] }] : []),
       ],
     },
-    { text: l.rent ? `${l.unit}/mj.` : l.unit, noWrap: true },
+    // najam: cijena je mjesečna — „kom/mj.", a jedinica „mj" ostaje „mj" (ne „mj/mj.")
+    { text: l.rent && !/^mj/i.test(l.unit.trim()) ? `${l.unit}/mj.` : l.unit, noWrap: true },
     qty(l.qty),
     { text: amt(l.unitPrice), noWrap: true },
     ...(hasDisc ? [l.discountPct ? qty(l.discountPct) : ''] : []),
@@ -140,7 +143,7 @@ export function quoteDefinition(q: LoadedQuote, c: LoadedCompany, hub3Img: strin
     facts: [
       { k: proforma ? 'Datum' : 'Datum ponude', v: fmtDate(toISO(q.date)) },
       { k: 'Vrijedi do', v: validUntil ?? '—' },
-      { k: 'Stavki', v: String(q.lines.length) },
+      { k: 'Stavki', v: String(rows.length) },
       { k: 'PDV', v: `${qty(vatRate)} %` },
     ],
     body: [

@@ -1,6 +1,6 @@
 import 'server-only';
 import { Prisma } from '@prisma/client';
-import { db } from '../../db';
+import { reportSql } from './sql';
 import { addDays, today } from '@/domain/dates';
 import { CONTRACT_STATUS_LABEL, type ContractStatusCode } from '@/domain/billing';
 import { inIds, iso, itemFilterSql, monthChart, monthRows, n, periodSql, revenueSql, type ReportDef, type Row } from './types';
@@ -15,7 +15,7 @@ export const rentReports: ReportDef[] = [
     description: 'Neto prihod iz računa za najam po mjesecu izdavanja (umanjen za storna i odobrenja).',
     filters: ['year', 'range', 'partner'],
     run: async (companyId, f) => {
-      const rows = await db.$queryRaw<Array<{ m: number; net: Prisma.Decimal; cnt: number; contracts: number }>>`
+      const rows = await reportSql<Array<{ m: number; net: Prisma.Decimal; cnt: number; contracts: number }>>`
         SELECT EXTRACT(MONTH FROM i."date")::int AS m, SUM(i."netTotal") AS net,
                COUNT(*) FILTER (WHERE i."kind" = 'INVOICE')::int AS cnt, COUNT(DISTINCT i."contractId")::int AS contracts
         FROM "Invoice" i JOIN "Partner" p ON p.id = i."partnerId"
@@ -45,7 +45,7 @@ export const rentReports: ReportDef[] = [
     description: 'Aktivni ugovori po klijentu: broj uređaja i mjesečni najam koji se naplaćuje.',
     filters: ['partner', 'category', 'model'],
     run: async (companyId, f) => {
-      const rows = await db.$queryRaw<Array<{ id: string; name: string; contracts: number; devices: number; monthly: Prisma.Decimal; since: Date; ends: Date | null }>>`
+      const rows = await reportSql<Array<{ id: string; name: string; contracts: number; devices: number; monthly: Prisma.Decimal; since: Date; ends: Date | null }>>`
         SELECT p.id, p.name, COUNT(DISTINCT c.id)::int AS contracts, COUNT(ci.id)::int AS devices,
                COALESCE(SUM(ci."monthly") FILTER (WHERE ${billableItem}), 0) AS monthly,
                MIN(c."startDate") AS since, MIN(c."endDate") AS ends
@@ -56,7 +56,7 @@ export const rentReports: ReportDef[] = [
         LEFT JOIN "DeviceModel" m ON m.id = it."modelId"
         WHERE c."companyId" = ${companyId} AND c."status" = 'ACTIVE' AND p."excluded" = false ${inIds('c."partnerId"', f.partnerIds)}
           ${f.categoryIds.length || f.modelIds.length ? Prisma.sql`AND it.id IS NOT NULL ${itemFilterSql({ ...f, partnerIds: [] }, { partner: false })}` : Prisma.empty}
-        GROUP BY p.id ORDER BY monthly DESC`;
+        GROUP BY p.id ORDER BY monthly DESC, p.name, p.id`;
       const out: Row[] = rows.map((r) => ({
         name: r.name, contracts: r.contracts, devices: r.devices, monthly: n(r.monthly), annual: Math.round(n(r.monthly) * 12 * 100) / 100,
         since: iso(r.since), ends: iso(r.ends), _href: `/partneri/${r.id}?tab=ugovori`,
@@ -86,7 +86,7 @@ export const rentReports: ReportDef[] = [
     defaultDays: 90,
     run: async (companyId, f) => {
       const now = today();
-      const rows = await db.$queryRaw<Array<{ id: string; number: string; partner: string; status: ContractStatusCode; start: Date; ends: Date; left: number; devices: number; monthly: Prisma.Decimal }>>`
+      const rows = await reportSql<Array<{ id: string; number: string; partner: string; status: ContractStatusCode; start: Date; ends: Date; left: number; devices: number; monthly: Prisma.Decimal }>>`
         SELECT c.id, c."number", p.name AS partner, c."status", c."startDate" AS start, c."endDate" AS ends,
                (c."endDate" - ${now}::date) AS left, COUNT(ci.id)::int AS devices,
                COALESCE(SUM(ci."monthly") FILTER (WHERE ${billableItem}), 0) AS monthly
@@ -122,7 +122,7 @@ export const rentReports: ReportDef[] = [
     description: 'Proknjižene primke u godini po dobavljaču: broj primki, zaprimljenih uređaja i nabavna vrijednost.',
     filters: ['year', 'range', 'supplier'],
     run: async (companyId, f) => {
-      const rows = await db.$queryRaw<Array<{ id: string | null; name: string | null; receipts: number; devices: number; total: Prisma.Decimal; last: Date }>>`
+      const rows = await reportSql<Array<{ id: string | null; name: string | null; receipts: number; devices: number; total: Prisma.Decimal; last: Date }>>`
         SELECT s.id, s.name, COUNT(*)::int AS receipts,
                COALESCE(SUM((SELECT COUNT(*) FROM "Item" it WHERE it."receiptId" = r.id)), 0)::int AS devices,
                SUM(r."total") AS total, MAX(r."date") AS last

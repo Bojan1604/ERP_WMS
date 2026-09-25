@@ -4,6 +4,7 @@ import { pageAccess } from '@/server/auth';
 import { getLookups, modelLabel } from '@/server/queries/lookups';
 import { getOrder, lastCosts, supplierOptions } from '@/server/queries/purchasing';
 import { toISO } from '@/domain/dates';
+import { canSeeCost } from '@/domain/permissions';
 import { num } from '@/domain/money';
 import { PageHeader } from '@/components/ui/misc';
 import { OrderForm } from '@/components/purchasing/order-form';
@@ -11,6 +12,8 @@ import { saveOrderAction } from '../../actions';
 
 export default async function EditOrderPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await pageAccess('purchasing', 'edit');
+  // narudžbenica su nabavne cijene — upis i izmjena samo uz pravo na nabavne cijene (costs)
+  if (!canSeeCost(user.perms)) redirect('/zabranjeno?modul=costs');
   const { id } = await params;
   const order = await getOrder(user.companyId, id);
   if (!order) notFound();

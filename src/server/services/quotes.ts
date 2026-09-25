@@ -44,6 +44,8 @@ export interface QuoteInput {
 }
 
 export const QUOTE_KIND_LABEL: Record<QuoteKind, string> = { QUOTE: 'Ponuda', PROFORMA: 'Predračun' };
+/** Pridjev u rodu vrste dokumenta: ponuda (ž. r.) → „izrađena", predračun (m. r.) → „izrađen". */
+export const quoteAdj = (kind: QuoteKind, masc: string) => (kind === 'QUOTE' ? `${masc}a` : masc);
 
 export const QUOTE_STATUS_LABEL: Record<QuoteStatus | 'EXPIRED', string> = {
   DRAFT: 'Nacrt',
@@ -268,7 +270,7 @@ export async function convertQuote(tx: Tx, actor: Actor, id: string, picks: Reco
     lines,
   });
   await tx.quote.update({ where: { id }, data: { invoiceId: inv.id, status: 'ACCEPTED' } });
-  await audit(tx, actor, { entity: 'quote', entityId: id, action: 'convert', summary: `${QUOTE_KIND_LABEL[q.kind]} ${q.number} pretvoren(a) u račun` });
+  await audit(tx, actor, { entity: 'quote', entityId: id, action: 'convert', summary: `${QUOTE_KIND_LABEL[q.kind]} ${q.number} ${quoteAdj(q.kind, 'pretvoren')} u račun` });
   return inv;
 }
 
@@ -351,6 +353,6 @@ export async function convertQuoteToContract(tx: Tx, actor: Actor, id: string, p
     });
   }
   await tx.quote.update({ where: { id }, data: { contractId: c.id, status: 'ACCEPTED' } });
-  await audit(tx, actor, { entity: 'quote', entityId: id, action: 'contract', summary: `${QUOTE_KIND_LABEL[q.kind]} ${q.number} pretvoren(a) u ugovor ${c.number} (${rows.length} uređaja)` });
+  await audit(tx, actor, { entity: 'quote', entityId: id, action: 'contract', summary: `${QUOTE_KIND_LABEL[q.kind]} ${q.number} ${quoteAdj(q.kind, 'pretvoren')} u ugovor ${c.number} (${rows.length} uređaja)` });
   return c;
 }

@@ -53,9 +53,29 @@ export async function listBackups(companyId: string): Promise<BackupFile[]> {
     const st = await stat(path.join(dir, name)).catch(() => null);
     if (!st) continue;
     const t = m[2];
-    out.push({ name, at: `${m[1]}T${t.slice(0, 2)}:${t.slice(2, 4)}:${t.slice(4, 6)}`, kind: m[3] as BackupFile['kind'], size: st.size });
+    // naziv nosi lokalno vrijeme (Europe/Zagreb) — pretvara se u pravi trenutak (ISO s zonom)
+    out.push({ name, at: zagrebToIso(m[1], t), kind: m[3] as BackupFile['kind'], size: st.size });
   }
   return out.sort((a, b) => b.name.slice(7, 24).localeCompare(a.name.slice(7, 24)));
+}
+
+/** Pomak zone Europe/Zagreb (ms) u zadanom trenutku. */
+function zagrebOffset(ms: number) {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Zagreb', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+      .formatToParts(new Date(ms))
+      .map((x) => [x.type, Number(x.value)]),
+  );
+  return Date.UTC(p.year, p.month - 1, p.day, p.hour % 24, p.minute, p.second) - ms;
+}
+
+/** Lokalno vrijeme iz naziva kopije (YYYY-MM-DD + HHmmss, Europe/Zagreb) → ISO trenutak (UTC). */
+function zagrebToIso(day: string, hms: string) {
+  const [y, mo, d] = day.split('-').map(Number);
+  const local = Date.UTC(y, mo - 1, d, Number(hms.slice(0, 2)), Number(hms.slice(2, 4)), Number(hms.slice(4, 6)));
+  let utc = local - zagrebOffset(local);
+  utc = local - zagrebOffset(utc); // ispravak oko prijelaza ljetnog računanja vremena
+  return new Date(utc).toISOString();
 }
 
 /** Vrijeme u zoni firme za naziv datoteke (YYYY-MM-DD-HHmmss). */

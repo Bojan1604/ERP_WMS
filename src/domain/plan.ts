@@ -121,28 +121,121 @@ export const BULK_SEASON_OPTIONS: { value: BulkSeason; label: string }[] = [
 export const SUMMER_SEASON = { from: 4, to: 10 } as const;
 
 /**
- * Prvi dan od kojeg skupna izmjena uvjeta smije vrijediti za uređaj: nikad prije
- * tekućeg mjeseca i nikad unutar razdoblja koje je već fakturirano ili izdano
- * izvan programa (`covered` + `skipped`) — godišnja rata izdana u siječnju
- * pokriva cijelu godinu, pa nova mjesečna naplata kreće tek sljedeće godine.
+ * Prvi dan od kojeg izmjena uvjeta naplate smije vrijediti za uređaj: nikad prije
+ * tekućeg mjeseca i nikad unutar razdoblja koje je već fakturirano, izdano izvan
+ * programa (`covered` + `skipped`) ili pauzirano — godišnja rata izdana u siječnju
+ * pokriva cijelu godinu, pa nova mjesečna naplata kreće tek sljedeće godine, a
+ * pauzirana kvartalna rata ostaje pauzirana za sva tri mjeseca.
  * Rate starih uvjeta koje počinju prije tog dana ostaju cijele (i neizdane).
  */
 export function bulkCutoff(terms: ContractTerms, device: ContractDevice, covered: ReadonlySet<Period>, now: ISODate): ISODate {
   const c: ContractTerms = { ...terms, status: 'ACTIVE' };
   const d: ContractDevice = { ...device, status: null, paused: [] };
   const from = [c.startDate, c.firstBillingDate || c.startDate, ...(device.plan ?? []).map((p) => p.from || '')].filter(Boolean).sort()[0];
-  const done = new Set([...covered, ...(device.skipped ?? [])]);
-  const endOf = (p: Period, months: number) => addMonths(`${p}-01`, Math.max(1, months));
+  const done = new Set([...covered, ...(device.skipped ?? []), ...(device.paused ?? [])]);
+  const after = (m: Period) => addMonths(`${m}-01`, 1);
   const later = (a: ISODate, b: ISODate) => (a > b ? a : b);
   let cut = `${now.slice(0, 7)}-01`;
   const charges = scheduledCharges(c, d, from.slice(0, 7), addMonths(now, 120).slice(0, 7));
   const scheduled = new Set(charges.map((ch) => ch.period));
   // fakturirano razdoblje kojeg više nema u planu pokriva barem svoj mjesec
-  for (const p of done) if (!scheduled.has(p)) cut = later(cut, endOf(p, 1));
+  for (const p of done) if (!scheduled.has(p)) cut = later(cut, after(p));
   for (const ch of charges) {
-    if (ch.period < cut.slice(0, 7) || done.has(ch.period)) cut = later(cut, endOf(ch.period, ch.months));
+    // rata pokriva mjesece do zadnjeg naplaćenog (sezona, kraj razdoblja)
+    if (ch.period < cut.slice(0, 7) || done.has(ch.period)) cut = later(cut, after(ch.covers[ch.covers.length - 1] ?? ch.period));
   }
   return cut;
+}
+
+/** Plan razriješen iz zapisa: početak (prazno = `base`) i stvarni kraj razdoblja (prije sljedećeg). */
+function spans(plan: PlanPeriodInput[] | null | undefined, base: ISODate) {
+  const start = (p: PlanPeriodInput) => p.from || base;
+  const src = (plan?.length ? plan : [{ from: base }]).map((p) => ({ ...p })).sort((a, b) => start(a).localeCompare(start(b)));
+  return src.map((p, i) => {
+    const next = src[i + 1];
+    const nextEnd = next ? addDays(start(next), -1) : '';
+    const end = p.to && (!nextEnd || p.to < nextEnd) ? p.to : nextEnd;
+    return { p, start: start(p), end };
+  });
+}
+
+/** Zapis plana bez razdoblja koje ništa ne mijenja (jedno razdoblje od početka naplate, bez vlastitih uvjeta). */
+function trimTrivial(rows: PlanPeriodInput[], base: ISODate): PlanPeriodInput[] {
+  const only = rows.length === 1 ? rows[0] : null;
+  const trivial =
+    only &&
+    (!only.from || only.from === base) &&
+    !only.to &&
+    (only.price === null || only.price === undefined) &&
+    !only.billing &&
+    (only.seasonFrom === null || only.seasonFrom === undefined);
+  return trivial ? [] : rows;
+}
+
+const chargeKey = (ch: { period: Period; months: number; amount: number }) => `${ch.period}:${ch.months}:${ch.amount}`;
+
+/**
+ * Nova pravila naplate uređaja (izmjena uvjeta ugovora, plana uređaja ili skupna
+ * naplata/sezona) — JEDINA provjera za sva tri puta: nova pravila vrijede tek od
+ * `bulkCutoff` (prva neizdana, nepauzirana rata od tekućeg mjeseca). Razdoblja
+ * prije granice ostaju po starim uvjetima (kod izmjene ugovora zapisuju se
+ * izričito — naplata i sezona — jer uređaj inače nasljeđuje nove uvjete ugovora).
+ * Ako se rate prije granice ne mijenjaju, novi plan vrijedi u cijelosti.
+ *
+ * Pauze se čuvaju: granica prelazi i pauzirane rate (vidi `bulkCutoff`), pa sva
+ * pauzirana razdoblja ostaju u dijelu plana po starim uvjetima.
+ *
+ * @param terms dosadašnji uvjeti ugovora; `nextTerms` novi (izmjena ugovora)
+ * @param device uređaj s dosadašnjim planom i pauzama
+ * @param next željeni plan uređaja (za nove uvjete) kao da vrijedi od početka
+ * @param covered fakturirana razdoblja uređaja (YYYY-MM)
+ */
+export function rebasePlan(a: {
+  terms: ContractTerms;
+  nextTerms?: ContractTerms;
+  device: ContractDevice;
+  next: PlanPeriodInput[];
+  covered: ReadonlySet<Period>;
+  now: ISODate;
+}): { plan: PlanPeriodInput[]; cut: ISODate | null } {
+  const oldT: ContractTerms = { ...a.terms, status: 'ACTIVE' };
+  const newT: ContractTerms = { ...(a.nextTerms ?? a.terms), status: 'ACTIVE' };
+  const oldD: ContractDevice = { ...a.device, status: null, paused: [] };
+  const newD: ContractDevice = { ...oldD, plan: a.next };
+  const cut = bulkCutoff(a.terms, a.device, a.covered, a.now);
+  const before = (t: ContractTerms, d: ContractDevice) => scheduledCharges(t, d, '0000-01', addMonths(cut, -1).slice(0, 7)).map(chargeKey).join('|');
+  const newBase = newT.firstBillingDate || newT.startDate;
+
+  let plan: PlanPeriodInput[];
+  let splitAt: ISODate | null = null;
+  if (before(oldT, oldD) === before(newT, newD)) plan = a.next;
+  else {
+    splitAt = cut;
+    const oldBase = oldT.firstBillingDate || oldT.startDate;
+    const head: PlanPeriodInput[] = [];
+    for (const { p, start, end } of spans(a.device.plan, oldBase)) {
+      if (start >= cut) continue;
+      const row: PlanPeriodInput = end && end < cut ? { ...p } : { ...p, to: addDays(cut, -1) };
+      if (a.nextTerms) {
+        // uvjeti ugovora se mijenjaju: staro razdoblje dobiva izričitu naplatu i sezonu dosadašnjeg ugovora
+        row.from = start;
+        row.billing = p.billing || oldT.billing;
+        if (p.seasonFrom === null || p.seasonFrom === undefined) {
+          row.seasonFrom = oldT.seasonFrom || 0;
+          row.seasonTo = oldT.seasonFrom ? oldT.seasonTo || 0 : 0;
+        }
+      }
+      head.push(row);
+    }
+    // novi plan od granice: razdoblja koja završavaju prije granice otpadaju, ono preko granice počinje na granici
+    const tail: PlanPeriodInput[] = [];
+    for (const { p, start, end } of spans(a.next, newBase)) {
+      if (end && end < cut) continue;
+      tail.push(start < cut ? { ...p, from: cut } : p);
+    }
+    plan = [...head, ...tail];
+  }
+  return { plan: trimTrivial(plan, newBase), cut: splitAt };
 }
 
 /**

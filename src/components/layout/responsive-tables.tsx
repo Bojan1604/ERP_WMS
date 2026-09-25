@@ -37,11 +37,13 @@ export function ResponsiveTables() {
       obs = new MutationObserver(() => requestAnimationFrame(label));
       obs.observe(document.body, { childList: true, subtree: true });
     };
-    // pri prvom učitavanju tek kad React sigurno završi preuzimanje HTML-a (inače upozorenje o hidraciji)
+    // U produkciji oznake odmah (React ne uspoređuje atribute pri hidraciji, pa dodani data-label ne smeta).
+    // U razvoju tek kad React sigurno završi preuzimanje HTML-a — inače upozorenje o hidraciji u konzoli.
     const later = () => {
       timer = setTimeout(start, 1200);
     };
-    if (document.readyState === 'complete') later();
+    if (process.env.NODE_ENV !== 'development') start();
+    else if (document.readyState === 'complete') later();
     else window.addEventListener('load', later, { once: true });
     const onChange = () => start();
     mq.addEventListener('change', onChange);

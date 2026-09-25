@@ -9,6 +9,7 @@ import { Field, Select } from '@/components/ui/field';
 import { FormError } from '@/components/ui/action';
 import { useToast } from '@/components/ui/toast';
 import { bytes } from './common';
+import { FileInput } from '@/components/ui/file-input';
 
 /**
  * Prijenos u MDM knjižnicu: tijelo zahtjeva je sama datoteka (bez multiparta),
@@ -110,7 +111,7 @@ export function FileUploadButton({ kind, orgs, allowShared, maxMb, accept, label
         <div className="space-y-3">
           <FormError error={up.error} />
           <Field label="Datoteka" hint={file ? `${file.name} · ${bytes(file.size)}` : `Najviše ${maxMb} MB.`} error={tooBig ? `Datoteka je veća od ${maxMb} MB.` : null}>
-            <input ref={input} type="file" accept={accept} className="block w-full text-sm" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            <FileInput ref={input} accept={accept} onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
           </Field>
           {(orgs.length > 0 || allowShared) && (
             <Field label="Vidljivo" hint={allowShared ? 'Zajedničko vide svi distributeri i klijenti.' : undefined}>

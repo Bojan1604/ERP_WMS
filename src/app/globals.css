@@ -27,16 +27,20 @@
   --text-2xl: 1.75rem;
   --text-2xl--line-height: 2.125rem;
 
-  --color-brand: #0e7c7b;
+  --color-brand: #0d7776;
   --color-brand-strong: #0a6463;
   --color-brand-soft: #e0f2f1;
+  /* ispuna s bijelim tekstom (gumbi, aktivna stavka) — u tamnoj temi tamnija od naglaska, WCAG ≥ 4.5 */
+  --color-brand-solid: #0d7776;
+  --color-brand-solid-strong: #0a6463;
 
   --color-ok: #15803d;
   --color-ok-soft: #dcfce7;
   --color-warn: #b45309;
   --color-warn-soft: #fef3c7;
-  --color-bad: #c2410c;
+  --color-bad: #b83e0b;
   --color-bad-strong: #b91c1c;
+  --color-bad-solid: #b91c1c;
   --color-bad-soft: #fee2e2;
   --color-info: #4338ca;
   --color-info-soft: #e0e7ff;
@@ -50,13 +54,13 @@
 
   --color-fg: #1b2420;
   --color-fg-2: #4a5550;
-  --color-fg-3: #7a847f;
-  --color-fg-4: #a5ada9;
+  --color-fg-3: #646c68;
+  --color-fg-4: #808b85;
 
   --color-nav: #15201d;
   --color-nav-2: #1f2c28;
   --color-nav-fg: #c9d4cf;
-  --color-nav-fg-2: #7f8f89;
+  --color-nav-fg-2: #86958f;
 
   --shadow-panel: 0 1px 2px rgb(20 30 25 / 0.05), 0 0 0 1px rgb(20 30 25 / 0.04);
   --shadow-pop: 0 12px 32px rgb(20 30 25 / 0.16), 0 0 0 1px rgb(20 30 25 / 0.06);
@@ -66,12 +70,15 @@
   --color-brand: #2bb3a8;
   --color-brand-strong: #4cc9be;
   --color-brand-soft: #123331;
+  --color-brand-solid: #1f827a;
+  --color-brand-solid-strong: #196b64;
   --color-ok: #4ade80;
   --color-ok-soft: #12291b;
   --color-warn: #fbbf24;
   --color-warn-soft: #2e2410;
   --color-bad: #fb923c;
   --color-bad-strong: #f87171;
+  --color-bad-solid: #dc2626;
   --color-bad-soft: #321716;
   --color-info: #a5b4fc;
   --color-info-soft: #1e1f3d;
@@ -83,8 +90,8 @@
   --color-line-strong: #36423e;
   --color-fg: #e8eeeb;
   --color-fg-2: #b3bfba;
-  --color-fg-3: #83908b;
-  --color-fg-4: #5d6965;
+  --color-fg-3: #8d9994;
+  --color-fg-4: #687571;
   --color-nav: #0b100f;
   --color-nav-2: #151d1b;
   --shadow-panel: 0 0 0 1px rgb(255 255 255 / 0.05);
@@ -150,8 +157,11 @@
     .data-table:not(.no-stack) tbody tr[data-selected='true'] { background: var(--color-brand-soft); }
     .data-table:not(.no-stack) td, .data-table:not(.no-stack) tfoot td {
       display: block; min-width: 0; padding: 0; border: 0; background: transparent !important;
-      text-align: left !important; white-space: normal; overflow-wrap: anywhere;
+      text-align: left !important; white-space: normal !important; overflow-wrap: anywhere;
     }
+    /* whitespace-nowrap (sloj utilities) inače pobjeđuje pa značke/tekst prelaze u susjedni stupac kartice */
+    .data-table:not(.no-stack) td :is(span, div).whitespace-nowrap { white-space: normal !important; }
+    .data-table:not(.no-stack) td span.inline-flex { max-width: 100%; }
     .data-table:not(.no-stack) td::before {
       content: attr(data-label); display: block;
       font-size: 0.625rem; line-height: 0.875rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-fg-3);
@@ -172,6 +182,13 @@
     /* sitni podnaslov u naslovu kartice (e-pošta, opis) ostaje običan */
     .data-table:not(.no-stack) tbody td:first-child :is(.text-xs, .text-sm):not(.font-medium, .font-semibold) { font-weight: 400; }
   }
+}
+
+/* Tamna tema: naglasak (--color-brand) je svijetao da bi bio čitljiv kao tekst na tamnoj podlozi,
+   pa bijeli tekst na ispuni bg-brand / bg-bad-strong dobiva tamniju ispunu (WCAG AA ≥ 4.5). */
+@layer utilities {
+  [data-theme='dark'] .bg-brand.text-white { background-color: var(--color-brand-solid); }
+  [data-theme='dark'] .bg-bad-strong.text-white { background-color: var(--color-bad-solid); }
 }
 
 /* Ispis dokumenata: samo sadržaj s klasom .print-area */

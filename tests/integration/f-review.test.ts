@@ -18,7 +18,7 @@ import { dashboardData } from '../../src/server/queries/dashboard';
 import { createDraft, creditNote, issueInvoice, stornoInvoice } from '../../src/server/services/invoices';
 import { attachItems } from '../../src/server/services/rentals';
 import { findReport, readFilters, runReport } from '../../src/server/queries/reports';
-import { beginAttempt, cleanupLoginAttempts, loginKeys, succeedAttempt } from '../../src/server/services/login-attempts';
+import { LOGIN_LIMITS, beginAttempt, cleanupLoginAttempts, loginKeys, succeedAttempt } from '../../src/server/services/login-attempts';
 import { readBackup } from '../../src/server/jobs/backups';
 import { resolvePermissions } from '../../src/domain/permissions';
 import { fromISO, today } from '../../src/domain/dates';
@@ -160,7 +160,11 @@ test('prijava: pokušaji u bazi — istodobni zahtjevi ne zaobilaze granicu, usp
   assert.equal(res.filter((r) => r.allowed).length, 5, 'točno 5 pokušaja po adresi, i istodobno');
   // zaključani pokušaji se ne pamte (broj redaka ostaje ograničen)
   assert.equal(await db.loginAttempt.count({ where: { key: keys[0].key } }), 5);
-  assert.equal((await beginAttempt(keys)).allowed, false);
+  const locked = await beginAttempt(keys);
+  assert.equal(locked.allowed, false);
+  // poruka s točnim preostalim vremenom (prozor računa je minuta)
+  assert.ok(locked.retryAfterMs > 0 && locked.retryAfterMs <= LOGIN_LIMITS.account.windowMs, String(locked.retryAfterMs));
+  assert.match(locked.message, /za (\d+ s|1 minutu)\./);
   // uspješna prijava (npr. nakon isteka) briše neuspjehe adrese
   await succeedAttempt(res.find((r) => r.allowed)!);
   assert.equal(await db.loginAttempt.count({ where: { key: keys[0].key } }), 0);
@@ -169,8 +173,8 @@ test('prijava: pokušaji u bazi — istodobni zahtjevi ne zaobilaze granicu, usp
   // IP granica vrijedi za različite adrese s iste IP
   const ip = `203.0.113.${Math.floor(Math.random() * 200)}`;
   let allowed = 0;
-  for (let i = 0; i < 25; i++) if ((await beginAttempt(loginKeys('portal', `p${i}${uniq()}@t.hr`, ip))).allowed) allowed++;
-  assert.equal(allowed, 20);
+  for (let i = 0; i < LOGIN_LIMITS.ip.max + 5; i++) if ((await beginAttempt(loginKeys('portal', `p${i}${uniq()}@t.hr`, ip))).allowed) allowed++;
+  assert.equal(allowed, LOGIN_LIMITS.ip.max);
 
   const old = await db.loginAttempt.create({ data: { key: `staff:acc:old${uniq()}`, at: new Date(Date.now() - 2 * 86_400_000) } });
   await cleanupLoginAttempts(true);

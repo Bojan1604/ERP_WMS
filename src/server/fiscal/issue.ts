@@ -45,7 +45,10 @@ export async function fiscalAtIssue(
   const c = inv.company;
   const route = fiscalRoute({ paymentMethod: inv.paymentMethod, company: c, partner: inv.partner });
   const op = await tx.user.findUnique({ where: { id: actor.id }, select: { name: true, oib: true } });
-  const operator = { name: op?.name ?? actor.name, oib: op?.oib ?? null };
+  // operater (OibOper, HR-BT-5): korisnik s upisanim OIB-om, inače zadani operater firme (Postavke → Firma)
+  const userOib = op?.oib?.trim() || null;
+  const companyOib = c.operatorOib?.trim() || null;
+  const operator = userOib || !companyOib ? { name: op?.name ?? actor.name, oib: userOib } : { name: c.operatorName?.trim() || op?.name || actor.name, oib: companyOib };
   const meta: InvoiceFiscalMeta = { operator, route };
 
   if (route === 'NONE') return { eInvoice: meta as Prisma.InputJsonValue };

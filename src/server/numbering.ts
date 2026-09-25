@@ -29,6 +29,20 @@ export const PREFIX: Record<Exclude<Series, 'INVOICE'>, string> = {
   STOCKTAKE: 'INV',
 };
 
-export async function nextDocNumber(tx: Tx, companyId: string, series: Exclude<Series, 'INVOICE'>, year: number) {
-  return formatDocNumber(PREFIX[series], year, await nextSeq(tx, companyId, series, year));
+/**
+ * Sljedeći broj dokumenta. `taken` provjerava je li broj već zauzet (npr. ručno
+ * upisan broj ugovora) — takav se preskače i brojač ide dalje.
+ */
+export async function nextDocNumber(
+  tx: Tx,
+  companyId: string,
+  series: Exclude<Series, 'INVOICE'>,
+  year: number,
+  taken?: (number: string) => Promise<boolean>,
+) {
+  for (let i = 0; i < 1000; i++) {
+    const number = formatDocNumber(PREFIX[series], year, await nextSeq(tx, companyId, series, year));
+    if (!taken || !(await taken(number))) return number;
+  }
+  throw new Error(`Nema slobodnog broja u seriji ${PREFIX[series]}-${year}.`);
 }

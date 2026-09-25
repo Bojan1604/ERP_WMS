@@ -1,4 +1,6 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
+import { canSeeCost } from '@/domain/permissions';
 import { pageAccess } from '@/server/auth';
 import { getLookups, modelLabel } from '@/server/queries/lookups';
 import { lastCosts, supplierOptions } from '@/server/queries/purchasing';
@@ -11,6 +13,8 @@ type Params = Record<string, string | string[] | undefined>;
 
 export default async function NewOrderPage({ searchParams }: { searchParams: Promise<Params> }) {
   const user = await pageAccess('purchasing', 'edit');
+  // narudžbenica su nabavne cijene — upis i izmjena samo uz pravo na nabavne cijene (costs)
+  if (!canSeeCost(user.perms)) redirect('/zabranjeno?modul=costs');
   const sp = await searchParams;
   const [lookups, suppliers, costs] = await Promise.all([getLookups(user.companyId), supplierOptions(user.companyId), lastCosts(user.companyId)]);
   const models = lookups.models.map((m) => ({ value: m.id, label: modelLabel(m), cost: costs.get(m.id) ?? 0 }));

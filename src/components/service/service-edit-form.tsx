@@ -29,13 +29,13 @@ export function ServiceEditForm({ value, action, readOnly }: { value: ServiceFie
             <Field label="Opis kvara" required className="sm:col-span-2" error={fields.issue}>
               <Textarea name="issue" rows={3} defaultValue={value.issue} />
             </Field>
-            <Field label="Dijagnoza">
+            <Field label="Dijagnoza" hint="Interno — ne ispisuje se klijentu">
               <Textarea name="diagnosis" rows={3} defaultValue={value.diagnosis ?? ''} />
             </Field>
-            <Field label="Poduzeta akcija">
+            <Field label="Poduzeta akcija" hint="Interno — ne ispisuje se klijentu">
               <Textarea name="action" rows={3} defaultValue={value.action ?? ''} />
             </Field>
-            <Field label="Rješenje" className="sm:col-span-2">
+            <Field label="Rješenje" hint="Vidi klijent (portal i nalog za dostavu)" className="sm:col-span-2">
               <Textarea name="solution" rows={2} defaultValue={value.solution ?? ''} />
             </Field>
             <Field label="Poruka klijentu" hint="Ispisuje se na nalogu za klijenta">

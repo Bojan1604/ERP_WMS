@@ -7,7 +7,7 @@ import { db, transaction } from '@/server/db';
 import { createSession, destroySession, verifyPassword } from '@/server/auth';
 import { audit } from '@/server/audit';
 import { CHALLENGE_TTL_MS, checkSecondFactor, readChallenge, signChallenge } from '@/server/services/two-factor';
-import { TOO_MANY, beginAttempt, dummyPasswordCheck, loginKeys, requestIp, succeedAttempt } from '@/server/services/login-attempts';
+import { beginAttempt, dummyPasswordCheck, loginKeys, requestIp, succeedAttempt } from '@/server/services/login-attempts';
 
 const schema = z.object({ email: z.string().trim().toLowerCase().min(1).max(200), password: z.string().min(1).max(200), next: z.string().optional() });
 const codeSchema = z.object({ code: z.string().trim().min(6).max(20), next: z.string().optional() });
@@ -24,7 +24,7 @@ export async function login(_: LoginState, fd: FormData): Promise<LoginState> {
 
   // pokušaj se upisuje prije provjere (po adresi i po IP-u) — istodobni zahtjevi ne zaobilaze granicu
   const attempt = await beginAttempt(loginKeys('staff', email, await requestIp()));
-  if (!attempt.allowed) return { error: TOO_MANY };
+  if (!attempt.allowed) return { error: attempt.message };
 
   const user = await db.user.findUnique({ where: { email } });
   // nepostojeća adresa: ista provjera lozinke (isto trajanje), da se ne odaje koje adrese postoje
@@ -56,7 +56,7 @@ export async function verifyLoginCode(_: LoginState, fd: FormData): Promise<Logi
   const parsed = codeSchema.safeParse(Object.fromEntries(fd));
   if (!parsed.success) return { step: 'totp', error: 'Upišite šesteroznamenkasti kod ili rezervni kod.' };
   const attempt = await beginAttempt(loginKeys('2fa', userId, await requestIp()));
-  if (!attempt.allowed) return { step: 'totp', error: TOO_MANY };
+  if (!attempt.allowed) return { step: 'totp', error: attempt.message };
 
   const user = await db.user.findUnique({ where: { id: userId }, select: { id: true, name: true, companyId: true, active: true } });
   if (!user?.active) return { error: 'Prijava nije moguća.' };

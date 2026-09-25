@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Check, ChevronDown, Loader2, Search, SlidersHorizontal, X } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { controlClass, type Option } from './field';
+import { joinMulti, splitMulti } from '@/lib/list-params';
 
 /**
  * Filtri žive u URL-u (?q=…&status=…), pa su poveznice djeljive, „natrag"
@@ -131,12 +132,13 @@ export function SelectFilter({ name, options, placeholder, className }: { name: 
   );
 }
 
-export function DateFilter({ name, label }: { name: string; label: string }) {
+/** `fallback` = zadani datum koji poslužitelj primjenjuje kad ga u URL-u nema (prikazuje se bez preusmjeravanja). */
+export function DateFilter({ name, label, fallback }: { name: string; label: string; fallback?: string }) {
   const { params, set } = useQueryParams();
   return (
     <label className="flex items-center gap-1.5 text-sm text-fg-3">
       {label}
-      <input type="date" value={params.get(name) ?? ''} onChange={(e) => set({ [name]: e.target.value || null })} className={cn(controlClass, 'h-8 w-36')} />
+      <input type="date" value={params.get(name) ?? fallback ?? ''} onChange={(e) => set({ [name]: e.target.value || null })} className={cn(controlClass, 'h-8 w-36')} />
     </label>
   );
 }
@@ -196,7 +198,8 @@ export function MultiSelectFilter({
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const box = useRef<HTMLDivElement>(null);
-  const selected = (params.get(name) ?? '').split(',').map((v) => v.trim()).filter(Boolean);
+  // zarez unutar vrijednosti (CPU „ARM Cortex-A53, 4 jezgre") je „escapean" — list-params joinMulti/splitMulti
+  const selected = splitMulti(params.get(name) ?? '').map((v) => v.trim()).filter(Boolean);
   const chosen = new Set(selected);
 
   useEffect(() => {
@@ -214,7 +217,7 @@ export function MultiSelectFilter({
   const apply = (next: Set<string>) => {
     // redoslijed kao u opcijama — isti odabir daje isti URL
     const ordered = options.map((o) => o.value).filter((v) => next.has(v));
-    set({ [name]: ordered.length ? ordered.join(',') : null });
+    set({ [name]: ordered.length ? joinMulti(ordered) : null });
   };
   const toggle = (v: string) => {
     const next = new Set(chosen);
@@ -301,9 +304,9 @@ export function DateRangeFilter({ label, from = 'od', to = 'do' }: { label: stri
   return (
     <div className="flex flex-wrap items-center gap-1.5 text-sm text-fg-3">
       <span>{label}</span>
-      <input type="date" aria-label={`${label} od`} value={a} max={b || undefined} onChange={(e) => set({ [from]: e.target.value || null })} className={cn(controlClass, 'h-8 w-36')} />
+      <input type="date" aria-label={`${label} od`} value={a} max={b || undefined} onChange={(e) => set({ [from]: e.target.value || null })} className={cn(controlClass, 'h-8 w-36 max-sm:h-10 max-sm:w-44')} />
       <span>–</span>
-      <input type="date" aria-label={`${label} do`} value={b} min={a || undefined} onChange={(e) => set({ [to]: e.target.value || null })} className={cn(controlClass, 'h-8 w-36')} />
+      <input type="date" aria-label={`${label} do`} value={b} min={a || undefined} onChange={(e) => set({ [to]: e.target.value || null })} className={cn(controlClass, 'h-8 w-36 max-sm:h-10 max-sm:w-44')} />
       {(a || b) && (
         <button type="button" onClick={() => set({ [from]: null, [to]: null })} className="text-fg-3 hover:text-fg" aria-label="Očisti raspon">
           <X className="size-3.5" />

@@ -5,7 +5,7 @@ import { coveredPeriods } from '../services/invoices';
 import { pendingForCompany, returnedWhere, toDevice, toReturnedDevice, toTerms } from '../services/rentals';
 import { nextBillingDate, pendingInstallments, type BillingCode, type ContractStatusCode } from '@/domain/billing';
 import { suggestedRent } from '@/domain/pricing';
-import { num } from '@/domain/money';
+import { num, r2 } from '@/domain/money';
 import { today } from '@/domain/dates';
 
 type Params = Record<string, string | string[] | undefined>;
@@ -50,7 +50,8 @@ export async function contractItems(contractId: string) {
 export async function contractPending(c: Contract, devices: ReturnType<typeof toDevice>[]) {
   const now = today();
   const terms = toTerms(c);
-  if (c.status === 'PAUSED' || (c.status !== 'ACTIVE' && !c.closedAt)) return [];
+  // pauziran ugovor: rate prije pauze (ako se zna početak pauze); zatvoren: samo u programu
+  if (c.status === 'PAUSED' ? !c.pausedSince : c.status !== 'ACTIVE' && !c.closedAt) return [];
   const [covered, returned] = await Promise.all([
     coveredPeriods(db, [c.id]).then((m) => m.get(c.id) ?? new Set<string>()),
     db.returnedContractItem.findMany({ where: { contractId: c.id, ...returnedWhere(now) } }),
@@ -64,28 +65,33 @@ export async function contractPending(c: Contract, devices: ReturnType<typeof to
     partner: null as { id: string; name: string } | null,
     period: r.period,
     dueDate: r.dueDate,
-    amount: r.amount,
+    // postojeći nacrt se izdaje takav kakav jest — iznos je iznos nacrta
+    amount: drafts.get(`${c.id}|${r.period}`)?.amount ?? r.amount,
     itemIds: r.lines.map((l) => l.itemId),
-    draftId: drafts.get(`${c.id}|${r.period}`) ?? null,
+    draftId: drafts.get(`${c.id}|${r.period}`)?.id ?? null,
   }));
 }
 
-async function draftsFor(contractIds: string[]) {
-  if (!contractIds.length) return new Map<string, string>();
+/** Postojeći nacrti računa za rate: zadanih ugovora ili svih ugovora firme. */
+async function draftsFor(scope: string[] | { companyId: string }) {
+  if (Array.isArray(scope) && !scope.length) return new Map<string, { id: string; amount: number }>();
   const drafts = await db.invoice.findMany({
-    where: { contractId: { in: contractIds }, status: 'DRAFT', type: 'RENT', kind: 'INVOICE', period: { not: null } },
-    select: { id: true, contractId: true, period: true },
+    where: {
+      ...(Array.isArray(scope) ? { contractId: { in: scope } } : { companyId: scope.companyId, contractId: { not: null } }),
+      status: 'DRAFT', type: 'RENT', kind: 'INVOICE', period: { not: null },
+    },
+    select: { id: true, contractId: true, period: true, netTotal: true },
     orderBy: { createdAt: 'asc' },
   });
-  return new Map(drafts.map((d) => [`${d.contractId}|${d.period}`, d.id]));
+  return new Map(drafts.map((d) => [`${d.contractId}|${d.period}`, { id: d.id, amount: num(d.netTotal) }]));
 }
 
 export type PendingRow = Awaited<ReturnType<typeof contractPending>>[number];
 
 /** Sve rate za izdati u firmi (bez isključenih partnera). */
 export async function companyPending(companyId: string): Promise<PendingRow[]> {
-  const rows = await pendingForCompany(db, companyId);
-  const drafts = await draftsFor([...new Set(rows.map((r) => r.contractId))]);
+  // nacrti firme (malo zapisa) usporedno s izračunom rata
+  const [rows, drafts] = await Promise.all([pendingForCompany(db, companyId), draftsFor({ companyId })]);
   return rows.map((r) => ({
     key: `${r.contractId}|${r.period}`,
     contractId: r.contractId,
@@ -93,10 +99,39 @@ export async function companyPending(companyId: string): Promise<PendingRow[]> {
     partner: r.partner,
     period: r.period,
     dueDate: r.dueDate,
-    amount: r.amount,
+    amount: drafts.get(`${r.contractId}|${r.period}`)?.amount ?? r.amount,
     itemIds: r.lines.map((l) => l.itemId),
-    draftId: drafts.get(`${r.contractId}|${r.period}`) ?? null,
+    draftId: drafts.get(`${r.contractId}|${r.period}`)?.id ?? null,
   }));
+}
+
+/**
+ * „Rate za izdati" po stranicama: rate se računaju (nisu zapisi u bazi), pa se
+ * grupiraju po ugovoru i straniče po ugovorima (ugovor s najranijom ratom prvi);
+ * zbrojevi su za sve rate (i pretragu), na stranicu idu samo rate njenih ugovora.
+ */
+export async function pendingPage(companyId: string, opts: { q?: string; skip: number; take: number }) {
+  const all = await companyPending(companyId);
+  const q = opts.q?.trim().toLocaleLowerCase('hr');
+  const rows = q ? all.filter((r) => r.contractNumber.toLocaleLowerCase('hr').includes(q) || (r.partner?.name.toLocaleLowerCase('hr').includes(q) ?? false)) : all;
+  const groups = new Map<string, PendingRow[]>();
+  for (const r of rows) {
+    const g = groups.get(r.contractId);
+    if (g) g.push(r);
+    else groups.set(r.contractId, [r]);
+  }
+  const page = [...groups.values()].slice(opts.skip, opts.skip + opts.take);
+  let amount = 0;
+  for (const r of rows) amount += r.amount;
+  return {
+    rows: page.flat(),
+    /** Ugovora s ratama (za straničenje). */
+    contracts: groups.size,
+    count: rows.length,
+    amount: r2(amount),
+    /** Rata bez pretrage (prazna stranica: „nema rata" ili „nema pogodaka"). */
+    unfiltered: all.length,
+  };
 }
 
 export async function contractInvoices(companyId: string, contractId: string, page: { skip: number; take: number }) {

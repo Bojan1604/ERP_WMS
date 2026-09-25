@@ -24,7 +24,7 @@ const txt = (v: number | null) => (v === null ? '' : String(v).replace('.', ',')
  * PDV, ukupno). Kad je roba zaprimljena, iz njega nastaje povezani ulazni račun
  * — trošak robe ostaje na primkama (ne knjiži se dvaput).
  */
-export function OrderInvoiceForm({ orderId, initial, orderTotal, readOnly }: { orderId: string; initial: OrderInvoiceValue; orderTotal: number; readOnly: boolean }) {
+export function OrderInvoiceForm({ orderId, initial, orderTotal, readOnly }: { orderId: string; initial: OrderInvoiceValue; orderTotal: number | null; readOnly: boolean }) {
   const [v, setV] = useState({
     no: initial.supplierInvoiceNo ?? '',
     date: initial.supplierInvoiceDate ?? '',
@@ -51,7 +51,7 @@ export function OrderInvoiceForm({ orderId, initial, orderTotal, readOnly }: { o
         <Field label="Valuta">
           <Input value={v.cur} maxLength={3} onChange={(e) => setV({ ...v, cur: e.target.value.toUpperCase() })} className="font-mono" />
         </Field>
-        <Field label="Osnovica" hint={v.net ? undefined : `Prazno = vrijednost narudžbenice (${String(orderTotal).replace('.', ',')})`}>
+        <Field label="Osnovica" hint={v.net ? undefined : orderTotal === null ? 'Prazno = vrijednost narudžbenice' : `Prazno = vrijednost narudžbenice (${String(orderTotal).replace('.', ',')})`}>
           <Input inputMode="decimal" value={v.net} onChange={(e) => setV({ ...v, net: e.target.value })} className="text-right" />
         </Field>
         <Field label="PDV" hint="Uvoz: 0 (plaća se na carini)">

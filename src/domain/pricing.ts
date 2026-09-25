@@ -73,11 +73,42 @@ export function packageTotals(items: Array<{ cost: number; price: number }>, pri
  * — jednako); razlika zaokruživanja ide na prvu stavku, pa je zbroj točno cijena paketa.
  * Bez cijene paketa vrijede preporučene cijene.
  */
-export function distributePackagePrice(prices: number[], total: number | null): number[] {
+export function distributePackagePrice(prices: number[], total: number | null, groups?: Array<string | null | undefined>): number[] {
   if (!prices.length) return [];
+  if (groups) return distributeByGroup(prices, total, groups);
   if (total === null) return prices.map(r2);
   const sum = prices.reduce((a, p) => a + p, 0);
   const out = prices.map((p) => r2(sum > 0 ? (p / sum) * total : total / prices.length));
   out[0] = r2(out[0] + total - out.reduce((a, p) => a + p, 0));
+  return out;
+}
+
+/**
+ * Raspodjela po skupinama (model): uređaji istog modela dobivaju istu cijenu — osnovica
+ * skupine je prosjek preporučenih cijena. Razlika zaokruživanja ide na jednu stavku,
+ * po mogućnosti na model koji je u paketu jednom (ostali modeli ostaju ujednačeni).
+ */
+function distributeByGroup(prices: number[], total: number | null, groups: Array<string | null | undefined>): number[] {
+  const keyOf = (i: number) => groups[i] ?? `#${i}`;
+  const sums = new Map<string, { sum: number; n: number }>();
+  prices.forEach((p, i) => {
+    const g = sums.get(keyOf(i)) ?? { sum: 0, n: 0 };
+    g.sum += p;
+    g.n += 1;
+    sums.set(keyOf(i), g);
+  });
+  const avg = prices.map((_, i) => {
+    const g = sums.get(keyOf(i))!;
+    return g.sum / g.n;
+  });
+  if (total === null) return avg.map(r2);
+  const all = avg.reduce((a, p) => a + p, 0);
+  const out = avg.map((p) => r2(all > 0 ? (p / all) * total : total / prices.length));
+  const rest = r2(total - out.reduce((a, p) => a + p, 0));
+  if (rest !== 0) {
+    const single = prices.findIndex((_, i) => sums.get(keyOf(i))!.n === 1);
+    const at = single >= 0 ? single : 0;
+    out[at] = r2(out[at] + rest);
+  }
   return out;
 }

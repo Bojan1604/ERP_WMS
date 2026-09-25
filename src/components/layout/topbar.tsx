@@ -7,6 +7,7 @@ import { Building2, ChevronDown, LogOut, Moon, RefreshCw, Search, Sun, UserRound
 import { logout } from '@/app/(auth)/login/actions';
 import { switchCompanyAction } from '@/app/(app)/postavke/firme/actions';
 import { cn } from '@/lib/cn';
+import { useToast } from '@/components/ui/toast';
 
 interface Online { id: string; name: string; lastSeenAt: string }
 
@@ -83,6 +84,7 @@ export function Topbar({
   const [q, setQ] = useState('');
   const [dark, setDark] = useState(false);
   const [switching, start] = useTransition();
+  const toast = useToast();
   const { online, newVersion } = useStatus(buildId, initialOnline);
   useEffect(() => setDark(document.documentElement.dataset.theme === 'dark'), []);
 
@@ -138,8 +140,13 @@ export function Topbar({
                         onClick={() => {
                           close();
                           start(async () => {
-                            const r = await switchCompanyAction({ companyId: c.id });
-                            if (r.ok) window.location.assign('/');
+                            try {
+                              const r = await switchCompanyAction({ companyId: c.id });
+                              if (r.ok) window.location.assign('/');
+                              else toast('bad', r.error || 'Prebacivanje firme nije uspjelo.');
+                            } catch {
+                              toast('bad', 'Prebacivanje firme nije uspjelo — provjerite vezu i pokušajte ponovno.');
+                            }
                           });
                         }}
                         className={cn('w-full rounded-md px-2.5 py-1.5 text-left text-sm hover:bg-muted', c.id === companyId && 'font-semibold text-brand')}

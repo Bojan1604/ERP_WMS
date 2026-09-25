@@ -1,10 +1,9 @@
 import 'server-only';
 import type { Content, TableCell, TDocumentDefinitions } from 'pdfmake/interfaces';
-import { getServiceOrder } from '../queries/service';
+import { deviceWarrantyEnd, getServiceOrder } from '../queries/service';
 import { DomainError } from '../errors';
 import { toISO } from '@/domain/dates';
 import { num } from '@/domain/money';
-import { warrantyEnd } from '@/domain/pricing';
 import { SERVICE_STATUS } from '@/components/service/labels';
 import { loadPdfCompany, type LoadedCompany } from './company';
 import { amt, documentDefinition, fmtDate, itemsTable, pdfFileName, section } from './layout';
@@ -15,12 +14,12 @@ const model = (m: { brand: string | null; name: string }) => [m.brand, m.name].f
 
 /**
  * Servisni nalog (zaprimanje, potpis klijenta pri predaji) ili nalog za
- * dostavu (povrat klijentu: dijagnoza, poduzeto, rješenje, zamjenski uređaj) —
+ * dostavu (povrat klijentu: rješenje, zamjenski uređaj; dijagnoza i poduzeto su interni) —
  * isti sadržaj kao /servis/[id]/ispis.
  */
 export function serviceDefinition(o: Order, c: LoadedCompany, delivery: boolean): TDocumentDefinitions {
   const item = o.item;
-  const wEnd = item ? warrantyEnd(toISO(item.warrantyStart ?? item.issueDate), item.warrantyMonths ?? item.model.warrantyMonths) : null;
+  const wEnd = item ? deviceWarrantyEnd(item) : null;
   const rows: TableCell[][] = [
     [item ? model(item.model) : '—', { text: o.serial ?? '—', bold: true }, o.underWarranty ? `da${wEnd ? ` (do ${fmtDate(wEnd)})` : ''}` : 'ne', delivery && o.replacement ? 'zamijenjen' : ''],
   ];
@@ -44,7 +43,7 @@ export function serviceDefinition(o: Order, c: LoadedCompany, delivery: boolean)
     body: [
       itemsTable({ widths: ['*', 120, 120, 80], head: ['Uređaj', 'Serijski broj', 'Jamstvo', ''], rows }),
       section('Opis kvara', o.issue),
-      ...(delivery ? [section('Dijagnoza', o.diagnosis), section('Poduzeto', o.action), section('Rješenje', o.solution)] : []),
+      ...(delivery ? [section('Rješenje', o.solution)] : []),
       section('Poruka klijentu', o.publicNote),
       !o.underWarranty && cost > 0 ? ({ text: `Trošak popravka (izvan jamstva): ${amt(cost)} EUR + PDV`, bold: true, margin: [0, 12, 0, 0] } as Content) : null,
       !delivery

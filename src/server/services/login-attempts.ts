@@ -18,13 +18,23 @@ export interface LoginLimit {
 }
 
 export const LOGIN_LIMITS = {
-  /** 5 neuspjeha po adresi (ili po korisniku u drugom koraku) → minuta čekanja. */
+  /** 5 neuspjeha po adresi (ili po korisniku u drugom koraku) u minuti → čekanje do isteka minute. */
   account: { max: 5, windowMs: 60_000 },
-  /** 20 pokušaja s iste IP adrese u 10 minuta (pogađanje lozinki za mnogo adresa). */
-  ip: { max: 20, windowMs: 10 * 60_000 },
+  /**
+   * 50 neuspjelih pokušaja s iste IP adrese u 10 minuta (pogađanje lozinki za mnogo adresa).
+   * Prag je viši od broja korisnika jednog ureda iza iste javne adrese, pa nekoliko
+   * zatipkanih lozinki ne zaključa i administratora; uspješna prijava briše svoj pokušaj.
+   */
+  ip: { max: 50, windowMs: 10 * 60_000 },
 } as const;
 
-export const TOO_MANY = 'Previše neuspjelih pokušaja. Pokušajte ponovno za minutu.';
+/** Poruka za zaključanu prijavu s točnim preostalim vremenom. */
+export function tooManyMessage(retryAfterMs: number): string {
+  const s = Math.max(1, Math.ceil(retryAfterMs / 1000));
+  if (s < 60) return `Previše neuspjelih pokušaja. Pokušajte ponovno za ${s} s.`;
+  const m = Math.ceil(s / 60);
+  return `Previše neuspjelih pokušaja. Pokušajte ponovno za ${m} ${m === 1 ? 'minutu' : m < 5 ? 'minute' : 'minuta'}.`;
+}
 
 /** Ključevi za prijavu: po adresi (ili korisniku) i po IP adresi. */
 export function loginKeys(scope: 'staff' | 'portal' | '2fa', account: string, ip: string | null): LoginLimit[] {
@@ -39,6 +49,10 @@ export interface Attempt {
   allowed: boolean;
   ids: string[];
   keys: LoginLimit[];
+  /** Zaključano: za koliko ms se prijava ponovno dopušta (0 kad je dopušteno). */
+  retryAfterMs: number;
+  /** Poruka korisniku kad pokušaj nije dopušten (s preostalim vremenom). */
+  message: string;
 }
 
 const CLEANUP_EVERY_MS = 10 * 60_000;
@@ -65,10 +79,25 @@ export async function beginAttempt(keys: LoginLimit[]): Promise<Attempt> {
       for (const k of [...keys].sort((a, b) => a.key.localeCompare(b.key))) await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`login:${k.key}`}))`;
       const now = Date.now();
       const counts = await Promise.all(keys.map((k) => tx.loginAttempt.count({ where: { key: k.key, at: { gt: new Date(now - k.windowMs) } } })));
-      if (counts.some((n, i) => n >= keys[i].max)) return { allowed: false, ids: [], keys };
+      if (counts.some((n, i) => n >= keys[i].max)) {
+        // otključava se kad iz prozora izađe pokušaj zbog kojeg je broj dosegnuo granicu
+        let until = now;
+        for (const [i, k] of keys.entries()) {
+          if (counts[i] < k.max) continue;
+          const pivot = await tx.loginAttempt.findFirst({
+            where: { key: k.key, at: { gt: new Date(now - k.windowMs) } },
+            orderBy: { at: 'desc' },
+            skip: k.max - 1,
+            select: { at: true },
+          });
+          until = Math.max(until, (pivot?.at.getTime() ?? now) + k.windowMs);
+        }
+        const retryAfterMs = Math.max(1000, until - now);
+        return { allowed: false, ids: [], keys, retryAfterMs, message: tooManyMessage(retryAfterMs) };
+      }
       const ids: string[] = [];
       for (const k of keys) ids.push((await tx.loginAttempt.create({ data: { key: k.key }, select: { id: true } })).id);
-      return { allowed: true, ids, keys };
+      return { allowed: true, ids, keys, retryAfterMs: 0, message: '' };
     },
     { maxWait: 10_000, timeout: 10_000 },
   );

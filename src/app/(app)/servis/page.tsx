@@ -20,6 +20,15 @@ import { ExportButtons } from '@/components/ui/export-buttons';
 type Params = Record<string, string | string[] | undefined>;
 const FILTERS = ['q', 'status', 'scope', 'partner', 'warranty', 'long', 'model', 'izvor'];
 
+/** Hrvatska množina: 2 nove prijave, 5 novih prijava, 21 nova prijava. */
+function newReports(n: number) {
+  const d = n % 10;
+  const h = n % 100;
+  if (d === 1 && h !== 11) return 'nova prijava';
+  if (d >= 2 && d <= 4 && (h < 12 || h > 14)) return 'nove prijave';
+  return 'novih prijava';
+}
+
 export default async function ServicePage({ searchParams }: { searchParams: Promise<Params> }) {
   const user = await pageAccess('service', 'view');
   const sp = await searchParams;
@@ -62,7 +71,7 @@ export default async function ServicePage({ searchParams }: { searchParams: Prom
             </LinkButton>
           }
         >
-          {portalNew === 1 ? 'Jedna nova prijava kvara' : `${portalNew} novih prijava kvara`} s portala — otvorite nalog i promijenite status u
+          {portalNew === 1 ? 'Jedna nova prijava kvara' : `${portalNew} ${newReports(portalNew)} kvara`} s portala — otvorite nalog i promijenite status u
           „Zaprimljeno" kad uređaj stigne (ili dogovorite servis na licu mjesta).
         </Notice>
       )}
@@ -106,7 +115,7 @@ export default async function ServicePage({ searchParams }: { searchParams: Prom
 
       <TableWrap>
         {list.rows.length ? (
-          <table className="data-table min-w-[1150px]">
+          <table className="data-table sm:min-w-[1150px]">
             <thead>
               <tr>
                 <th>Broj</th>

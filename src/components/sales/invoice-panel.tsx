@@ -15,8 +15,10 @@ import {
   deleteInvoicePayment,
   markInvoicePaid,
   markInvoiceUnpaid,
+  refundInvoicePayment,
   stornoInvoiceAction,
 } from '@/app/(app)/prodaja/racuni/actions';
+import { overpaidAmount } from '@/domain/invoice';
 
 export const PAYMENT_METHODS = ['Transakcijski račun', 'Gotovina', 'Kartica', 'Kompenzacija', 'Ostalo'];
 
@@ -29,6 +31,8 @@ export interface PanelInvoice {
   netTotal: number;
   paidTotal: number;
   creditedTotal: number;
+  /** Uračunati predujam (s PDV-om). */
+  advanceAmount: number;
   openAmount: number;
   vatRate: number;
   payments: Array<{ id: string; date: string; amount: number; method: string | null; note: string | null; createdBy: string | null }>;
@@ -37,13 +41,18 @@ export interface PanelInvoice {
 /** Uplate: popis, nova uplata, plaćeno u cijelosti, vraćanje u neplaćeno. */
 export function PaymentsCard({ inv, canEdit }: { inv: PanelInvoice; canEdit: boolean }) {
   const receivable = (inv.kind === 'INVOICE' || inv.kind === 'ADVANCE') && !inv.stornoed;
+  // preplata (npr. odobrenje na plaćeni račun) — iznos koji treba vratiti kupcu
+  const overpaid = overpaidAmount({ kind: inv.kind, stornoed: inv.stornoed, total: inv.grandTotal, advance: inv.advanceAmount, paid: inv.paidTotal, credited: inv.creditedTotal });
+  const [refund, setRefund] = useState(false);
   return (
     <Card title="Naplata" padded={false}>
       <dl className="px-4 py-3 text-base">
         <Row k="Ukupno" v={eur(inv.grandTotal)} />
         {inv.creditedTotal > 0 && <Row k="Odobreno" v={eur(-inv.creditedTotal)} />}
+        {inv.advanceAmount > 0 && <Row k="Uračunati predujam" v={eur(-inv.advanceAmount)} />}
         <Row k="Plaćeno" v={eur(inv.paidTotal)} />
         <Row k="Otvoreno" v={eur(inv.openAmount)} strong />
+        {overpaid > 0 && <Row k="Za povrat kupcu" v={eur(overpaid)} strong />}
       </dl>
       {inv.payments.length > 0 && (
         <ul className="border-t border-line">
@@ -96,6 +105,41 @@ export function PaymentsCard({ inv, canEdit }: { inv: PanelInvoice; canEdit: boo
                   <FormError error={error} />
                   <Button type="submit" variant="subtle" loading={pending} className="w-full">
                     Upiši uplatu
+                  </Button>
+                </div>
+              )}
+            </ActionForm>
+          )}
+          {overpaid > 0 && (
+            <div className="rounded-md bg-warn-soft px-3 py-2 text-sm text-warn">
+              Kupac je preplatio {eur(overpaid)} (odobrenje ili uplata iznad iznosa računa) — iznos treba vratiti kupcu ili prebiti.
+              {!refund && (
+                <Button size="sm" variant="subtle" className="mt-2 w-full" onClick={() => setRefund(true)}>
+                  Evidentiraj povrat kupcu
+                </Button>
+              )}
+            </div>
+          )}
+          {overpaid > 0 && refund && (
+            <ActionForm action={refundInvoicePayment} successMessage="Povrat kupcu je upisan." onSuccess={() => setRefund(false)}>
+              {({ pending, error }) => (
+                <div className="space-y-2">
+                  <input type="hidden" name="invoiceId" value={inv.id} />
+                  <p className="text-sm font-medium text-fg-2">Povrat kupcu</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="Datum">
+                      <Input type="date" name="date" defaultValue={today()} required />
+                    </Field>
+                    <Field label="Iznos €">
+                      <Input name="amount" defaultValue={String(overpaid).replace('.', ',')} inputMode="decimal" className="text-right" required key={overpaid} />
+                    </Field>
+                  </div>
+                  <Field label="Način">
+                    <Select name="method" options={PAYMENT_METHODS.map((m) => ({ value: m, label: m }))} defaultValue={PAYMENT_METHODS[0]} />
+                  </Field>
+                  <FormError error={error} />
+                  <Button type="submit" variant="subtle" loading={pending} className="w-full">
+                    Upiši povrat
                   </Button>
                 </div>
               )}
@@ -166,8 +210,8 @@ export function CorrectionButtons({ inv }: { inv: PanelInvoice }) {
                 vraćaju se na skladište.
               </p>
               {inv.paidTotal > 0 && <p className="rounded-md bg-warn-soft px-3 py-2 text-sm text-warn">Račun ima uplate — prije storna ih treba obrisati.</p>}
-              <Field label="Datum storna" hint="Ne raniji od zadnjeg izdanog računa — inače dobiva njegov datum.">
-                <Input type="date" name="date" defaultValue={today()} />
+              <Field label="Datum storna" hint="Najkasnije danas i ne raniji od zadnjeg izdanog računa — inače dobiva njegov datum.">
+                <Input type="date" name="date" defaultValue={today()} max={today()} />
               </Field>
               <Field label="Razlog (neobavezno)">
                 <Input name="reason" placeholder="npr. pogrešan kupac" />
@@ -197,8 +241,8 @@ export function CorrectionButtons({ inv }: { inv: PanelInvoice }) {
                 <Field label="Iznos bez PDV-a €" hint={`Najviše ${eur(maxNet)}`} required>
                   <Input name="netAmount" inputMode="decimal" className="text-right" required />
                 </Field>
-                <Field label="Datum" hint="Ne raniji od zadnjeg izdanog računa.">
-                  <Input type="date" name="date" defaultValue={today()} />
+                <Field label="Datum" hint="Najkasnije danas, ne raniji od zadnjeg izdanog računa.">
+                  <Input type="date" name="date" defaultValue={today()} max={today()} />
                 </Field>
               </div>
               <FormError error={error} />

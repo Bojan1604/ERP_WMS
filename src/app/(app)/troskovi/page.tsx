@@ -8,6 +8,7 @@ import { can } from '@/domain/permissions';
 import { MONTHS_HR } from '@/domain/dates';
 import { num } from '@/domain/money';
 import { Card, PageHeader, Stat, TableWrap } from '@/components/ui/misc';
+import { Pagination, readPage } from '@/components/ui/pagination';
 import { FilterBar, SearchFilter, SegmentFilter, SelectFilter } from '@/components/ui/filters';
 import { ExpensesTable, NewExpenseButton } from '@/components/expenses/expenses-table';
 import { CategoriesDialog } from '@/components/expenses/categories-dialog';
@@ -26,8 +27,10 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
   const sp = await searchParams;
   const f = parseExpenseFilters(sp);
   const c = user.companyId;
+  // tablica po stranicama (zbrojevi i grafovi su preko cijele godine, izvoz sadrži sve)
+  const pg = readPage(sp, 100);
   const [data, years, lookups, partners, company] = await Promise.all([
-    expensesForYear(c, f),
+    expensesForYear(c, f, pg),
     expenseYears(c),
     getLookups(c),
     expensePartners(c),
@@ -41,6 +44,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(sp)) if (typeof v === 'string' && v) q.set(k, v);
     for (const [k, v] of Object.entries(patch)) (v ? q.set(k, v) : q.delete(k));
+    q.delete('page');
     const s = q.toString();
     return s ? `/troskovi?${s}` : '/troskovi';
   };
@@ -82,7 +86,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
         <Stat label="Troškovi (neto)" value={eur(t.net)} />
         <Stat label="PDV (pretporez)" value={eur(t.vat)} />
         <Stat label="Ukupno s PDV-om" value={eur(Math.round((t.net + t.vat) * 100) / 100)} />
-        <Stat label="Nije plaćeno" value={eur(t.unpaid)} tone={t.unpaid ? 'warn' : undefined} />
+        <Stat label="Nije plaćeno (s PDV-om)" value={eur(t.unpaid)} tone={t.unpaid ? 'warn' : undefined} />
         <Stat label="Iz nabave (primke)" value={eur(t.purchase)} />
         <Stat label="Planirano do kraja godine" value={eur(t.planned)} hint={`Ponavljajući: ${eur(t.recurringMonthly)} mjesečno`} />
       </div>
@@ -118,8 +122,9 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
       </FilterBar>
 
       <TableWrap>
-        <ExpensesTable rows={data.rows} manual={data.manual} totals={t} options={options} actions={actions} paidAction={expensesPaidAction} canEdit={canEdit} attachments={attachments} />
+        <ExpensesTable rows={data.rows} manual={data.manual} totals={t} options={options} actions={actions} paidAction={expensesPaidAction} canEdit={canEdit} attachments={attachments} count={data.rowCount} />
       </TableWrap>
+      <Pagination page={pg.page} pageSize={pg.take} total={data.rowCount} params={sp} basePath="/troskovi" />
     </>
   );
 }

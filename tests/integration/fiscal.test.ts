@@ -19,7 +19,8 @@ const companies: string[] = [];
 
 async function setup(opts: { operatorOib?: string | null } = {}) {
   const c = await db.company.create({
-    data: { name: `Fisk ${Date.now()}-${Math.random()}`, oib: OIB, invoicePremises: 'PP1', invoiceDevice: '1', fiscalEnabled: true, fiscalEnv: 'TEST', eInvoiceProvider: 'demo' },
+    // zadane KPD šifre: eRačun (B2B) se bez KPD-a na svakoj stavci ne izdaje (HR-BR-25)
+    data: { name: `Fisk ${Date.now()}-${Math.random()}`, oib: OIB, invoicePremises: 'PP1', invoiceDevice: '1', fiscalEnabled: true, fiscalEnv: 'TEST', eInvoiceProvider: 'demo', kpdSale: '26.20.11', kpdService: '62.90.10' },
   });
   companies.push(c.id);
   await transaction((tx) => bootstrapCompany(tx, c.id));

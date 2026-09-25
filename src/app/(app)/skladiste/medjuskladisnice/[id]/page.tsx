@@ -53,17 +53,18 @@ export default async function TransferDocPage({ params }: { params: Promise<{ id
             </tr>
           </tbody>
         </table>
+        {/* serijski broj odmah iza rednog broja — na uskom zaslonu ostaje vidljiv (šifra je zadnja) */}
         <DocTable
-          head={['R.br.', 'Šifra', 'Model', 'Serijski broj']}
+          head={['R.br.', 'Serijski broj', 'Model', 'Šifra']}
           align={['right', 'left', 'left', 'left']}
           rows={t.items.map(({ item }, i) => [
             `${i + 1}.`,
-            item.model.code ?? '',
-            modelLabel(item.model),
-            <span key="s" className="font-mono">
+            <span key="s" className="font-mono whitespace-nowrap">
               {item.serial}
               {item.dupNote ? ` (${item.dupNote})` : ''}
             </span>,
+            modelLabel(item.model),
+            item.model.code ?? '',
           ])}
         />
         <p className="mt-3 text-right font-semibold">Ukupno: {t.items.length} kom</p>

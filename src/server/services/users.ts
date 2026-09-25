@@ -5,7 +5,7 @@ import bcrypt from 'bcryptjs';
 import { audit } from '../audit';
 import { DomainError, assert } from '../errors';
 import type { Actor } from './items';
-import { LEVEL_LABEL, MODULES, ROLE_DEFAULTS, ROLE_LABEL, type Level, type Module } from '@/domain/permissions';
+import { LEVEL_LABEL, MODULES, ROLE_DEFAULTS, ROLE_LABEL, resolvePermissions, type Level, type Module, type PermissionMap } from '@/domain/permissions';
 
 export interface UserInput {
   name: string;
@@ -48,7 +48,44 @@ async function revokeSessions(tx: Tx, userId: string) {
   await tx.session.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } });
 }
 
+const RANK: Record<Level, number> = { none: 0, view: 1, ops: 2, edit: 3 };
+
+/**
+ * Ne-administrator ne smije mijenjati vlastita prava ni ulogu, niti drugome dodijeliti
+ * razinu višu od vlastite (za svaki modul, uključujući costs i log). Razina koju korisnik
+ * već ima ostaje dopuštena (uređivanje imena ne ruši postojeća prava).
+ */
+export function assertGrantAllowed(
+  actorPerms: PermissionMap,
+  self: boolean,
+  before: { role: Role; permissions: unknown } | null,
+  next: { role: Role; permissions: Partial<Record<string, Level>> },
+) {
+  const after = resolvePermissions(next.role, next.permissions);
+  const prev = before ? resolvePermissions(before.role, before.permissions as Partial<Record<string, Level>>) : null;
+  if (self && prev) {
+    const same = before!.role === next.role && (Object.keys(MODULES) as Module[]).every((m) => prev[m] === after[m]);
+    assert(same, 'Ne možete mijenjati vlastitu ulogu ni prava — to radi administrator.');
+    return;
+  }
+  for (const m of Object.keys(MODULES) as Module[]) {
+    if (RANK[after[m]] <= RANK[actorPerms[m]]) continue;
+    if (prev && RANK[after[m]] <= RANK[prev[m]]) continue;
+    throw new DomainError(`Ne možete dodijeliti pravo „${MODULES[m]}" (${LEVEL_LABEL[after[m]]}) više od vlastitog (${LEVEL_LABEL[actorPerms[m]]}).`);
+  }
+}
+
 export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: UserInput) {
+  // prava se provjeravaju prije valjanosti polja — ne-administrator ne dobiva poruke o tuđem (admin) računu
+  const me = await tx.user.findFirst({ where: { id: actor.id }, select: { role: true, permissions: true } });
+  const actorIsAdmin = me?.role === 'ADMIN';
+  const before = id ? await tx.user.findFirst({ where: { id, ...inCompany(actor.companyId) } }) : null;
+  if (id) assert(before, 'Korisnik ne postoji.');
+  if (!actorIsAdmin && before) assert(before.role !== 'ADMIN', 'Samo administrator može mijenjati podatke administratora.');
+  if (!actorIsAdmin) assert(input.role !== 'ADMIN', 'Samo administrator može dodijeliti ulogu administratora.');
+  // opasnu zonu i odobrenja statusa dodjeljuje samo administrator
+  if (!actorIsAdmin) assert(!input.canDanger, 'Pravo na opasnu zonu dodjeljuje samo administrator.');
+
   const email = input.email.trim().toLowerCase();
   assert(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), 'Neispravna e-adresa.');
   if (input.password !== null) assert(input.password.length >= MIN_PASSWORD, `Lozinka mora imati barem ${MIN_PASSWORD} znakova.`);
@@ -58,14 +95,9 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
   const oib = input.oib?.trim() || null;
   if (oib) assert(/^\d{11}$/.test(oib), 'OIB mora imati 11 znamenki.');
 
-  // samo administrator dodjeljuje ulogu administratora i uređuje administratore
-  const me = await tx.user.findFirst({ where: { id: actor.id }, select: { role: true } });
-  const actorIsAdmin = me?.role === 'ADMIN';
-  // opasnu zonu i odobrenja statusa dodjeljuje samo administrator
-  if (!actorIsAdmin) {
-    assert(!input.canDanger, 'Pravo na opasnu zonu dodjeljuje samo administrator.');
+  if (!actorIsAdmin && me) {
+    assertGrantAllowed(resolvePermissions(me.role, me.permissions as Partial<Record<string, Level>>), id === actor.id, before, { role: input.role, permissions });
   }
-  if (!actorIsAdmin) assert(input.role !== 'ADMIN', 'Samo administrator može dodijeliti ulogu administratora.');
 
   if (!id) {
     assert(input.password, 'Lozinka je obavezna za novog korisnika.');
@@ -96,9 +128,7 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
     return u.id;
   }
 
-  const before = await tx.user.findFirst({ where: { id, ...inCompany(actor.companyId) } });
   assert(before, 'Korisnik ne postoji.');
-  if (!actorIsAdmin) assert(before.role !== 'ADMIN', 'Samo administrator može mijenjati podatke administratora.');
   if (id === actor.id) {
     assert(input.active, 'Ne možete deaktivirati sami sebe.');
     assert(!(before.role === 'ADMIN' && input.role !== 'ADMIN'), 'Ne možete sami sebi oduzeti ulogu administratora.');

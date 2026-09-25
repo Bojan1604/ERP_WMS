@@ -12,6 +12,7 @@ import { ReportFilters } from '@/components/reports/report-filters';
 import { ReportTable } from '@/components/reports/report-table';
 import { ReportChart } from '@/components/reports/report-chart';
 import { ExportButtons } from '@/components/ui/export-buttons';
+import { Pagination, readPage } from '@/components/ui/pagination';
 
 type Params = Record<string, string | string[] | undefined>;
 
@@ -27,10 +28,12 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
   const sp = await searchParams;
   const f = readFilters(def, sp);
   const currentYear = Number(today().slice(0, 4));
+  // velike tablice po stranicama (zbroj je preko svih redaka, izvoz sadrži sve)
+  const pg = readPage(sp, 200);
   const needsLookups = def.filters.some((k) => ['category', 'model', 'status', 'warehouse'].includes(k));
 
   const [result, lookups, partners, suppliers, first] = await Promise.all([
-    runReport(def, user.companyId, f, { canSeeCost: costs }),
+    runReport(def, user.companyId, f, { canSeeCost: costs, page: { skip: pg.skip, take: pg.take } }),
     needsLookups ? getLookups(user.companyId) : null,
     def.filters.includes('partner') ? getPartnerOptions(user.companyId) : null,
     def.filters.includes('supplier') ? getPartnerOptions(user.companyId, 'supplier') : null,
@@ -38,7 +41,8 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
   ]);
   const minYear = Math.max(currentYear - 9, Math.min(first?._min.year ?? currentYear, currentYear));
   const years = Array.from({ length: currentYear - minYear + 1 }, (_, i) => minYear + i);
-  const qs = new URLSearchParams(Object.entries(sp).filter((e): e is [string, string] => typeof e[1] === 'string')).toString();
+  const qs = new URLSearchParams(Object.entries(sp).filter((e): e is [string, string] => typeof e[1] === 'string' && e[0] !== 'page')).toString();
+  const rowCount = result.rowCount ?? result.rows.length;
   const names = <T extends { id: string }>(list: T[] | undefined | null, ids: string[], label: (x: T) => string) =>
     ids.length ? ids.map((id) => list?.find((x) => x.id === id)).filter((x): x is T => !!x).map(label).join(', ') : null;
   const subtitle = [
@@ -87,6 +91,8 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
         statuses={(lookups?.statuses ?? []).map((x) => ({ value: x.id, label: x.name }))}
         warehouses={(lookups?.warehouses ?? []).map((w) => ({ value: w.id, label: w.name }))}
       />
+      {/* široki izvještaji (npr. starost potraživanja) na A4 položeno da stanu svi stupci */}
+      {result.columns.length > 6 && <style>{'@media print { @page { size: A4 landscape; margin: 10mm 8mm; } }'}</style>}
       <div className="print-area">
         <p className="mb-2 hidden text-lg font-semibold print:block">
           {def.title} {subtitle && <span className="font-normal">— {subtitle}</span>}
@@ -94,6 +100,12 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
         {subtitle && <p className="no-print mb-2 text-sm text-fg-3">{subtitle}</p>}
         {result.chart && <ReportChart spec={result.chart} title={`${def.title}${subtitle ? ` · ${subtitle}` : ''}`} />}
         <ReportTable columns={result.columns} rows={result.rows} totals={result.totals} />
+        {rowCount > pg.take && <Pagination page={pg.page} pageSize={pg.take} total={rowCount} params={sp} basePath={`/izvjestaji/${def.slug}`} />}
+        {rowCount > pg.take && (
+          <p className="mt-1 hidden text-xs print:block">
+            Stranica {pg.page} od {Math.ceil(rowCount / pg.take)} ({rowCount} redaka) — za sve retke koristite izvoz.
+          </p>
+        )}
         {result.note && <p className="mt-2 text-sm text-fg-3">{result.note}</p>}
       </div>
     </>

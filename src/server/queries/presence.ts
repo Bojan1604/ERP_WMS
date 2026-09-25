@@ -3,13 +3,17 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { db } from '../db';
 
-/** Korisnik je „prijavljen" ako je bio aktivan u zadnjih 5 minuta (User.lastSeenAt). */
+/** Korisnik je „prijavljen" ako je bio aktivan u zadnjih 5 minuta (User.lastSeenAt) i ima važeću sesiju. */
 export const ONLINE_MS = 5 * 60_000;
 
 /** Tko je trenutno u programu (ova firma, bez vanjskih korisnika MDM-a). Indeks (companyId, lastSeenAt). */
 export async function onlineUsers(companyId: string) {
   const rows = await db.user.findMany({
-    where: { companyId, active: true, role: { notIn: ['DISTRIBUTOR', 'CLIENT'] }, lastSeenAt: { gt: new Date(Date.now() - ONLINE_MS) } },
+    where: {
+      companyId, active: true, role: { notIn: ['DISTRIBUTOR', 'CLIENT'] }, lastSeenAt: { gt: new Date(Date.now() - ONLINE_MS) },
+      // odjavljeni (nema važeće sesije) nije „prijavljen", iako je bio aktivan prije manje od 5 minuta
+      sessions: { some: { revokedAt: null, expiresAt: { gt: new Date() } } },
+    },
     orderBy: { lastSeenAt: 'desc' },
     take: 50,
     select: { id: true, name: true, lastSeenAt: true },

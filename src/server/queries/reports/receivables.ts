@@ -1,6 +1,6 @@
 import 'server-only';
 import { Prisma } from '@prisma/client';
-import { db } from '../../db';
+import { reportSql } from './sql';
 import { today } from '@/domain/dates';
 import { inIds, n, periodSql, typeSql, type ReportDef, type Row } from './types';
 
@@ -25,7 +25,7 @@ export const receivableReports: ReportDef[] = [
     filters: ['partner', 'type'],
     run: async (companyId, f) => {
       const now = today();
-      const rows = await db.$queryRaw<Array<{ id: string; name: string; cnt: number; notDue: Prisma.Decimal; d30: Prisma.Decimal; d60: Prisma.Decimal; d90: Prisma.Decimal; d90p: Prisma.Decimal; total: Prisma.Decimal; maxLate: number | null }>>`
+      const rows = await reportSql<Array<{ id: string; name: string; cnt: number; notDue: Prisma.Decimal; d30: Prisma.Decimal; d60: Prisma.Decimal; d90: Prisma.Decimal; d90p: Prisma.Decimal; total: Prisma.Decimal; maxLate: number | null }>>`
         WITH o AS (
           SELECT i."partnerId", i."openAmount" AS amt, (${now}::date - COALESCE(i."dueDate", i."date")) AS late
           FROM "Invoice" i JOIN "Partner" p ON p.id = i."partnerId"
@@ -39,7 +39,7 @@ export const receivableReports: ReportDef[] = [
                COALESCE(SUM(amt) FILTER (WHERE late > 90), 0) AS d90p,
                SUM(amt) AS total, MAX(late)::int AS "maxLate"
         FROM o JOIN "Partner" p ON p.id = o."partnerId"
-        GROUP BY p.id ORDER BY total DESC`;
+        GROUP BY p.id ORDER BY total DESC, p.name, p.id`;
       const out: Row[] = rows.map((r) => ({
         name: r.name, invoices: r.cnt, notDue: n(r.notDue), d30: n(r.d30), d60: n(r.d60), d90: n(r.d90), d90p: n(r.d90p), total: n(r.total),
         maxLate: r.maxLate && r.maxLate > 0 ? r.maxLate : null, _href: `/partneri/${r.id}?tab=racuni`,
@@ -65,15 +65,22 @@ export const receivableReports: ReportDef[] = [
     area: 'Naplata',
     description: 'Svi izdani računi s otvorenim iznosom, od najstarijeg dospijeća.',
     filters: ['range', 'partner', 'type'],
-    run: async (companyId, f) => {
+    run: async (companyId, f, ctx) => {
       const now = today();
-      const rows = await db.$queryRaw<Array<{ id: string; number: string | null; partner: string; date: Date; dueDate: Date | null; total: Prisma.Decimal; paid: Prisma.Decimal; open: Prisma.Decimal; late: number }>>`
-        SELECT i.id, i."number", p.name AS partner, i."date", i."dueDate", i."grandTotal" AS total, i."paidTotal" + i."advanceAmount" + i."creditedTotal" AS paid,
-               i."openAmount" AS open, (${now}::date - COALESCE(i."dueDate", i."date"))::int AS late
-        FROM "Invoice" i JOIN "Partner" p ON p.id = i."partnerId"
-        WHERE ${openSql(companyId)} ${inIds('i."partnerId"', f.partnerIds)} ${typeSql('i."type"', f)} ${periodSql('i."date"', { year: null, from: f.from, to: f.to })}
-        ORDER BY COALESCE(i."dueDate", i."date"), i."seq"
-        LIMIT 2000`;
+      // desetci tisuća otvorenih računa: ekran dobiva stranicu iz baze, zbrojevi agregatom; izvoz sve
+      const where = Prisma.sql`${openSql(companyId)} ${inIds('i."partnerId"', f.partnerIds)} ${typeSql('i."type"', f)} ${periodSql('i."date"', { year: null, from: f.from, to: f.to })}`;
+      const page = ctx.page ? Prisma.sql`LIMIT ${ctx.page.take} OFFSET ${ctx.page.skip}` : Prisma.empty;
+      const [rows, [agg]] = await Promise.all([
+        reportSql<Array<{ id: string; number: string | null; partner: string; date: Date; dueDate: Date | null; total: Prisma.Decimal; paid: Prisma.Decimal; open: Prisma.Decimal; late: number }>>`
+          SELECT i.id, i."number", p.name AS partner, i."date", i."dueDate", i."grandTotal" AS total, i."paidTotal" + i."advanceAmount" + i."creditedTotal" AS paid,
+                 i."openAmount" AS open, (${now}::date - COALESCE(i."dueDate", i."date"))::int AS late
+          FROM "Invoice" i JOIN "Partner" p ON p.id = i."partnerId"
+          WHERE ${where}
+          ORDER BY COALESCE(i."dueDate", i."date"), i."seq", i.id ${page}`,
+        reportSql<Array<{ cnt: number; total: Prisma.Decimal | null; paid: Prisma.Decimal | null; open: Prisma.Decimal | null }>>`
+          SELECT COUNT(*)::int AS cnt, SUM(i."grandTotal") AS total, SUM(i."paidTotal" + i."advanceAmount" + i."creditedTotal") AS paid, SUM(i."openAmount") AS open
+          FROM "Invoice" i JOIN "Partner" p ON p.id = i."partnerId" WHERE ${where}`,
+      ]);
       return {
         columns: [
           { key: 'number', label: 'Račun' },
@@ -89,7 +96,8 @@ export const receivableReports: ReportDef[] = [
           number: r.number, partner: r.partner, date: r.date.toISOString().slice(0, 10), dueDate: r.dueDate?.toISOString().slice(0, 10) ?? null,
           late: r.late > 0 ? r.late : null, total: n(r.total), paid: n(r.paid), open: n(r.open), _href: `/prodaja/racuni/${r.id}`,
         })),
-        note: rows.length === 2000 ? 'Prikazano je prvih 2000 računa.' : undefined,
+        totals: agg.cnt ? { number: `${agg.cnt} računa`, total: n(agg.total), paid: n(agg.paid), open: n(agg.open) } : null,
+        rowCount: ctx.page ? agg.cnt : undefined,
       };
     },
   },
@@ -100,7 +108,7 @@ export const receivableReports: ReportDef[] = [
     description: 'Prosječan broj dana od datuma računa do potpune naplate, i koliko kupac kasni nakon dospijeća.',
     filters: ['year', 'range', 'partner', 'type'],
     run: async (companyId, f) => {
-      const rows = await db.$queryRaw<Array<{ id: string; name: string; paid: number; avgDays: number | null; avgLate: number | null; lateShare: number | null; maxDays: number | null; amount: Prisma.Decimal }>>`
+      const rows = await reportSql<Array<{ id: string; name: string; paid: number; avgDays: number | null; avgLate: number | null; lateShare: number | null; maxDays: number | null; amount: Prisma.Decimal }>>`
         SELECT p.id, p.name, COUNT(*)::int AS paid,
                AVG(i."paidDate" - i."date")::float8 AS "avgDays",
                AVG(GREATEST(0, i."paidDate" - COALESCE(i."dueDate", i."date")))::float8 AS "avgLate",
@@ -110,7 +118,7 @@ export const receivableReports: ReportDef[] = [
         FROM "Invoice" i JOIN "Partner" p ON p.id = i."partnerId"
         WHERE i."companyId" = ${companyId} AND i."status" = 'ISSUED' AND i."kind" IN ('INVOICE','ADVANCE') AND i."stornoed" = false
           AND i."paidDate" IS NOT NULL AND p."excluded" = false ${periodSql('i."date"', f)} ${inIds('i."partnerId"', f.partnerIds)} ${typeSql('i."type"', f)}
-        GROUP BY p.id ORDER BY "avgDays" DESC`;
+        GROUP BY p.id ORDER BY "avgDays" DESC, p.name, p.id`;
       const all = rows.reduce((a, r) => a + r.paid, 0);
       const wAvg = (k: 'avgDays' | 'avgLate') => (all ? rows.reduce((a, r) => a + (r[k] ?? 0) * r.paid, 0) / all : null);
       return {

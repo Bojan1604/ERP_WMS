@@ -1,6 +1,6 @@
 import 'server-only';
 import { Prisma } from '@prisma/client';
-import { db } from '../../db';
+import { reportSql } from './sql';
 import { addDays, today } from '@/domain/dates';
 import { STATUS_KIND_LABEL } from '../../services/items';
 import { inIds, iso, itemFilterSql, n, periodSql, r2, type ReportDef, type Row } from './types';
@@ -23,7 +23,7 @@ export const stockReports: ReportDef[] = [
     description: 'Broj uređaja i nabavna vrijednost po statusu.',
     filters: ['partner', 'category', 'model', 'status', 'warehouse', 'supplier'],
     run: async (companyId, f) => {
-      const rows = await db.$queryRaw<Array<{ name: string; kind: string; cnt: number; value: Prisma.Decimal }>>`
+      const rows = await reportSql<Array<{ name: string; kind: string; cnt: number; value: Prisma.Decimal }>>`
         SELECT s.name, s."kind"::text AS kind, COUNT(it.id)::int AS cnt, COALESCE(SUM(it."cost"), 0) AS value
         FROM "Item" it
         JOIN "ItemStatus" s ON s.id = it."statusId"
@@ -57,7 +57,7 @@ export const stockReports: ReportDef[] = [
     description: 'Uređaji na skladištu (raspoloživi) po kategoriji i skladištu, s nabavnom vrijednošću.',
     filters: ['category', 'model', 'status', 'warehouse', 'supplier'],
     run: async (companyId, f) => {
-      const rows = await db.$queryRaw<Array<{ category: string | null; warehouse: string | null; cnt: number; value: Prisma.Decimal; models: number }>>`
+      const rows = await reportSql<Array<{ category: string | null; warehouse: string | null; cnt: number; value: Prisma.Decimal; models: number }>>`
         SELECT c.name AS category, w.name AS warehouse, COUNT(*)::int AS cnt, SUM(it."cost") AS value, COUNT(DISTINCT m.id)::int AS models
         FROM "Item" it
         JOIN "DeviceModel" m ON m.id = it."modelId"
@@ -89,7 +89,7 @@ export const stockReports: ReportDef[] = [
     filters: ['category', 'model', 'status', 'warehouse', 'supplier'],
     run: async (companyId, f) => {
       const now = today();
-      const rows = await db.$queryRaw<Array<Record<string, number> & { id: string; model: string; value: Prisma.Decimal; avgDays: number }>>`
+      const rows = await reportSql<Array<Record<string, number> & { id: string; model: string; value: Prisma.Decimal; avgDays: number }>>`
         WITH s AS (
           SELECT it."modelId", it."cost",
                  (${now}::date - COALESCE(it."importDate", it."createdAt"::date)) AS days,
@@ -134,7 +134,7 @@ export const stockReports: ReportDef[] = [
     defaultDays: 60,
     run: async (companyId, f) => {
       const now = today();
-      const rows = await db.$queryRaw<Array<{ id: string; serial: string; model: string; partner: string | null; partnerId: string | null; start: Date; ends: Date; left: number }>>`
+      const rows = await reportSql<Array<{ id: string; serial: string; model: string; partner: string | null; partnerId: string | null; start: Date; ends: Date; left: number }>>`
         SELECT it.id, it.serial, concat_ws(' ', m.brand, m.name) AS model, hp.name AS partner, hp.id AS "partnerId",
                it."warrantyStart" AS start, (it."warrantyStart" + make_interval(months => it."warrantyMonths"))::date AS ends,
                ((it."warrantyStart" + make_interval(months => it."warrantyMonths"))::date - ${now}::date) AS left
@@ -166,13 +166,20 @@ export const stockReports: ReportDef[] = [
     area: 'Skladište',
     description: 'Uređaji otpisani u godini, s razlogom i nabavnom vrijednošću (gubitak).',
     filters: ['year', 'range', 'category', 'model', 'warehouse', 'supplier'],
-    run: async (companyId, f) => {
-      const rows = await db.$queryRaw<Array<{ id: string; serial: string; model: string; date: Date | null; reason: string | null; cost: Prisma.Decimal }>>`
-        SELECT it.id, it.serial, concat_ws(' ', m.brand, m.name) AS model, it."writeOffDate" AS date, it."writeOffReason" AS reason, it."cost"
-        FROM "Item" it JOIN "DeviceModel" m ON m.id = it."modelId"
-        WHERE it."companyId" = ${companyId} AND it."state" = 'WRITTEN_OFF'
-          ${periodSql('COALESCE(it."writeOffDate", it."updatedAt"::date)', f)} ${itemFilterSql(f, { partner: false })}
-        ORDER BY it."writeOffDate" DESC NULLS LAST, it.serial`;
+    run: async (companyId, f, ctx) => {
+      // može biti desetke tisuća uređaja: ekran dobiva stranicu iz baze, zbroj ide agregatom; izvoz sve
+      const where = Prisma.sql`it."companyId" = ${companyId} AND it."state" = 'WRITTEN_OFF'
+          ${periodSql('COALESCE(it."writeOffDate", it."updatedAt"::date)', f)} ${itemFilterSql(f, { partner: false })}`;
+      const page = ctx.page ? Prisma.sql`LIMIT ${ctx.page.take} OFFSET ${ctx.page.skip}` : Prisma.empty;
+      const [rows, [agg]] = await Promise.all([
+        reportSql<Array<{ id: string; serial: string; model: string; date: Date | null; reason: string | null; cost: Prisma.Decimal }>>`
+          SELECT it.id, it.serial, concat_ws(' ', m.brand, m.name) AS model, it."writeOffDate" AS date, it."writeOffReason" AS reason, it."cost"
+          FROM "Item" it JOIN "DeviceModel" m ON m.id = it."modelId"
+          WHERE ${where}
+          ORDER BY it."writeOffDate" DESC NULLS LAST, it.serial, it.id ${page}`,
+        reportSql<Array<{ cnt: number; cost: Prisma.Decimal | null }>>`
+          SELECT COUNT(*)::int AS cnt, SUM(it."cost") AS cost FROM "Item" it JOIN "DeviceModel" m ON m.id = it."modelId" WHERE ${where}`,
+      ]);
       return {
         columns: [
           { key: 'serial', label: 'Serijski broj', kind: 'mono' },
@@ -182,7 +189,8 @@ export const stockReports: ReportDef[] = [
           { key: 'cost', label: 'Nabavna vrijednost', kind: 'money', cost: true },
         ],
         rows: rows.map((r) => ({ serial: r.serial, model: r.model, date: iso(r.date), reason: r.reason, cost: n(r.cost), _href: `/skladiste/${r.id}` })),
-        totals: rows.length ? { serial: `${rows.length} uređaja`, cost: r2(rows.reduce((a, r) => a + n(r.cost), 0)) } : null,
+        totals: agg.cnt ? { serial: `${agg.cnt} uređaja`, cost: r2(n(agg.cost)) } : null,
+        rowCount: ctx.page ? agg.cnt : undefined,
       };
     },
   },
@@ -193,7 +201,7 @@ export const stockReports: ReportDef[] = [
     description: 'Servisni nalozi po modelu: otvoreni i zatvoreni, jamstveni, trajanje popravka i udio kvarova.',
     filters: ['year', 'range', 'partner', 'category', 'model'],
     run: async (companyId, f) => {
-      const rows = await db.$queryRaw<Array<{ model: string | null; total: number; open: number; closed: number; warranty: number; avgDays: number | null; cost: Prisma.Decimal; devices: number | null }>>`
+      const rows = await reportSql<Array<{ model: string | null; total: number; open: number; closed: number; warranty: number; avgDays: number | null; cost: Prisma.Decimal; devices: number | null }>>`
         SELECT concat_ws(' ', m.brand, m.name) AS model, COUNT(*)::int AS total,
                COUNT(*) FILTER (WHERE so."status" IN ('REPORTED','RECEIVED','DIAGNOSIS','AT_SUPPLIER'))::int AS open,
                COUNT(*) FILTER (WHERE so."status" NOT IN ('REPORTED','RECEIVED','DIAGNOSIS','AT_SUPPLIER'))::int AS closed,

@@ -141,7 +141,8 @@ export async function dashboardData(companyId: string, perms: PermissionMap) {
     skip(service, () => db.serviceOrder.count({ where: { companyId, status: { in: [...OPEN_SERVICE] } } })),
     skip(wh || rentals, () => returnCandidates(companyId)),
     skip(whEdit, () => db.approvalRequest.findMany({ where: { companyId, status: 'PENDING', kind: 'RECEIVE' }, orderBy: { createdAt: 'asc' }, take: 20, select: { id: true, requestedBy: true, payload: true } })),
-    skip(expensesOn || money, () => expensesByMonth(companyId, year).then((e) => e.total.reduce((a, b) => a + b, 0))),
+    // troškovi uključuju nabavu robe (nabavne cijene) — samo uz pravo na troškove I na nabavne cijene
+    skip(expensesOn && costs, () => expensesByMonth(companyId, year).then((e) => e.total.reduce((a, b) => a + b, 0))),
     skip(settings, () => db.company.findUniqueOrThrow({ where: { id: companyId }, select: { backupReminderDays: true, lastBackupAt: true, autoBackup: true } })),
     // nove prijave kvara s portala za klijente (servisni nalozi izvora PORTAL u statusu „Prijavljeno")
     skip(service, () =>

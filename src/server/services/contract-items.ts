@@ -1,5 +1,5 @@
 import 'server-only';
-import type { Contract, ContractItem, Prisma, ReturnedContractItem } from '@prisma/client';
+import { Prisma, type Contract, type ContractItem, type ContractStatus, type ReturnedContractItem } from '@prisma/client';
 import type { Tx } from '../db';
 import { pendingInstallments, periodsInPause, type ContractDevice, type ContractTerms, type PlanPeriodInput } from '@/domain/billing';
 import { addMonths, fromISO, periodLabel, toISO, today } from '@/domain/dates';
@@ -24,6 +24,7 @@ export function toTerms(c: Contract): ContractTerms {
     seasonFrom: c.seasonFrom,
     seasonTo: c.seasonTo,
     closedAt: c.closedAt ? toISO(c.closedAt) : null,
+    pausedSince: c.pausedSince ? toISO(c.pausedSince) : null,
   };
 }
 
@@ -35,6 +36,7 @@ export function toDevice(ci: ContractItem): ContractDevice {
     status: ci.status,
     skipped: ci.skipped,
     paused: ci.paused,
+    pausedSince: ci.pausedSince ? toISO(ci.pausedSince) : null,
   };
 }
 
@@ -53,25 +55,75 @@ export function toReturnedDevice(r: ReturnedContractItem): ContractDevice {
 
 /**
  * Što je već fakturirano po ugovoru: ključevi `itemId|YYYY-MM` iz izdanih,
- * nestorniranih računa za najam.
+ * nestorniranih računa za najam — za zadane ugovore ili sve ugovore firme.
+ * `since` (YYYY-MM) ograničava na razdoblja od tog mjeseca (motor naplate gleda
+ * samo prozor unatrag).
  */
-export async function coveredPeriods(tx: Tx, contractIds: string[]): Promise<Map<string, Set<string>>> {
+export async function coveredPeriods(tx: Tx, scope: string[] | { companyId: string }, opts: { since?: string } = {}): Promise<Map<string, Set<string>>> {
   const out = new Map<string, Set<string>>();
-  if (!contractIds.length) return out;
-  const lines = await tx.invoiceLine.findMany({
-    where: {
-      itemId: { not: null },
-      invoice: { contractId: { in: contractIds }, status: 'ISSUED', kind: 'INVOICE', stornoed: false },
-      // stavka najma: na računu za najam (osim prodajnih stavki) ili stavka najma na miješanom računu
-      OR: [{ lineType: 'RENT' }, { lineType: null, invoice: { type: 'RENT' } }],
-    },
-    select: { itemId: true, invoice: { select: { contractId: true, period: true, date: true } } },
-  });
+  if (Array.isArray(scope) && !scope.length) return out;
+  // razdoblje stavke: razdoblje računa, bez njega mjesec datuma računa
+  const period = Prisma.sql`COALESCE(NULLIF(v.period, ''), to_char(v.date, 'YYYY-MM'))`;
+  const lines = await tx.$queryRaw<{ contractId: string; itemId: string; period: string }[]>`
+    SELECT DISTINCT v."contractId", l."itemId", ${period} AS period
+    FROM "Invoice" v JOIN "InvoiceLine" l ON l."invoiceId" = v.id
+    WHERE ${Array.isArray(scope) ? Prisma.sql`v."contractId" = ANY(${scope})` : Prisma.sql`v."companyId" = ${scope.companyId} AND v."contractId" IS NOT NULL`}
+      AND v.status = 'ISSUED' AND v.kind = 'INVOICE' AND NOT v.stornoed
+      AND l."itemId" IS NOT NULL
+      -- stavka najma: na računu za najam (osim prodajnih stavki) ili stavka najma na miješanom računu
+      AND (l."lineType" = 'RENT' OR (l."lineType" IS NULL AND v.type = 'RENT'))
+      ${opts.since ? Prisma.sql`AND ${period} COLLATE "C" >= ${opts.since}` : Prisma.empty}`;
   for (const l of lines) {
-    const cid = l.invoice.contractId!;
-    const p = l.invoice.period || toISO(l.invoice.date).slice(0, 7);
-    if (!out.has(cid)) out.set(cid, new Set());
-    out.get(cid)!.add(`${l.itemId}|${p}`);
+    let set = out.get(l.contractId);
+    if (!set) out.set(l.contractId, (set = new Set()));
+    set.add(`${l.itemId}|${l.period}`);
+  }
+  return out;
+}
+
+/**
+ * Uređaji na ugovorima firme za motor naplate, samo sa stupcima koje motor treba.
+ * Preskočena i pauzirana razdoblja skraćuju se na razdoblja od `since` — i to
+ * jednom po skupini jednakih nizova (uvezeni ugovori imaju duge, iste nizove),
+ * pa se ne prenose stotine tisuća starih razdoblja.
+ */
+export async function billingItems(tx: Tx, companyId: string, since: string, contractId?: string) {
+  const scope = Prisma.sql`FROM "ContractItem" ci JOIN "Contract" c ON c.id = ci."contractId"
+    WHERE c."companyId" = ${companyId} ${contractId ? Prisma.sql`AND c.id = ${contractId}` : Prisma.empty}`;
+  const trim = (col: Prisma.Sql) => Prisma.sql`array_to_string(ARRAY(SELECT s FROM unnest(${col}) s WHERE s COLLATE "C" >= ${since}), ',')`;
+  // Jedan upit (isti snimak baze), rezultat kao dva teksta: desetci tisuća redaka kroz Prismu
+  // koštaju višestruko više od raščlanjivanja teksta. Redak uređaja: ugovor, uređaj, cijena, plan
+  // (jsonb::text nema tabulatora ni novih redaka), status, početak pauze; skupina: uređaji, preskočena, pauzirana.
+  const [row] = await tx.$queryRaw<Array<{ items: string | null; groups: string | null }>>`
+    SELECT
+      (SELECT string_agg(concat_ws(E'\t', ci."contractId", ci."itemId", ci.monthly::text, ci.plan::text,
+          COALESCE(ci.status::text, ''), COALESCE(to_char(ci."pausedSince", 'YYYY-MM-DD'), '')), E'\n') ${scope}) AS items,
+      (SELECT string_agg(concat_ws(E'\t', g.ids, g.skipped, g.paused), E'\n') FROM (
+        SELECT string_agg(ci."itemId", ',') AS ids, ${trim(Prisma.sql`ci.skipped`)} AS skipped, ${trim(Prisma.sql`ci.paused`)} AS paused
+        ${scope} GROUP BY ci.skipped, ci.paused) g) AS groups`;
+  const split = (v: string) => (v ? v.split(',') : []);
+  const groups = new Map<string, { skipped: string[]; paused: string[] }>();
+  for (const line of row?.groups?.split('\n') ?? []) {
+    const [ids, skipped, paused] = line.split('\t');
+    const g = { skipped: split(skipped), paused: split(paused) };
+    for (const id of ids.split(',')) groups.set(id, g);
+  }
+  const out: Array<{ contractId: string; device: ContractDevice }> = [];
+  for (const line of row?.items?.split('\n') ?? []) {
+    const [cid, itemId, monthly, plan, status, pausedSince] = line.split('\t');
+    const g = groups.get(itemId)!;
+    out.push({
+      contractId: cid,
+      device: {
+        itemId,
+        monthly: Number(monthly),
+        plan: plan === '[]' ? [] : ((JSON.parse(plan) as PlanPeriodInput[] | null) ?? []),
+        status: (status || null) as ContractStatus | null,
+        skipped: g.skipped,
+        paused: g.paused,
+        pausedSince: pausedSince || null,
+      },
+    });
   }
   return out;
 }

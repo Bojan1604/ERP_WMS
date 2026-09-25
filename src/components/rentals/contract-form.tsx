@@ -100,10 +100,21 @@ export function ContractForm({
             {deferred && <Input type="date" value={v.firstBillingDate ?? ''} disabled={readOnly} onChange={(e) => set('firstBillingDate', e.target.value || null)} required />}
           </div>
         </Field>
-        <Field label="Naplata" required>
+        <Field
+          label="Naplata"
+          required
+          hint={v.billing === 'ONCE' ? 'Jedna rata: mjesečno × mjeseci do kraja ugovora (bez kraja = jedan mjesec).' : undefined}
+        >
           <Select options={BILLING_OPTIONS} value={v.billing} disabled={readOnly} onChange={(e) => set('billing', e.target.value as BillingCode)} />
         </Field>
-        <Field label="Kada se fakturira" hint={BILLING_MODE_LABEL[v.billingMode]}>
+        <Field
+          label="Kada se fakturira"
+          hint={
+            v.billingMode === 'IN_ARREARS' && v.billing !== 'MONTHLY'
+              ? 'Unatrag: rata dospijeva mjesec nakon početka razdoblja koje pokriva (kvartal od siječnja → 1. veljače).'
+              : BILLING_MODE_LABEL[v.billingMode]
+          }
+        >
           <Select options={MODE_OPTIONS} value={v.billingMode} disabled={readOnly} onChange={(e) => set('billingMode', e.target.value as BillingModeCode)} />
         </Field>
         <Field label="Dan naplate" hint="Prazno = dan prve naplate." error={fields.billingDay}>

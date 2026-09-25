@@ -102,10 +102,29 @@ export async function saveOccurrence(tx: Tx, actor: Actor, id: string, period: s
 }
 
 export async function setExpensesPaid(tx: Tx, actor: Actor, ids: string[], paid: boolean) {
-  const rows = await tx.expense.findMany({ where: { id: { in: ids }, companyId: actor.companyId }, select: { id: true, source: true } });
+  const rows = await tx.expense.findMany({
+    where: { id: { in: ids }, companyId: actor.companyId },
+    select: { id: true, source: true, receipt: { select: { id: true, number: true, orderId: true } } },
+  });
   assert(rows.length === ids.length, 'Neki troškovi ne postoje.');
   // plaćenost ulaznog računa živi na računu (i javlja se posredniku); primka i otpis nemaju svoj dokument plaćanja
   assert(!rows.some((r) => r.source === 'SUPPLIER_INVOICE'), 'Plaćanje ulaznog računa označava se na ulaznom računu (Nabava → Ulazni računi).');
+  // trošak primke čiju robu nosi ulazni račun za robu: plaćenost prelazi s računa na primku (jedan smjer) —
+  // plaća se račun, inače bi primka bila plaćena, a račun (i posrednik) ne
+  for (const r of rows) {
+    if (!r.receipt) continue;
+    const si = await tx.supplierInvoice.findFirst({
+      where: {
+        companyId: actor.companyId,
+        status: { not: 'REJECTED' },
+        goodsInvoice: true,
+        expense: { is: null },
+        OR: [{ receiptId: r.receipt.id }, ...(r.receipt.orderId ? [{ orderId: r.receipt.orderId }] : [])],
+      },
+      select: { internalNo: true },
+    });
+    assert(!si, `Trošak primke ${r.receipt.number} plaća se preko ulaznog računa za robu ${si?.internalNo ?? ''} (Nabava → Ulazni računi) — plaćenost računa prelazi na primku.`);
+  }
   // već plaćenima se ne mijenja datum plaćanja
   if (paid) await tx.expense.updateMany({ where: { id: { in: ids }, companyId: actor.companyId, paid: false }, data: { paid: true, paidDate: fromISO(today()) } });
   else await tx.expense.updateMany({ where: { id: { in: ids }, companyId: actor.companyId }, data: { paid: false, paidDate: null } });

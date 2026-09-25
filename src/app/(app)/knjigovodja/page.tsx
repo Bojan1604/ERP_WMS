@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { Calculator, Mail } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { getCompany } from '@/server/queries/lookups';
@@ -25,14 +24,8 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
   const user = await pageAccess('reports', 'view');
   const sp = await searchParams;
   const f = readAccountantFilters(sp);
-  // zadano razdoblje upisuje se u URL da ga filtri datuma prikažu (i da je poveznica djeljiva)
-  if (sp.od !== f.from || sp.do !== f.to) {
-    const qs = new URLSearchParams();
-    for (const [k, v] of Object.entries(sp)) if (typeof v === 'string' && v) qs.set(k, v);
-    qs.set('od', f.from);
-    qs.set('do', f.to);
-    redirect(`/knjigovodja?${qs}`);
-  }
+  // zadano razdoblje (ovaj mjesec) filtri datuma prikazuju kao zamjensku vrijednost — bez preusmjeravanja
+  // (prije: 307 na ?od=&do= = dodatni krug do poslužitelja pri svakom otvaranju i predučitavanju)
   const [list, company] = await Promise.all([listAccountant(user.companyId, f, { out: can(user.perms, 'sales', 'view'), in: can(user.perms, 'purchasing', 'view') }), getCompany(user.companyId)]);
   const { rows, totals, dirs } = list;
   const canMark = can(user.perms, 'reports', 'ops');
@@ -43,6 +36,8 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
   const subject = encodeURIComponent(subjectText);
   const exportQs = new URLSearchParams();
   for (const [k, v] of Object.entries(sp)) if (typeof v === 'string' && v && k !== 'page') exportQs.set(k, v);
+  exportQs.set('od', f.from);
+  exportQs.set('do', f.to);
 
   return (
     <>
@@ -90,8 +85,8 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
         />
         <SearchFilter placeholder="Broj, partner, OIB…" />
         <div aria-hidden className="h-0 basis-full max-sm:hidden" />
-        <DateFilter name="od" label="Od" />
-        <DateFilter name="do" label="Do" />
+        <DateFilter name="od" label="Od" fallback={f.from} />
+        <DateFilter name="do" label="Do" fallback={f.to} />
         <SelectFilter
           name="poslano"
           placeholder="Poslano i neposlano"

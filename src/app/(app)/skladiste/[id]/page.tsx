@@ -5,7 +5,7 @@ import { db } from '@/server/db';
 import { getLookups, modelLabel } from '@/server/queries/lookups';
 import { getItemCard } from '@/server/queries/warehouse';
 import { plain } from '@/server/plain';
-import { can, canSeeCost } from '@/domain/permissions';
+import { can, canSeeCost, needsStatusApproval } from '@/domain/permissions';
 import { num } from '@/domain/money';
 import { toISO } from '@/domain/dates';
 import { suggestedSalePrice, warrantyEnd } from '@/domain/pricing';
@@ -45,7 +45,7 @@ export default async function ItemCardPage({ params }: { params: Promise<{ id: s
   if (!card) notFound();
   const { item, contract } = card;
 
-  const perms = { canEdit: can(user.perms, 'warehouse', 'edit'), canOps: can(user.perms, 'warehouse', 'ops'), needsApproval: company.statusChangeNeedsApproval };
+  const perms = { canEdit: can(user.perms, 'warehouse', 'edit'), canOps: can(user.perms, 'warehouse', 'ops'), needsApproval: needsStatusApproval(user, company.statusChangeNeedsApproval) };
   const models = lookups.models.map((m) => ({ value: m.id, label: modelLabel(m) }));
   if (!models.some((m) => m.value === item.modelId)) models.unshift({ value: item.model.id, label: modelLabel(item.model) });
   const options = {

@@ -50,7 +50,12 @@ export async function savePartner(tx: Tx, actor: Actor, id: string | null, input
     data.vatCategoryOverride = v;
   }
   if (input.branchCode !== undefined) data.branchCode = input.branchCode?.trim() || null;
-  if (input.branchName !== undefined) data.branchName = input.branchCode?.trim() ? input.branchName?.trim() || null : null;
+  if (input.branchName !== undefined) {
+    const name = input.branchName?.trim() || null;
+    // naziv jedinice bez šifre nema značenja na eRačunu — ne briše se tiho, nego se traži šifra
+    assert(!name || input.branchCode?.trim(), 'Upišite šifru poslovne jedinice uz njen naziv (ili obrišite naziv).');
+    data.branchName = name;
+  }
   if (data.oib) {
     const dup = await tx.partner.findFirst({ where: { companyId: actor.companyId, oib: data.oib, ...(id ? { id: { not: id } } : {}) }, select: { name: true } });
     assert(!dup, `Partner s OIB-om ${data.oib} već postoji: ${dup?.name}.`);

@@ -5,6 +5,7 @@ import { num, r2 } from '@/domain/money';
 import { taxNotes, VAT_ON_PAYMENT_NOTE } from '@/domain/tax';
 import { amount, decimal, eur } from '@/lib/format';
 import { PAYMENT_METHOD_LABEL, type PaymentMethodCode } from '@/domain/fiscal';
+import { invoiceRentMonths, rentLineView, rentPeriodRange } from '@/domain/sales-lines';
 
 /** Podaci računa za ispis — obični objekti (poslužitelj ih priprema iz baze). */
 export interface InvoiceDocData {
@@ -24,6 +25,8 @@ export interface InvoiceDocData {
   vatTotal: number;
   grandTotal: number;
   advanceAmount: number;
+  /** Uračunati računi za predujam (broj, datum, iznos s PDV-om). */
+  advances: Array<{ number: string | null; date: string; amount: number }>;
   paidTotal: number;
   openAmount: number;
   charges: ChargeInput[];
@@ -38,7 +41,9 @@ export interface InvoiceDocData {
   zki: string | null;
   jir: string | null;
   /** Uređaji istog modela i cijene spojeni u jednu stavku (količina, popis serijskih). */
-  lines: Array<{ description: string; serials: string[]; code: string | null; kpd: string | null; unit: string; qty: number; unitPrice: number; discountPct: number; netAmount: number }>;
+  lines: Array<{ description: string; note: string | null; serials: string[]; code: string | null; kpd: string | null; unit: string; qty: number; unitPrice: number; discountPct: number; netAmount: number }>;
+  /** Razdoblje najma za ispis (od–do prema broju mjeseci naplate), npr. „09/2026 – 11/2026". */
+  periodLabel: string | null;
 }
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -89,6 +94,7 @@ export function InvoiceDocument({
     ...(hasCode ? [l.code ?? ''] : []),
     <div key="d">
       {l.description}
+      {l.note && <div className="text-[10.5px] text-black/60">{l.note}</div>}
       {l.serials.length > 0 && <div className="font-mono text-[10.5px] text-black/60">SN: {l.serials.join(', ')}</div>}
     </div>,
     ...(hasKpd ? [l.kpd ?? ''] : []),
@@ -104,14 +110,19 @@ export function InvoiceDocument({
   totals.push(['Osnovica', amount(inv.netTotal)], [`PDV ${decimal(inv.vatRate)} %`, amount(inv.vatTotal)]);
   for (const c of charges) totals.push([c.label, amount(c.amount)]);
   totals.push([`Ukupno (${currency})`, amount(inv.grandTotal), true]);
-  if (inv.advanceAmount) totals.push(['Uračunati predujam', amount(-inv.advanceAmount)], ['Za platiti', amount(payable), true]);
+  if (inv.advanceAmount) {
+    // uračunati predujam s brojem i datumom računa za predujam (stariji računi: samo iznos)
+    if (inv.advances.length) for (const a of inv.advances) totals.push([`Uračunati predujam ${a.number ?? ''} (${formatDate(a.date)})`, amount(-a.amount)]);
+    else totals.push(['Uračunati predujam', amount(-inv.advanceAmount)]);
+    totals.push(['Za platiti', amount(payable), true]);
+  }
 
   const meta: Array<[string, React.ReactNode]> = [
     ['Datum izdavanja', formatDate(inv.date)],
     ...(time(inv.issuedAt) ? ([['Vrijeme izdavanja', time(inv.issuedAt)]] as Array<[string, React.ReactNode]>) : []),
     ['Datum isporuke', formatDate(inv.deliveryDate || inv.date)],
     ...(receivable && inv.dueDate ? ([['Dospijeće', formatDate(inv.dueDate)]] as Array<[string, React.ReactNode]>) : []),
-    ...(inv.period ? ([['Razdoblje', inv.period]] as Array<[string, React.ReactNode]>) : []),
+    ...(inv.period ? ([['Razdoblje', inv.periodLabel ?? inv.period]] as Array<[string, React.ReactNode]>) : []),
     ...(receivable || inv.paymentMethod !== 'TRANSFER' ? ([['Način plaćanja', PAYMENT_METHOD_LABEL[inv.paymentMethod]]] as Array<[string, React.ReactNode]>) : []),
   ];
 
@@ -229,6 +240,7 @@ export function toDocData(inv: {
   vatTotal: unknown;
   grandTotal: unknown;
   advanceAmount: unknown;
+  advanceUses?: Array<{ amount: unknown; advance: { number: string | null; date: Date } }>;
   paidTotal: unknown;
   openAmount: unknown;
   charges: unknown;
@@ -249,6 +261,8 @@ export function toDocData(inv: {
     unitPrice: unknown;
     discountPct: unknown;
     netAmount: unknown;
+    monthly: unknown;
+    months: number | null;
     item: { serial: string } | null;
     model: { code: string | null; kpd: string | null } | null;
     service: { kpd: string | null } | null;
@@ -256,6 +270,8 @@ export function toDocData(inv: {
 }): InvoiceDocData {
   const n = (v: unknown) => num(v as number);
   const d = (v: Date | null) => (v ? v.toISOString().slice(0, 10) : null);
+  // najam: razdoblje od–do prema broju mjeseci naplate; stavke „kom" s razdobljem u opisu
+  const range = rentPeriodRange(inv.period, invoiceRentMonths(inv.lines));
   return {
     id: inv.id,
     kind: inv.kind,
@@ -273,11 +289,13 @@ export function toDocData(inv: {
     vatTotal: n(inv.vatTotal),
     grandTotal: n(inv.grandTotal),
     advanceAmount: n(inv.advanceAmount),
+    advances: (inv.advanceUses ?? []).map((u) => ({ number: u.advance.number, date: d(u.advance.date)!, amount: n(u.amount) })),
     paidTotal: n(inv.paidTotal),
     openAmount: n(inv.openAmount),
     charges: Array.isArray(inv.charges) ? (inv.charges as ChargeInput[]) : [],
     paymentRef: inv.paymentRef,
     period: inv.period,
+    periodLabel: range?.label ?? null,
     description: inv.description,
     note: inv.note,
     refInvoice: inv.refInvoice ? { number: inv.refInvoice.number, date: d(inv.refInvoice.date)! } : null,
@@ -287,11 +305,10 @@ export function toDocData(inv: {
     jir: inv.jir,
     lines: groupLines(
       inv.lines.map((l) => ({
-        description: l.description,
+        ...rentLineView({ description: l.description, unit: l.unit, monthly: l.monthly == null ? null : n(l.monthly), months: l.months }, range),
         serial: l.item?.serial ?? null,
         code: l.model?.code ?? null,
         kpd: l.kpd ?? l.model?.kpd ?? l.service?.kpd ?? null,
-        unit: l.unit,
         qty: n(l.qty),
         unitPrice: n(l.unitPrice),
         discountPct: n(l.discountPct),

@@ -32,8 +32,9 @@ export function ReportTable({ columns, rows, totals }: { columns: Col[]; rows: R
   const wide = columns.length > 7;
   const stick = (ci: number, bg: string) => wide && ci === 0 && cn('max-sm:sticky max-sm:left-0 max-sm:shadow-[1px_0_0_var(--color-line)]', bg);
   return (
-    <TableWrap className="max-h-[70vh] overflow-y-auto max-sm:max-h-none">
-      <table className={cn('data-table compact', wide && 'no-stack [&_td]:whitespace-nowrap')}>
+    // ispis: bez visine i klizanja (inače se reže na jednu stranicu), sitniji font; široke tablice ispisuju se položeno (stranica izvještaja)
+    <TableWrap className="max-h-[70vh] overflow-y-auto max-sm:max-h-none print:max-h-none print:overflow-visible print:rounded-none print:shadow-none">
+      <table className={cn('data-table compact print:text-[10px] print:[&_td]:px-1.5 print:[&_td]:py-0.5 print:[&_th]:px-1.5', wide && 'no-stack [&_td]:whitespace-nowrap print:[&_td]:whitespace-normal', columns.length > 10 && 'print:text-[8.5px]')}>
         <thead>
           <tr>
             {columns.map((c, ci) => (
@@ -67,7 +68,7 @@ export function ReportTable({ columns, rows, totals }: { columns: Col[]; rows: R
           ))}
         </tbody>
         {totals && (
-          <tfoot className="sticky bottom-0 max-sm:static">
+          <tfoot className="sticky bottom-0 max-sm:static print:static">
             <tr>
               {columns.map((c, ci) => {
                 const v = totals[c.key];

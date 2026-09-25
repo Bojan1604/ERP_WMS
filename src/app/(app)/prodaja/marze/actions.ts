@@ -97,7 +97,7 @@ export const convertPackageAction = action(
       const r = await packageToDocument(tx, user, id, partnerId, target, devices);
       return r.kind === 'invoice'
         ? { message: 'Nacrt računa iz paketa je izrađen.', redirect: `/prodaja/racuni/${r.id}` }
-        : { message: `${target === 'PROFORMA' ? 'Predračun' : 'Ponuda'} ${r.number} iz paketa je izrađen(a).`, redirect: `/prodaja/ponude/${r.id}` };
+        : { message: `${target === 'PROFORMA' ? 'Predračun' : 'Ponuda'} ${r.number} iz paketa je ${target === 'PROFORMA' ? 'izrađen' : 'izrađena'}.`, redirect: `/prodaja/ponude/${r.id}` };
     });
   },
 );

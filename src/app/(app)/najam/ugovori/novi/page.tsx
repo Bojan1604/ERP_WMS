@@ -51,7 +51,8 @@ export default async function NewContractPage({ searchParams }: { searchParams: 
             startDate: t,
             endDate: null,
             firstBillingDate: null,
-            billingDay: 1,
+            // prazno = dan prve naplate (kao u pomoći polja)
+            billingDay: null,
             billing: 'MONTHLY',
             billingMode: 'IN_ADVANCE',
             seasonFrom: null,

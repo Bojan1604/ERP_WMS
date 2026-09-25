@@ -82,9 +82,12 @@ export function readTemplates(stored: unknown): MailTemplates {
 
 /** Zamjena {varijabli}; nepoznate ostaju prazne. „{rok}" je sinonim za „{dospijece}". */
 export function fillTemplate(tpl: string, vars: Record<string, string | number | null | undefined>): string {
-  return String(tpl ?? '').replace(/\{(\w+)\}/g, (_, k: string) => {
+  const src = String(tpl ?? '');
+  return src.replace(/\{(\w+)\}/g, (m: string, k: string, at: number) => {
     const v = vars[k] ?? (k === 'rok' ? vars.dospijece : k === 'dospijeće' ? vars.dospijece : undefined);
-    return v === null || v === undefined ? '' : String(v);
+    const out = v === null || v === undefined ? '' : String(v);
+    // datum „25.09.2026." ispred točke u predlošku („…{dospijece}.") — bez dvostruke točke
+    return out.endsWith('.') && src[at + m.length] === '.' ? out.slice(0, -1) : out;
   });
 }
 

@@ -30,6 +30,8 @@ export interface ReportResult {
   /** Graf prikazuje nabavne vrijednosti/profit — skriva se bez prava „costs". */
   chartCost?: boolean;
   note?: string;
+  /** Ukupan broj redaka kad `rows` sadrži samo jednu stranicu (straničenje u bazi ili u runReport). */
+  rowCount?: number;
 }
 
 /**
@@ -61,6 +63,11 @@ export interface ReportFilters {
 export interface ReportContext {
   /** Korisnik vidi nabavne cijene, maržu i profit (pravo „costs"). */
   canSeeCost: boolean;
+  /**
+   * Stranica za prikaz na ekranu (izvoz je bez nje i dobiva sve retke). Izvještaj s mnogo redaka
+   * može sam straničiti u bazi — tada vraća `rowCount` i `totals` preko svih redaka.
+   */
+  page?: { skip: number; take: number };
 }
 
 export interface ReportDef {
@@ -137,7 +144,18 @@ export const revenueSql = (companyId: string) =>
  *   odgovara prihodu. Bez toga: samo važeći (nestornirani) računi — za komade i prosječne cijene.
  * Uvjeti firme, izdanosti, isključenih partnera, razdoblja i partnera su već unutra.
  */
-export function revenueLinesSql(companyId: string, f: Pick<ReportFilters, 'year' | 'from' | 'to' | 'partnerIds'>, opts: { withStorno?: boolean } = {}) {
+export function revenueLinesSql(
+  companyId: string,
+  f: Pick<ReportFilters, 'year' | 'from' | 'to' | 'partnerIds'>,
+  opts: { withStorno?: boolean; lineType?: SaleRent; deviceOnly?: boolean; withItem?: boolean; docType?: SaleRent } = {},
+) {
+  // suženja unutar obje grane (isti rezultat kao filtar izvana, ali na stupcima tablica — planer ih dobro
+  // procjenjuje pa bira hash spajanja umjesto stotina tisuća pojedinačnih dohvata)
+  const narrow = (line: string, doc: string, typeDoc: string) => Prisma.sql`
+    ${opts.lineType ? Prisma.sql`AND (${Prisma.raw(line)}."lineType" = ${opts.lineType}::"InvoiceType" OR (${Prisma.raw(line)}."lineType" IS NULL AND ${Prisma.raw(typeDoc)}."type" = ${opts.lineType}::"InvoiceType"))` : Prisma.empty}
+    ${opts.deviceOnly ? Prisma.sql`AND ${Prisma.raw(line)}."kind" = 'DEVICE'` : Prisma.empty}
+    ${opts.withItem ? Prisma.sql`AND ${Prisma.raw(line)}."itemId" IS NOT NULL` : Prisma.empty}
+    ${opts.docType ? Prisma.sql`AND ${Prisma.raw(doc)}."type" = ${opts.docType}::"InvoiceType"` : Prisma.empty}`;
   const linesNet = (doc: string) => Prisma.sql`(SELECT SUM(x."netAmount") FROM "InvoiceLine" x WHERE x."invoiceId" = ${Prisma.raw(doc)}.id)`;
   const docs = opts.withStorno
     ? Prisma.sql`i."kind" IN ('INVOICE','STORNO') AND NOT (i."kind" = 'STORNO' AND EXISTS (SELECT 1 FROM "Invoice" r WHERE r.id = i."refInvoiceId" AND r."kind" = 'ADVANCE'))`
@@ -149,13 +167,13 @@ export function revenueLinesSql(companyId: string, f: Pick<ReportFilters, 'year'
                 ELSE COALESCE(l."netAmount" * i."netTotal" / NULLIF(${linesNet('i')}, 0), 0) END AS net
     FROM "InvoiceLine" l JOIN "Invoice" i ON i.id = l."invoiceId" JOIN "Partner" p ON p.id = i."partnerId"
     WHERE i."companyId" = ${companyId} AND i."status" = 'ISSUED' AND ${docs} AND p."excluded" = false
-      ${periodSql('i."date"', f)} ${inIds('i."partnerId"', f.partnerIds)}
+      ${periodSql('i."date"', f)} ${inIds('i."partnerId"', f.partnerIds)} ${narrow('l', 'i', 'i')}
     UNION ALL
     SELECT c.id, c."partnerId", c."date", 'CREDIT_NOTE', l."modelId", l."itemId", COALESCE(l."lineType", r."type")::text,
            l."kind"::text, 0, 0, true, COALESCE(c."netTotal" * l."netAmount" / NULLIF(${linesNet('r')}, 0), 0)
     FROM "Invoice" c JOIN "Partner" p ON p.id = c."partnerId" JOIN "Invoice" r ON r.id = c."refInvoiceId" JOIN "InvoiceLine" l ON l."invoiceId" = r.id
     WHERE c."companyId" = ${companyId} AND c."status" = 'ISSUED' AND c."kind" = 'CREDIT_NOTE' AND p."excluded" = false
-      ${periodSql('c."date"', f)} ${inIds('c."partnerId"', f.partnerIds)}`;
+      ${periodSql('c."date"', f)} ${inIds('c."partnerId"', f.partnerIds)} ${narrow('l', 'c', 'r')}`;
 }
 
 export const opt = (cond: boolean, sql: Prisma.Sql) => (cond ? sql : Prisma.empty);

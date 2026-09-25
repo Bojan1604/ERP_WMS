@@ -10,6 +10,7 @@ import { warrantyEnd } from '@/domain/pricing';
 import { toISO } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import { taxNotes, VAT_ON_PAYMENT_NOTE } from '@/domain/tax';
+import { invoiceRentMonths, rentLineView, rentPeriodRange } from '@/domain/sales-lines';
 import { hub3Png, qrPng } from './barcode';
 import { currencySign, loadPdfCompany, type LoadedCompany } from './company';
 import { amt, box, documentDefinition, fmtDate, GREY, itemsTable, kv, pdfFileName, qty, sums, type Fact, type SumRow } from './layout';
@@ -44,6 +45,7 @@ export async function loadInvoice(companyId: string, id: string) {
         },
       },
       refInvoice: { select: { number: true, date: true } },
+      advanceUses: { orderBy: { createdAt: 'asc' }, select: { amount: true, advance: { select: { number: true, date: true } } } },
     },
   });
   if (!inv) throw new DomainError('Račun ne postoji.');
@@ -90,20 +92,29 @@ const party = (p: LoadedInvoice['partner']) => ({
   branchName: p.branchName,
 });
 
+/** Razdoblje koje račun za najam pokriva (od–do prema broju mjeseci naplate na stavkama). */
+export const invoiceRentRange = (inv: Pick<LoadedInvoice, 'period' | 'lines'>) => rentPeriodRange(inv.period, invoiceRentMonths(inv.lines));
+
 /** Stavke računa: uređaji istog modela i cijene spojeni u jednu stavku (kao ispis i eRačun). */
 export function invoiceRows(inv: LoadedInvoice) {
+  // stavke najma: opis s razdobljem rate, jedinica „kom" (količina = uređaji), napomena mjesečni iznos
+  const range = invoiceRentRange(inv);
   return groupLines(
-    inv.lines.map((l) => ({
-      description: l.description,
-      serial: l.item?.serial ?? null,
-      code: l.model?.code ?? null,
-      kpd: l.kpd ?? l.model?.kpd ?? l.service?.kpd ?? null,
-      unit: l.unit,
-      qty: num(l.qty),
-      unitPrice: num(l.unitPrice),
-      discountPct: num(l.discountPct),
-      netAmount: num(l.netAmount),
-    })),
+    inv.lines.map((l) => {
+      const rv = rentLineView({ description: l.description, unit: l.unit, monthly: l.monthly === null ? null : num(l.monthly), months: l.months }, range);
+      return {
+        description: rv.description,
+        note: rv.note,
+        serial: l.item?.serial ?? null,
+        code: l.model?.code ?? null,
+        kpd: l.kpd ?? l.model?.kpd ?? l.service?.kpd ?? null,
+        unit: rv.unit,
+        qty: num(l.qty),
+        unitPrice: num(l.unitPrice),
+        discountPct: num(l.discountPct),
+        netAmount: num(l.netAmount),
+      };
+    }),
     (l) => (l.serial ? [l.description, l.code ?? '', l.kpd ?? '', l.unit, l.unitPrice, l.discountPct].join('|') : null),
   ).map(({ lines: g }) => ({
     ...g[0],
@@ -117,6 +128,8 @@ export function invoiceRows(inv: LoadedInvoice) {
 export function invoiceDefinition(inv: LoadedInvoice, c: LoadedCompany, img: InvoiceImages = {}): TDocumentDefinitions {
   const cur = currencySign(c.currency);
   const receivable = inv.kind === 'INVOICE' || inv.kind === 'ADVANCE';
+  // postavke firme u trenutku izdavanja (preslika na računu); nacrt i stariji računi — trenutne
+  const vatRegistered = inv.sellerVatRegistered ?? c.vatRegistered;
   const meta = readMeta(inv.eInvoice);
   const operator = meta.operator?.name ? meta.operator : inv.issuedBy ? { name: inv.issuedBy, oib: null } : null;
   const netTotal = num(inv.netTotal);
@@ -145,7 +158,7 @@ export function invoiceDefinition(inv: LoadedInvoice, c: LoadedCompany, img: Inv
   const body: TableCell[][] = rows.map((l, i) => [
     { text: String(i + 1), color: GREY },
     ...(hasCode ? [{ text: l.code ?? '', fontSize: 7.5 }] : []),
-    { stack: [{ text: l.description }, ...(l.serials.length ? [{ text: `SN: ${l.serials.join(', ')}`, fontSize: 7.5, color: GREY, margin: [0, 2, 0, 0] }] : [])] },
+    { stack: [{ text: l.description }, ...(l.note ? [{ text: l.note, fontSize: 7.5, color: GREY }] : []), ...(l.serials.length ? [{ text: `SN: ${l.serials.join(', ')}`, fontSize: 7.5, color: GREY, margin: [0, 2, 0, 0] }] : [])] },
     ...(hasKpd ? [{ text: l.kpd ?? '', fontSize: 7.5 }] : []),
     { text: l.unit, noWrap: true },
     qty(l.qty),
@@ -159,13 +172,19 @@ export function invoiceDefinition(inv: LoadedInvoice, c: LoadedCompany, img: Inv
   totals.push({ k: 'Osnovica', v: amt(netTotal) }, { k: `PDV ${qty(vatRate)} %`, v: amt(num(inv.vatTotal)) });
   for (const ch of charges) totals.push({ k: ch.label, v: amt(ch.amount) });
   totals.push({ k: `Ukupno (${cur})`, v: amt(grand), strong: !advance });
-  if (advance) totals.push({ k: 'Uračunati predujam', v: amt(-advance) }, { k: 'Za platiti', v: amt(payable), strong: true });
+  if (advance) {
+    // uračunati predujam s brojem i datumom računa za predujam (stariji računi: samo iznos)
+    if (inv.advanceUses.length) for (const u of inv.advanceUses) totals.push({ k: `Uračunati predujam ${u.advance.number ?? ''} (${fmtDate(toISO(u.advance.date))})`, v: amt(-num(u.amount)) });
+    else totals.push({ k: 'Uračunati predujam', v: amt(-advance) });
+    totals.push({ k: 'Za platiti', v: amt(payable), strong: true });
+  }
 
   const paidInFull = receivable && inv.status === 'ISSUED' && paid > 0 && open <= 0;
   const notes = [
-    ...taxNotes(inv, c.vatRegistered),
-    c.vatOnPayment ? VAT_ON_PAYMENT_NOTE : null,
-    paidInFull ? `Račun je plaćen u cijelosti${inv.paidDate ? ` ${fmtDate(toISO(inv.paidDate))}` : ''}.` : null,
+    ...taxNotes(inv, vatRegistered),
+    (inv.vatOnPayment ?? c.vatOnPayment) ? VAT_ON_PAYMENT_NOTE : null,
+    // datum već završava točkom („25.09.2026.") — bez dvostruke točke
+    paidInFull ? (inv.paidDate ? `Račun je plaćen u cijelosti ${fmtDate(toISO(inv.paidDate))}` : 'Račun je plaćen u cijelosti.') : null,
     inv.note,
   ];
 
@@ -173,7 +192,7 @@ export function invoiceDefinition(inv: LoadedInvoice, c: LoadedCompany, img: Inv
     { k: 'Datum izdavanja', v: fmtDate(toISO(inv.date)) + (hhmm(inv.issuedAt) ? ` ${hhmm(inv.issuedAt)}` : '') },
     { k: 'Datum isporuke', v: fmtDate(toISO(inv.deliveryDate ?? inv.date)) },
     receivable && inv.dueDate ? { k: 'Dospijeće', v: fmtDate(toISO(inv.dueDate)) } : null,
-    inv.period ? { k: 'Razdoblje', v: inv.period } : null,
+    inv.period ? { k: 'Razdoblje', v: invoiceRentRange(inv)?.label ?? inv.period } : null,
     receivable || inv.paymentMethod !== 'TRANSFER' ? { k: 'Način plaćanja', v: PAYMENT_METHOD_LABEL[inv.paymentMethod] } : null,
   ];
 
@@ -226,7 +245,7 @@ export function invoiceDefinition(inv: LoadedInvoice, c: LoadedCompany, img: Inv
       : null;
 
   return documentDefinition({
-    company: c.doc,
+    company: { ...c.doc, vatRegistered },
     title: inv.status === 'DRAFT' ? 'Nacrt računa' : INVOICE_KIND_LABEL[inv.kind],
     number: inv.number,
     party: party(inv.partner),

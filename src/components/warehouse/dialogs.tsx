@@ -34,6 +34,7 @@ export interface WarehouseOptions {
 export interface Perms {
   canEdit: boolean;
   canOps: boolean;
+  /** Promjena statusa ide na odobrenje za OVOG korisnika (`needsStatusApproval` — postavka korisnika ili pravilo firme). */
   needsApproval: boolean;
   /** Pravo na nabavne cijene i marže (undefined = da, stari pozivi). */
   canSeeCost?: boolean;
@@ -122,7 +123,7 @@ export function StatusDialog({
   const [warehouseId, setWarehouseId] = useState('');
   const [note, setNote] = useState('');
   const target = statuses.find((s) => s.id === statusId);
-  const request = !perms.canEdit && perms.needsApproval;
+  const request = perms.needsApproval;
   const detaches = target && target.kind !== 'RENTED' && target.kind !== 'RETURNING' ? meta.onContract : 0;
   return (
     <ActionDialog

@@ -23,7 +23,7 @@ export default async function TransfersPage({ searchParams }: { searchParams: Pr
       </FilterBar>
       <TableWrap>
         {rows.length ? (
-          <table className="data-table min-w-[760px]">
+          <table className="data-table sm:min-w-[760px]">
             <thead>
               <tr>
                 <th>Broj</th>

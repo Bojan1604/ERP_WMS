@@ -21,6 +21,8 @@ const orderSchema = z.object({
 
 export const saveOrderAction = action({ module: 'purchasing', level: 'edit' }, orderSchema, async ({ id, ...input }, user) =>
   transaction(async (tx) => {
+    // stavke narudžbenice su nabavne cijene — bez prava „costs" se ne upisuju ni mijenjaju
+    assert(canSeeCost(user.perms), 'Narudžbenicu (nabavne cijene) upisuje i mijenja korisnik s pravom na nabavne cijene.');
     const o = await saveOrder(tx, user, id, input);
     return { message: `Narudžbenica ${o.number} spremljena.`, redirect: `/nabava/narudzbenice/${o.id}` };
   }),
@@ -89,6 +91,7 @@ export const saveOrderInvoiceAction = action(
   }),
   async ({ orderId, ...input }, user) =>
     transaction(async (tx) => {
+      assert(canSeeCost(user.perms), 'Iznose računa dobavljača upisuje korisnik s pravom na nabavne cijene.');
       const siId = await saveOrderInvoice(tx, user, orderId, input);
       return { message: siId ? 'Račun dobavljača spremljen — povezan je ulazni račun.' : 'Račun dobavljača spremljen. Ulazni račun nastaje kad se roba zaprimi.' };
     }),

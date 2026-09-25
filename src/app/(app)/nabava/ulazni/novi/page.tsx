@@ -26,8 +26,10 @@ export default async function NewSupplierInvoicePage({ searchParams }: { searchP
   const supplierId = receipt?.supplierId ?? order?.supplierId ?? null;
   const net = receipt ? num(receipt.total) : order ? num(order.total) : 0;
   const links = { orderId: order?.id ?? receipt?.orderId ?? null, receiptId: receipt?.id ?? null };
-  // zadano „račun za robu s primke": iznos s dokumenta i nijedan drugi povezani račun već nije račun za tu robu
-  const goods = links.orderId || links.receiptId ? (await goodsInvoiceContext(db, user.companyId, { id: null, ...links, netAmount: net })).defaultGoods : false;
+  // zadano „račun za robu s primke": obrazac ga preračunava iz UPISANE osnovice (vrijednosti robe i broj
+  // računa za robu koji već postoje), a konačno odlučuje poslužitelj pri spremanju
+  const ctx = links.orderId || links.receiptId ? await goodsInvoiceContext(db, user.companyId, { id: null, ...links, netAmount: net }) : null;
+  const goods = ctx?.defaultGoods ?? false;
   return (
     <>
       <PageHeader
@@ -68,6 +70,7 @@ export default async function NewSupplierInvoicePage({ searchParams }: { searchP
         suppliers={suppliers.map((s) => ({ value: s.id, label: s.name, country: s.country }))}
         categories={[...new Set([...lookups.expenseCategories.map((c) => c.name), 'Nabava robe'])]}
         company={{ vatRate: num(company.vatRate), country: company.country }}
+        goodsRule={ctx ? { refs: ctx.refs, others: ctx.otherGoodsInvoices } : null}
         action={saveSupplierInvoiceAction}
       />
     </>

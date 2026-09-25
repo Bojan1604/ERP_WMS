@@ -64,7 +64,7 @@ export async function GET(req: Request) {
     { label: 'Poslovna jedinica', value: (r) => [r.branchCode, r.branchName].filter(Boolean).join(' ') },
     ...sales,
     { label: 'Uređaja', value: (r) => stats.get(r.id)?.devices ?? 0 },
-    { label: 'Aktivnih ugovora', value: (r) => stats.get(r.id)?.contracts ?? 0 },
+    ...(can(user.perms, 'rentals') ? [{ label: 'Aktivnih ugovora', value: (r: Row) => stats.get(r.id)?.contracts ?? 0 }] : []),
   ],
     `partneri-${today()}`,
     'Partneri',

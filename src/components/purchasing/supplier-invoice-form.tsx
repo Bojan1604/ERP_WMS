@@ -9,7 +9,7 @@ import { Card } from '@/components/ui/misc';
 import { useToast } from '@/components/ui/toast';
 import { supplierVat } from '@/domain/tax';
 import { r2 } from '@/domain/money';
-import { vatPctOf } from '@/domain/purchase-links';
+import { defaultGoodsInvoice, vatPctOf } from '@/domain/purchase-links';
 import { supplierDocsAction } from '@/app/(app)/nabava/ulazni/actions';
 
 export interface SupplierInvoiceValue {
@@ -66,6 +66,7 @@ export function SupplierInvoiceForm({
   payLocked = false,
   readOnly = false,
   bookedByReceipt = false,
+  goodsRule = null,
 }: {
   initial: SupplierInvoiceValue;
   suppliers: Array<{ value: string; label: string; country: string }>;
@@ -79,6 +80,8 @@ export function SupplierInvoiceForm({
   readOnly?: boolean;
   /** Trošak robe je knjižen primkom (povezana primka/narudžbenica). */
   bookedByReceipt?: boolean;
+  /** Pravilo zadane kvačice „račun za robu" za početnu vezu: vrijednosti robe i broj drugih računa za robu. */
+  goodsRule?: { refs: number[]; others: number } | null;
 }) {
   const [v, setV] = useState(initial);
   const [free, setFree] = useState(!initial.supplierId && !!(initial.supplierName || initial.supplierOib));
@@ -120,16 +123,20 @@ export function SupplierInvoiceForm({
     setV(next);
   };
   const linked = !!(v.orderId || v.receiptId);
+  const sameLinks = v.orderId === initial.orderId && v.receiptId === initial.receiptId;
+  // dok korisnik ne dira kvačicu, zadano se računa iz upisane osnovice (prijevoz 25 € na narudžbenici od 200 € nije račun za robu)
+  const goods = goodsTouched || !goodsRule || !sameLinks ? v.goods : defaultGoodsInvoice({ net: v.netAmount, refs: goodsRule.refs, otherGoodsInvoices: goodsRule.others });
 
   const submit = () => {
     if (!free && !v.supplierId) return setLocalError('Odaberite dobavljača ili ga upišite slobodno (naziv i OIB).');
     if (free && !v.supplierName?.trim()) return setLocalError('Upišite naziv dobavljača.');
     if (!v.number.trim()) return setLocalError('Upišite broj računa dobavljača.');
     setLocalError(null);
-    const { internalNo: _ignored, goods, ...rest } = v;
+    const { internalNo: _ignored, goods: _goods, ...rest } = v;
     void _ignored;
-    const sameLinks = v.orderId === initial.orderId && v.receiptId === initial.receiptId;
-    const payload = { ...rest, goods: linked && (goodsTouched || sameLinks) ? goods : null };
+    void _goods;
+    // neizričita odluka (null): poslužitelj zadržava spremljenu ili odlučuje po pravilu iz stvarne osnovice
+    const payload = { ...rest, goods: linked && goodsTouched ? v.goods : null };
     run(free ? { ...payload, supplierId: null } : { ...payload, supplierName: null, supplierOib: null });
   };
 
@@ -270,7 +277,7 @@ export function SupplierInvoiceForm({
               <div className="mb-2">
                 <Checkbox
                   label="Ovo je račun za robu s primke"
-                  checked={v.goods}
+                  checked={goods}
                   disabled={rejected}
                   onChange={(e) => {
                     setGoodsTouched(true);
@@ -284,14 +291,14 @@ export function SupplierInvoiceForm({
                 </p>
               </div>
             )}
-            {bookedByReceipt && linked && v.goods ? (
+            {bookedByReceipt && linked && goods ? (
               <p className="text-sm text-fg-2">Trošak robe knjižen je primkom — račun ga ne knjiži ponovno.</p>
             ) : (
               <>
                 <Checkbox label="Knjiži kao trošak" checked={v.book} disabled={rejected} onChange={(e) => setV({ ...v, book: e.target.checked })} />
                 <p className="mt-1 text-xs text-fg-3">
                   {linked
-                    ? v.goods
+                    ? goods
                       ? 'Ako povezana primka ima knjižen trošak nabave, račun za robu ne knjiži vlastiti trošak (trošak se ne zbraja dvaput).'
                       : 'Račun nije račun za robu s primke — knjiži se kao zaseban trošak.'
                     : 'Za račun robe koja je zaprimljena primkom povežite primku ili narudžbenicu — trošak je tada već knjižen primkom.'}

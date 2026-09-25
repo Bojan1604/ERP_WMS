@@ -90,10 +90,25 @@ test('Dohvati bez pristupa Sudskom registru koristi VIES; neispravan OIB se ne �
   const r = await lookupPartner('nema-firme', { oib: '12345678903', vatId: null, country: 'HR' });
   assert.equal(r.info?.source, 'vies');
   assert.equal(r.info?.city, 'Zagreb');
-  assert.match(r.notes.join(' '), /SUDREG_CLIENT_ID/);
+  assert.match(r.notes.join(' '), /VIES/);
+  // nazivi varijabli okruženja ne idu u sučelje
+  assert.doesNotMatch(r.notes.join(' '), /SUDREG_CLIENT_ID/);
   assert.ok(urls[0].endsWith('/ms/HR/vat/12345678903'));
   const bad = await lookupPartner('x', { oib: '12345678900', vatId: null, country: 'HR' });
   assert.equal(bad.info, null);
+});
+
+test('Dohvati: VIES odbije (HTTP 403) — ljudska poruka bez HTTP koda', async () => {
+  globalThis.fetch = (async () => new Response('Forbidden', { status: 403 })) as typeof fetch;
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    const r = await lookupPartner('nema-firme', { oib: '12345678903', vatId: null, country: 'HR' });
+    assert.match(r.info?.error ?? '', /trenutno nije dostupan/);
+    assert.doesNotMatch(r.info?.error ?? '', /HTTP|403/);
+  } finally {
+    console.warn = warn;
+  }
 });
 
 test('Dohvati sa Sudskim registrom: token pa detalji subjekta', async () => {

@@ -113,7 +113,9 @@ async function copyLookups(tx: Tx, from: string, to: string) {
 /** Administrator daje ili oduzima korisniku pristup firmi (obje firme moraju biti administratorove). */
 export async function setCompanyAccess(tx: Tx, actor: Actor, userId: string, companyId: string, grant: boolean) {
   assert(await hasAccess(tx, actor.id, companyId), 'Nemate pristup toj firmi.');
-  const u = await tx.user.findFirst({ where: { id: userId, OR: [{ companyId: actor.companyId }, { companies: { some: { companyId: actor.companyId } } }] }, select: { id: true, name: true, companyId: true, role: true } });
+  // korisnik mora pripadati nekoj od administratorovih firmi (ne nužno trenutnoj) — isti opseg kao matrica na /postavke/firme
+  const mine = (await accessibleCompanies(tx, actor.id)).map((c) => c.id);
+  const u = await tx.user.findFirst({ where: { id: userId, OR: [{ companyId: { in: mine } }, { companies: { some: { companyId: { in: mine } } } }] }, select: { id: true, name: true, companyId: true, role: true } });
   assert(u, 'Korisnik ne postoji.');
   assert(u.role !== 'DISTRIBUTOR' && u.role !== 'CLIENT', 'Vanjski korisnici MDM-a pripadaju jednoj firmi.');
   const company = await tx.company.findUniqueOrThrow({ where: { id: companyId }, select: { name: true } });

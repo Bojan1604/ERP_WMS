@@ -11,6 +11,7 @@ import { Notice } from '@/components/ui/misc';
 import { useToast } from '@/components/ui/toast';
 import { bytes } from './common';
 import { ProgressBar, useUpload } from './file-upload';
+import { FileInput } from '@/components/ui/file-input';
 
 const MAX_MB = 200;
 
@@ -121,7 +122,7 @@ export function AppUploadButton({
             hint={file ? `${file.name} · ${bytes(file.size)}` : `Najviše ${MAX_MB} MB.`}
             error={wrongExt ? (windows ? 'Odaberite .msi ili .exe.' : 'Odaberite .apk.') : tooBig ? `Veće od ${MAX_MB} MB.` : null}
           >
-            <input key={platform} type="file" accept={windows ? '.msi,.exe' : '.apk'} className="block w-full text-sm" onChange={(e) => pick(e.target.files?.[0] ?? null)} />
+            <FileInput key={platform} accept={windows ? '.msi,.exe' : '.apk'} buttonLabel={windows ? 'Odaberi .msi / .exe' : 'Odaberi .apk'} onChange={(e) => pick(e.target.files?.[0] ?? null)} />
           </Field>
           {windows ? (
             <>

@@ -39,7 +39,8 @@ export function contractWhere(companyId: string, params: Params): Prisma.Contrac
   // zadani pogled „Aktivni" — osim kad je status izričito odabran
   else if (view === '') and.push({ status: 'ACTIVE' });
   if (view === 'sezonski') and.push({ seasonFrom: { not: null } });
-  if (view === 'istek') and.push({ endDate: { gte: fromISO(now), lt: fromISO(addDays(now, EXPIRING_DAYS)) } });
+  // uskoro istječu: samo ugovori koji još teku (istekli i raskinuti imaju kraj = dan zatvaranja)
+  if (view === 'istek') and.push({ endDate: { gte: fromISO(now), lt: fromISO(addDays(now, EXPIRING_DAYS)) }, ...(statuses.length ? {} : { status: { in: ['ACTIVE', 'PAUSED'] } }) });
   if (partners.length) and.push({ partnerId: { in: partners } });
   if (billings.length) and.push({ billing: { in: billings } });
   // isključeni partneri skriveni su, osim kad se izričito traže (ili se filtrira baš po njima)
@@ -173,8 +174,8 @@ export async function listContracts(companyId: string, params: Params, page: { s
     yearStats(where, year),
   ]);
   const ids = contracts.map((c) => c.id);
-  // rate za izdati imaju aktivni ugovori i oni zatvoreni u programu (zaostale rate)
-  const activeIds = contracts.filter((c) => c.status === 'ACTIVE' || (c.status !== 'PAUSED' && c.closedAt)).map((c) => c.id);
+  // rate za izdati imaju aktivni ugovori, pauzirani (rate prije pauze) i oni zatvoreni u programu (zaostale rate)
+  const activeIds = contracts.filter((c) => c.status === 'ACTIVE' || (c.status === 'PAUSED' ? c.pausedSince : c.closedAt)).map((c) => c.id);
   const [items, returned, covered, pdf] = await Promise.all([
     db.contractItem.findMany({ where: { contractId: { in: activeIds } } }),
     db.returnedContractItem.findMany({ where: { contractId: { in: activeIds }, ...returnedWhere(now) } }),
@@ -214,7 +215,7 @@ export async function listContracts(companyId: string, params: Params, page: { s
       accrual: s.accrual,
       billed: s.billing,
       pdf: pdf.get(c.id) ?? 0,
-      nextBilling: c.status === 'ACTIVE' ? nextBillingDate(terms, devices, now) : null,
+      nextBilling: c.status === 'ACTIVE' ? nextBillingDate(terms, devices, now, covered.get(c.id)) : null,
       pending: activeIds.includes(c.id) ? pendingInstallments(terms, devices, covered.get(c.id) ?? new Set(), now).length : 0,
     };
   });
@@ -235,7 +236,7 @@ export async function listContracts(companyId: string, params: Params, page: { s
     summary.billed += s.billing;
     summary.custom += s.custom;
     if (c.seasonFrom) summary.seasonal += 1;
-    if (expiring(c.endDate)) summary.expiring += 1;
+    if ((c.status === 'ACTIVE' || c.status === 'PAUSED') && expiring(c.endDate)) summary.expiring += 1;
   }
   summary.monthly = r2(summary.monthly);
   summary.monthlyAll = r2(summary.monthlyAll);

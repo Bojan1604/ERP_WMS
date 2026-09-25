@@ -118,7 +118,9 @@ export function PendingTable({ rows, showContract = true, canIssue, canEdit }: {
                   <span className={cn(r.dueDate < now && 'text-warn')}>{date(r.dueDate)}</span>
                 </td>
                 <td className="num">{r.itemIds.length}</td>
-                <td className="num font-medium">{eur(r.amount)}</td>
+                <td className="num font-medium" title={r.draftId ? 'Iznos postojećeg nacrta računa' : undefined}>
+                  {eur(r.amount)}
+                </td>
                 <td className="num">
                   {r.draftId ? (
                     <Link prefetch={false} href={`/prodaja/racuni/${r.draftId}`} className="inline-flex items-center gap-1 text-sm link">
@@ -185,11 +187,13 @@ export function PendingTable({ rows, showContract = true, canIssue, canEdit }: {
               transakciji i kronološkim redoslijedom brojeva.
             </p>
             {ask?.kind === 'paid' && <p>Svi računi odmah se označavaju kao plaćeni na datum računa.</p>}
-            {picked.some((r) => r.draftId) && <p className="text-sm">Postojeći nacrti za ta razdoblja izdaju se takvi kakvi jesu.</p>}
+            {picked.some((r) => r.draftId) && (
+              <p className="text-sm">Postojeći nacrti za ta razdoblja izdaju se takvi kakvi jesu (iznos nacrta) — za nove uvjete obrišite nacrt u Prodaji.</p>
+            )}
             <div className="flex flex-wrap gap-1">
               {picked.slice(0, 12).map((r) => (
                 <Badge key={r.key}>
-                  {r.contractNumber} · {r.period}
+                  {r.contractNumber} · {periodLabel(r.period)}
                 </Badge>
               ))}
               {picked.length > 12 && <Badge>+{picked.length - 12}</Badge>}

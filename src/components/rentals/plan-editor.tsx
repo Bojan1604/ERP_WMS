@@ -45,7 +45,8 @@ export function PlanEditor({
     <div className="space-y-2">
       <p className="text-sm text-fg-3">
         Cijena je uvijek <b>mjesečni najam</b>; rata = mjesečno × mjeseci naplate (kvartalno ×3, polugodišnje ×6, godišnje ×12,
-        jednokratno × mjeseci razdoblja). Prazna cijena = osnovna cijena uređaja. Prazno „do" = do sljedećeg razdoblja ili kraja ugovora.
+        jednokratno = jedna rata za mjesece od „od" do „do" — bez „do" i bez kraja ugovora samo jedan mjesec). Sezona i kraj ugovora
+        smanjuju ratu na mjesece u kojima je uređaj stvarno u najmu. Prazna cijena = osnovna cijena uređaja. Prazno „do" = do sljedećeg razdoblja ili kraja ugovora.
       </p>
       <div className="overflow-x-auto scroll-slim">
         <table className="data-table compact">

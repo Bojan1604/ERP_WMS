@@ -39,8 +39,11 @@ export function parseExpenseFilters(sp: Params): ExpenseFilters {
  * Troškovi godine: baza vraća samo troškove koji mogu pasti u godinu
  * (jednokratni s datumom u godini, ponavljajući koji traju u godini), a
  * ponavljajući se zatim šire u pojedinačne rate (domain/expenses).
+ * Zbrojevi (mjeseci, kategorije, ukupno) su uvijek preko svih rata; s `page` se vraća
+ * samo ta stranica redaka (i podaci obrasca samo za nju), a nazivi partnera i
+ * dokumenata se dohvaćaju samo za vraćene retke. Izvoz (bez `page`) dobiva sve.
  */
-export async function expensesForYear(companyId: string, f: ExpenseFilters) {
+export async function expensesForYear(companyId: string, f: ExpenseFilters, page?: { skip: number; take: number }) {
   const from = `${f.year}-01-01`;
   const to = `${f.year}-12-31`;
   const where: Prisma.ExpenseWhereInput = {
@@ -60,7 +63,8 @@ export async function expensesForYear(companyId: string, f: ExpenseFilters) {
     ...(f.paid ? { paid: f.paid === 'yes' } : {}),
     ...(f.source ? { source: f.source } : {}),
   };
-  const expenses = await db.expense.findMany({
+  // naziv kategorije iz malog šifrarnika (relacija u upitu bi za tisuće troškova bila znatno sporija)
+  const [expenses, categories] = await Promise.all([db.expense.findMany({
     where,
     select: {
       id: true,
@@ -78,22 +82,20 @@ export async function expensesForYear(companyId: string, f: ExpenseFilters) {
       partnerId: true,
       receiptId: true,
       supplierInvoiceId: true,
-      category: { select: { name: true } },
-      partner: { select: { name: true } },
-      receipt: { select: { number: true } },
-      supplierInvoice: { select: { internalNo: true } },
     },
-  });
+  }), db.expenseCategory.findMany({ where: { companyId }, select: { id: true, name: true } })]);
+  const catName = new Map(categories.map((c) => [c.id, c.name]));
 
   const now = today();
   const period = f.month ? `${f.year}-${String(f.month).padStart(2, '0')}` : null;
-  const rows = [];
+  const rows: ExpenseRow[] = [];
   const byMonth = Array.from({ length: 12 }, () => 0);
   const plannedByMonth = Array.from({ length: 12 }, () => 0);
   const byCategory = new Map<string, { name: string; net: number; vat: number; count: number }>();
   let recurringMonthly = 0;
   // ručni troškovi prikazani u tablici — podaci za obrazac izmjene
   const manual: Record<string, ManualExpense> = {};
+  const byId = new Map(expenses.map((e) => [e.id, e]));
 
   for (const e of expenses) {
     const input: ExpenseInput = {
@@ -118,28 +120,12 @@ export async function expensesForYear(companyId: string, f: ExpenseFilters) {
       }
       byMonth[m] += o.netAmount;
       if (period && o.period !== period) continue;
-      const cat = e.category?.name ?? 'Bez kategorije';
+      const cat = (e.categoryId ? catName.get(e.categoryId) : undefined) ?? 'Bez kategorije';
       const c = byCategory.get(cat) ?? { name: cat, net: 0, vat: 0, count: 0 };
       c.net += o.netAmount;
       c.vat += o.vatAmount;
       c.count++;
       byCategory.set(cat, c);
-      if (e.source === 'MANUAL' && !manual[e.id]) {
-        manual[e.id] = {
-          id: e.id,
-          date: input.date,
-          categoryId: e.categoryId,
-          description: e.description,
-          partnerId: e.partnerId,
-          netAmount: input.netAmount,
-          vatAmount: input.vatAmount,
-          paid: e.paid,
-          frequency: input.frequency ?? null,
-          recurringUntil: input.recurringUntil ?? null,
-          note: e.note,
-          overrides: (input.overrides ?? {}) as ManualExpense['overrides'],
-        };
-      }
       rows.push({
         key: o.key,
         expenseId: e.id,
@@ -153,17 +139,18 @@ export async function expensesForYear(companyId: string, f: ExpenseFilters) {
         paid: e.paid,
         frequency: e.frequency,
         source: e.source,
-        category: e.category?.name ?? null,
-        partner: e.partner?.name ?? null,
+        category: (e.categoryId ? catName.get(e.categoryId) : undefined) ?? null,
+        partner: null,
         partnerId: e.partnerId,
         receiptId: e.receiptId,
-        receiptNumber: e.receipt?.number ?? null,
+        receiptNumber: null,
         supplierInvoiceId: e.supplierInvoiceId,
-        supplierInvoiceNo: e.supplierInvoice?.internalNo ?? null,
+        supplierInvoiceNo: null,
       });
     }
   }
-  rows.sort((a, b) => (a.date === b.date ? a.description.localeCompare(b.description, 'hr') : a.date < b.date ? 1 : -1));
+  const hr = new Intl.Collator('hr');
+  rows.sort((a, b) => (a.date === b.date ? hr.compare(a.description, b.description) : a.date < b.date ? 1 : -1));
   const totals = {
     net: r2(rows.reduce((a, r) => a + r.netAmount, 0)),
     vat: r2(rows.reduce((a, r) => a + r.vatAmount, 0)),
@@ -172,14 +159,77 @@ export async function expensesForYear(companyId: string, f: ExpenseFilters) {
     planned: r2(plannedByMonth.reduce((a, v) => a + v, 0)),
     recurringMonthly: r2(recurringMonthly),
   };
+  const shown = page ? rows.slice(page.skip, page.skip + page.take) : rows;
+  // nazivi partnera i brojevi dokumenata samo za vraćene retke (u komadima zbog granice parametara)
+  const ids = (pick: (r: (typeof rows)[number]) => string | null) => [...new Set(shown.map(pick).filter((x): x is string => !!x))];
+  const [partners, receipts, supplierInvoices] = await Promise.all([
+    chunked(ids((r) => r.partnerId), (x) => db.partner.findMany({ where: { companyId, id: { in: x } }, select: { id: true, name: true } })),
+    chunked(ids((r) => r.receiptId), (x) => db.goodsReceipt.findMany({ where: { companyId, id: { in: x } }, select: { id: true, number: true } })),
+    chunked(ids((r) => r.supplierInvoiceId), (x) => db.supplierInvoice.findMany({ where: { companyId, id: { in: x } }, select: { id: true, internalNo: true } })),
+  ]);
+  const pName = new Map(partners.map((p) => [p.id, p.name]));
+  const rNo = new Map(receipts.map((r) => [r.id, r.number]));
+  const siNo = new Map(supplierInvoices.map((x) => [x.id, x.internalNo]));
+  for (const r of shown) {
+    r.partner = r.partnerId ? pName.get(r.partnerId) ?? null : null;
+    r.receiptNumber = r.receiptId ? rNo.get(r.receiptId) ?? null : null;
+    r.supplierInvoiceNo = r.supplierInvoiceId ? siNo.get(r.supplierInvoiceId) ?? null : null;
+    const e = byId.get(r.expenseId)!;
+    // ručni troškovi prikazani u tablici — podaci za obrazac izmjene
+    if (e.source === 'MANUAL' && !manual[e.id]) {
+      manual[e.id] = {
+        id: e.id,
+        date: toISO(e.date),
+        categoryId: e.categoryId,
+        description: e.description,
+        partnerId: e.partnerId,
+        netAmount: num(e.netAmount),
+        vatAmount: num(e.vatAmount),
+        paid: e.paid,
+        frequency: (e.frequency as FrequencyCode | null) ?? null,
+        recurringUntil: e.recurringUntil ? toISO(e.recurringUntil) : null,
+        note: e.note,
+        overrides: ((e.overrides as ExpenseInput['overrides']) ?? {}) as ManualExpense['overrides'],
+      };
+    }
+  }
   return {
-    rows,
+    rows: shown,
+    rowCount: rows.length,
     manual,
     totals,
     byMonth: byMonth.map(r2),
     plannedByMonth: plannedByMonth.map(r2),
     byCategory: [...byCategory.values()].map((c) => ({ ...c, net: r2(c.net), vat: r2(c.vat) })).sort((a, b) => b.net - a.net),
   };
+}
+
+export interface ExpenseRow {
+  key: string;
+  expenseId: string;
+  date: string;
+  period: string;
+  netAmount: number;
+  vatAmount: number;
+  total: number;
+  overridden: boolean;
+  description: string;
+  paid: boolean;
+  frequency: string | null;
+  source: 'MANUAL' | 'RECEIPT' | 'WRITE_OFF' | 'SUPPLIER_INVOICE';
+  category: string | null;
+  partner: string | null;
+  partnerId: string | null;
+  receiptId: string | null;
+  receiptNumber: string | null;
+  supplierInvoiceId: string | null;
+  supplierInvoiceNo: string | null;
+}
+
+async function chunked<T>(ids: string[], fn: (ids: string[]) => Promise<T[]>): Promise<T[]> {
+  const out: T[] = [];
+  for (let i = 0; i < ids.length; i += 10_000) out.push(...(await fn(ids.slice(i, i + 10_000))));
+  return out;
 }
 
 export interface ManualExpense {

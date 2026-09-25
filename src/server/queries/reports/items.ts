@@ -1,6 +1,7 @@
 import 'server-only';
 import { Prisma } from '@prisma/client';
 import { db } from '../../db';
+import { reportSql } from './sql';
 import { suggestedSalePrice } from '@/domain/pricing';
 import { num } from '@/domain/money';
 import {
@@ -13,7 +14,7 @@ import {
  * stotine tisuća uređaja i računa izvještaj ostaje brz.
  */
 
-/** Kategorija stavke: po komadu (uređaj), inače modela. Traži aliase it (LEFT JOIN Item) i m. */
+/** Kategorija stavke: po komadu (uređaj), inače modela. Traži aliase it (LEFT JOIN Item … AND it."categoryId" IS NOT NULL — spaja se samo komad s vlastitom kategorijom) i m. */
 const lineCatSql = (f: ReportFilters) => (f.categoryIds.length ? Prisma.sql`AND COALESCE(it."categoryId", m."categoryId") IN (${Prisma.join(f.categoryIds)})` : Prisma.empty);
 /** Uređaj na ugovoru se naplaćuje ako nema vlastitog statusa ili je aktivan. */
 const billable = Prisma.sql`(ci."status" IS NULL OR ci."status" = 'ACTIVE')`;
@@ -31,15 +32,15 @@ export const itemReports: ReportDef[] = [
     requiresCost: true,
     run: async (companyId, f) => {
       // cijena stavke nakon popusta na račun, umanjena za odobrenja (besplatni uređaji ne ulaze u prosjek)
-      const where = Prisma.sql`l."type" = 'SALE' AND l."lineKind" = 'DEVICE' AND (l."isCredit" OR l.net > 0) ${inIds('m.id', f.modelIds)} ${lineCatSql(f)}`;
-      const from = Prisma.sql`FROM (${revenueLinesSql(companyId, f)}) l JOIN "DeviceModel" m ON m.id = l."modelId" LEFT JOIN "Item" it ON it.id = l."itemId"`;
+      const where = Prisma.sql`(l."isCredit" OR l.net > 0) ${inIds('m.id', f.modelIds)} ${lineCatSql(f)}`;
+      const from = Prisma.sql`FROM (${revenueLinesSql(companyId, f, { lineType: 'SALE', deviceOnly: true })}) l JOIN "DeviceModel" m ON m.id = l."modelId" LEFT JOIN "Item" it ON it.id = l."itemId" AND it."categoryId" IS NOT NULL`;
       const avg = Prisma.sql`SUM(l.qty)::int AS qty, (SUM(l."cost") / NULLIF(SUM(l.qty), 0))::float8 AS "avgCost", (SUM(l.net) / NULLIF(SUM(l.qty), 0))::float8 AS "avgPrice"`;
       const [rows, months, company] = await Promise.all([
-        db.$queryRaw<Array<{ id: string; model: string; qty: number; avgCost: number; avgPrice: number; salePrice: Prisma.Decimal | null; marginPct: Prisma.Decimal | null }>>`
+        reportSql<Array<{ id: string; model: string; qty: number; avgCost: number; avgPrice: number; salePrice: Prisma.Decimal | null; marginPct: Prisma.Decimal | null }>>`
           SELECT m.id, concat_ws(' ', m.brand, m.name) AS model, ${avg}, m."salePrice", m."marginPct"
           ${from} WHERE ${where}
           GROUP BY m.id HAVING SUM(l.qty) > 0 ORDER BY model`,
-        db.$queryRaw<Array<{ m: number; qty: number; avgCost: number; avgPrice: number }>>`
+        reportSql<Array<{ m: number; qty: number; avgCost: number; avgPrice: number }>>`
           SELECT EXTRACT(MONTH FROM l."date")::int AS m, ${avg}
           ${from} WHERE ${where} GROUP BY 1 HAVING SUM(l.qty) > 0`,
         db.company.findUniqueOrThrow({ where: { id: companyId }, select: { defaultMarginPct: true } }),
@@ -81,8 +82,8 @@ export const itemReports: ReportDef[] = [
     run: async (companyId, f) => {
       // prodajna cijena komada: nakon popusta na račun, umanjena za odobrenja; komad je prodan u razdoblju ako je račun u njemu
       const soldCte = Prisma.sql`SELECT l."itemId", SUM(l.net) AS price, MAX(l."date") FILTER (WHERE NOT l."isCredit") AS d
-        FROM (${revenueLinesSql(companyId, f)}) l
-        WHERE l."type" = 'SALE' AND l."lineKind" = 'DEVICE' AND l."itemId" IS NOT NULL
+        FROM (${revenueLinesSql(companyId, f, { lineType: 'SALE', deviceOnly: true, withItem: true })}) l
+        /* vrsta (prodaja), uređaj i komad su suženi u revenueLinesSql */
         GROUP BY l."itemId" HAVING bool_or(NOT l."isCredit")`;
       const rentCte = Prisma.sql`SELECT ci."itemId", ci."monthly", ci."addedAt"
         FROM "ContractItem" ci JOIN "Contract" c ON c.id = ci."contractId" JOIN "Partner" p ON p.id = c."partnerId"
@@ -93,8 +94,15 @@ export const itemReports: ReportDef[] = [
         wantRent(f) ? Prisma.sql`r."itemId" IS NOT NULL` : null,
         f.statusIds.length ? Prisma.sql`(TRUE ${inIds('it."partnerId"', f.partnerIds)})` : null,
       ].filter((x): x is Prisma.Sql => !!x);
+      // bez filtra statusa u izvještaj ulaze samo prodani/iznajmljeni komadi — suzi uređaje odmah (isti uvjet, ali prije spajanja 300k uređaja)
+      const only = f.statusIds.length
+        ? Prisma.empty
+        : Prisma.sql`AND it.id IN (${Prisma.join(
+            [wantSale(f) ? Prisma.sql`SELECT "itemId" FROM s` : null, wantRent(f) ? Prisma.sql`SELECT "itemId" FROM r` : null].filter((x): x is Prisma.Sql => !!x),
+            ' UNION ',
+          )})`;
       const [rows, chart] = await Promise.all([
-        db.$queryRaw<Array<{ id: string; model: string; category: string | null; total: number; sold: number; rented: number; revenue: Prisma.Decimal; monthly: Prisma.Decimal }>>`
+        reportSql<Array<{ id: string; model: string; category: string | null; total: number; sold: number; rented: number; revenue: Prisma.Decimal; monthly: Prisma.Decimal }>>`
           WITH s AS (${soldCte}), r AS (${rentCte})
           SELECT m.id, concat_ws(' ', m.brand, m.name) AS model, cat.name AS category, COUNT(*)::int AS total,
                  COUNT(s."itemId") FILTER (WHERE s.price > 0)::int AS sold, COUNT(r."itemId")::int AS rented,
@@ -104,9 +112,9 @@ export const itemReports: ReportDef[] = [
           LEFT JOIN "Category" cat ON cat.id = m."categoryId"
           LEFT JOIN s ON s."itemId" = it.id
           LEFT JOIN r ON r."itemId" = it.id
-          WHERE it."companyId" = ${companyId} AND (${Prisma.join(context, ' OR ')}) ${itemFilterSql(f, { partner: false })}
+          WHERE it."companyId" = ${companyId} AND (${Prisma.join(context, ' OR ')}) ${only} ${itemFilterSql(f, { partner: false })}
           GROUP BY m.id, cat.name ORDER BY total DESC, model`,
-        db.$queryRaw<Array<{ m: number; sold: number; rented: number }>>`
+        reportSql<Array<{ m: number; sold: number; rented: number }>>`
           WITH s AS (${soldCte}), r AS (${rentCte})
           SELECT x.m, SUM(x.sold)::int AS sold, SUM(x.rented)::int AS rented FROM (
             SELECT EXTRACT(MONTH FROM s.d)::int AS m, 1 AS sold, 0 AS rented FROM s JOIN "Item" it ON it.id = s."itemId" JOIN "DeviceModel" m ON m.id = it."modelId"
@@ -145,24 +153,29 @@ export const itemReports: ReportDef[] = [
     slug: 'prihod-klijent-model',
     title: 'Prihod po klijentu i modelu',
     area: 'Prodaja',
-    description: 'Tko je što kupio i za koliko — svaki red je kombinacija klijenta i modela.',
+    description: 'Tko je što kupio i za koliko — svaki red je kombinacija klijenta i modela; usluge i ručne stavke su u zasebnim redovima.',
     filters: ['year', 'range', 'partner', 'category', 'model'],
     run: async (companyId, f) => {
-      // kao „Prihod po mjesecima": stavke nakon popusta na račun, storna i odobrenja umanjuju prihod
-      const from = Prisma.sql`FROM (${revenueLinesSql(companyId, f, { withStorno: true })}) l JOIN "Partner" p ON p.id = l."partnerId"
-        JOIN "DeviceModel" m ON m.id = l."modelId" LEFT JOIN "Item" it ON it.id = l."itemId"`;
-      const where = Prisma.sql`l."type" = 'SALE' ${inIds('m.id', f.modelIds)} ${lineCatSql(f)}`;
+      // kao „Prihod po mjesecima" → Prodaja: računi vrste prodaja (cijeli račun, i usluge i ručne stavke),
+      // stavke nakon popusta na račun, storna i odobrenja umanjuju prihod — zbroj je jednak stupcu Prodaja
+      // vrsta računa (prodaja) se provjerava unutar izvedene tablice — na računu, odnosno na odobrenju
+      const from = Prisma.sql`FROM (${revenueLinesSql(companyId, f, { withStorno: true, docType: 'SALE' })}) l JOIN "Partner" p ON p.id = l."partnerId"
+        LEFT JOIN "DeviceModel" m ON m.id = l."modelId" LEFT JOIN "Item" it ON it.id = l."itemId" AND it."categoryId" IS NOT NULL`;
+      const where = Prisma.sql`TRUE ${inIds('m.id', f.modelIds)} ${lineCatSql(f)}`;
+      // stavke bez modela: usluge iz šifrarnika i ručne (slobodne) stavke, svaka skupina u svom redu
+      const other = Prisma.sql`CASE WHEN l."lineKind" = 'SERVICE' THEN 'Usluge' ELSE 'Ručne stavke' END`;
       const [rows, months] = await Promise.all([
-        db.$queryRaw<Array<{ pid: string; partner: string; model: string; qty: number; revenue: Prisma.Decimal; last: Date }>>`
-          SELECT p.id AS pid, p.name AS partner, concat_ws(' ', m.brand, m.name) AS model, SUM(l.qty)::int AS qty, SUM(l.net) AS revenue,
+        reportSql<Array<{ pid: string; partner: string; model: string; isModel: boolean; qty: number; revenue: Prisma.Decimal; last: Date }>>`
+          SELECT p.id AS pid, p.name AS partner, COALESCE(MAX(concat_ws(' ', m.brand, m.name)) FILTER (WHERE m.id IS NOT NULL), MAX(${other})) AS model,
+                 bool_or(m.id IS NOT NULL) AS "isModel", SUM(l.qty)::int AS qty, SUM(l.net) AS revenue,
                  MAX(l."date") FILTER (WHERE l."docKind" = 'INVOICE') AS last
           ${from} WHERE ${where}
-          GROUP BY p.id, m.id HAVING SUM(l.qty) <> 0 OR ABS(SUM(l.net)) >= 0.005 ORDER BY revenue DESC LIMIT 1000`,
-        db.$queryRaw<Array<{ m: number; qty: number; revenue: Prisma.Decimal }>>`
+          GROUP BY p.id, COALESCE(m.id, ${other}) HAVING SUM(l.qty) <> 0 OR ABS(SUM(l.net)) >= 0.005 ORDER BY revenue DESC, partner, model`,
+        reportSql<Array<{ m: number; qty: number; revenue: Prisma.Decimal }>>`
           SELECT EXTRACT(MONTH FROM l."date")::int AS m, SUM(l.qty)::int AS qty, SUM(l.net) AS revenue ${from} WHERE ${where} GROUP BY 1`,
       ]);
       const out: Row[] = rows.map((r) => ({
-        partner: r.partner, model: r.model, qty: r.qty, revenue: r2(n(r.revenue)), avgPrice: r.qty > 0 ? r2(n(r.revenue) / r.qty) : null, last: r.last ? iso(r.last) : null, _href: `/partneri/${r.pid}`,
+        partner: r.partner, model: r.model, qty: r.qty, revenue: r2(n(r.revenue)), avgPrice: r.isModel && r.qty > 0 ? r2(n(r.revenue) / r.qty) : null, last: r.last ? iso(r.last) : null, _href: `/partneri/${r.pid}`,
       }));
       const chartRows = monthRows(f.year, (m) => ({ revenue: n(months.find((x) => x.m === m)?.revenue) }));
       return {
@@ -176,9 +189,7 @@ export const itemReports: ReportDef[] = [
         ],
         rows: out,
         chart: monthChart(f.year, chartRows, [{ key: 'revenue', label: 'Prihod' }]),
-        note: rows.length === 1000
-          ? 'Prikazano je 1000 najvećih kombinacija klijenta i modela — suzite filtre.'
-          : 'Prihod je nakon popusta na račun; storna i knjižna odobrenja ga umanjuju (odobrenje se raspoređuje na stavke izvornog računa).',
+        note: 'Prihod je nakon popusta na račun; storna i knjižna odobrenja ga umanjuju (odobrenje se raspoređuje na stavke izvornog računa). Uključene su usluge i ručne stavke (redovi „Usluge" i „Ručne stavke"), pa je zbroj jednak stupcu Prodaja u „Prihod po mjesecima".',
       };
     },
   },
@@ -190,11 +201,11 @@ export const itemReports: ReportDef[] = [
     filters: ['year', 'range', 'partner', 'category', 'model'],
     run: async (companyId, f) => {
       // fakturirano: stavke najma nakon popusta na račun, storna i odobrenja umanjuju (kao „Prihod po mjesecima")
-      const invFrom = Prisma.sql`FROM (${revenueLinesSql(companyId, f, { withStorno: true })}) l
+      const invFrom = Prisma.sql`FROM (${revenueLinesSql(companyId, f, { withStorno: true, lineType: 'RENT' })}) l
         LEFT JOIN "Item" it ON it.id = l."itemId" JOIN "DeviceModel" m ON m.id = COALESCE(l."modelId", it."modelId")`;
-      const invWhere = Prisma.sql`l."type" = 'RENT' ${inIds('m.id', f.modelIds)} ${lineCatSql(f)}`;
+      const invWhere = Prisma.sql`TRUE ${inIds('m.id', f.modelIds)} ${lineCatSql(f)}`;
       const [rows, months] = await Promise.all([
-        db.$queryRaw<Array<{ pid: string; partner: string; model: string; devices: number | null; monthly: Prisma.Decimal | null; billed: Prisma.Decimal | null }>>`
+        reportSql<Array<{ pid: string; partner: string; model: string; devices: number | null; monthly: Prisma.Decimal | null; billed: Prisma.Decimal | null }>>`
           WITH a AS (
             SELECT c."partnerId", it."modelId", COUNT(*)::int AS devices, SUM(ci."monthly") AS monthly
             FROM "ContractItem" ci JOIN "Contract" c ON c.id = ci."contractId" JOIN "Partner" p ON p.id = c."partnerId"
@@ -209,9 +220,8 @@ export const itemReports: ReportDef[] = [
           FROM a FULL OUTER JOIN v ON v."partnerId" = a."partnerId" AND v."modelId" = a."modelId"
           JOIN "Partner" pp ON pp.id = COALESCE(a."partnerId", v."partnerId")
           JOIN "DeviceModel" mm ON mm.id = COALESCE(a."modelId", v."modelId")
-          ORDER BY a.monthly DESC NULLS LAST, v.billed DESC NULLS LAST
-          LIMIT 2000`,
-        db.$queryRaw<Array<{ m: number; billed: Prisma.Decimal }>>`
+          ORDER BY a.monthly DESC NULLS LAST, v.billed DESC NULLS LAST, pp.name, model`,
+        reportSql<Array<{ m: number; billed: Prisma.Decimal }>>`
           SELECT EXTRACT(MONTH FROM l."date")::int AS m, SUM(l.net) AS billed ${invFrom} WHERE ${invWhere} GROUP BY 1`,
       ]);
       const out: Row[] = rows.map((r) => ({
@@ -253,13 +263,13 @@ export const itemReports: ReportDef[] = [
         WHERE it."companyId" = ${companyId} AND it."state" = 'RENTED' AND (hp.id IS NULL OR hp."excluded" = false)
           AND NOT EXISTS (SELECT 1 FROM "ContractItem" x WHERE x."itemId" = it.id) ${inIds('it."partnerId"', f.partnerIds)} ${itf}`;
       const [rows, byModel] = await Promise.all([
-        db.$queryRaw<Array<{ category: string | null; cnt: number; models: number; partners: number; monthly: Prisma.Decimal }>>`
+        reportSql<Array<{ category: string | null; cnt: number; models: number; partners: number; monthly: Prisma.Decimal }>>`
           WITH u AS (${u})
           SELECT cat.name AS category, COUNT(*)::int AS cnt, COUNT(DISTINCT u."modelId")::int AS models, COUNT(DISTINCT u."partnerId")::int AS partners,
                  COALESCE(SUM(u."monthly"), 0) AS monthly
           FROM u LEFT JOIN "Category" cat ON cat.id = u.cat
           GROUP BY cat.name ORDER BY cnt DESC`,
-        db.$queryRaw<Array<{ model: string; cnt: number }>>`
+        reportSql<Array<{ model: string; cnt: number }>>`
           WITH u AS (${u})
           SELECT concat_ws(' ', m.brand, m.name) AS model, COUNT(*)::int AS cnt FROM u JOIN "DeviceModel" m ON m.id = u."modelId"
           GROUP BY m.id ORDER BY cnt DESC LIMIT 14`,
@@ -292,7 +302,7 @@ export const itemReports: ReportDef[] = [
     description: 'Dinamika nabave — koliko je uređaja ušlo u skladište po mjesecu zaprimanja i po kojoj vrijednosti.',
     filters: ['year', 'range', 'category', 'model', 'status', 'warehouse', 'supplier'],
     run: async (companyId, f) => {
-      const rows = await db.$queryRaw<Array<{ m: number; cnt: number; value: Prisma.Decimal; models: number }>>`
+      const rows = await reportSql<Array<{ m: number; cnt: number; value: Prisma.Decimal; models: number }>>`
         SELECT EXTRACT(MONTH FROM it."importDate")::int AS m, COUNT(*)::int AS cnt, SUM(it."cost") AS value, COUNT(DISTINCT it."modelId")::int AS models
         FROM "Item" it JOIN "DeviceModel" m ON m.id = it."modelId"
         WHERE it."companyId" = ${companyId} AND it."importDate" IS NOT NULL ${periodSql('it."importDate"', f)} ${itemFilterSql(f, { partner: false })}
@@ -322,7 +332,7 @@ export const itemReports: ReportDef[] = [
     description: 'Uređaji u kvaru, servisni/zamjenski i kod klijenta — udio po modelu u odnosu na sve uređaje modela.',
     filters: ['partner', 'category', 'model', 'warehouse', 'supplier'],
     run: async (companyId, f) => {
-      const rows = await db.$queryRaw<Array<{ id: string; model: string; total: number; broken: number; other: number; atClient: number; brokenValue: Prisma.Decimal; open: number | null }>>`
+      const rows = await reportSql<Array<{ id: string; model: string; total: number; broken: number; other: number; atClient: number; brokenValue: Prisma.Decimal; open: number | null }>>`
         SELECT m.id, concat_ws(' ', m.brand, m.name) AS model, COUNT(*)::int AS total,
                COUNT(*) FILTER (WHERE it."state" = 'SERVICE')::int AS broken,
                COUNT(*) FILTER (WHERE it."state" = 'OTHER')::int AS other,

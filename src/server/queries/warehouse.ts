@@ -283,38 +283,68 @@ export async function getItemCard(companyId: string, id: string) {
 
 // ---------------------------------------------------------------- izlaz i povrat
 
-/** Uređaji koji su izašli iz skladišta, grupirani po partneru kojem idu. */
-export async function reservedGroups(companyId: string) {
-  const items = await db.item.findMany({
-    where: { companyId, state: 'RESERVED' },
-    orderBy: [{ outAt: 'desc' }, { serial: 'asc' }],
-    select: {
-      id: true,
-      serial: true,
-      cost: true,
-      outAt: true,
-      outById: true,
-      outPartnerId: true,
-      outNote: true,
-      model: { select: { brand: true, name: true } },
-      warehouse: { select: { name: true } },
-    },
-  });
-  const partnerIds = [...new Set(items.map((i) => i.outPartnerId).filter((x): x is string => !!x))];
-  const userIds = [...new Set(items.map((i) => i.outById).filter((x): x is string => !!x))];
-  const [partners, users] = await Promise.all([
-    partnerIds.length ? db.partner.findMany({ where: { companyId, id: { in: partnerIds } }, select: { id: true, name: true } }) : [],
-    userIds.length ? db.user.findMany({ where: { companyId, id: { in: userIds } }, select: { id: true, name: true } }) : [],
-  ]);
+/**
+ * Uređaji koji su izašli iz skladišta, grupirani po partneru kojem idu — jedna stranica.
+ * Skupine (broj i nabavna vrijednost) dolaze iz groupBy preko svih uređaja; stranica
+ * (`skip`/`take` preko skupina poredanih po nazivu partnera) se čita iz baze po skupinama.
+ */
+export async function reservedGroups(companyId: string, page: { skip: number; take: number } = { skip: 0, take: 100 }) {
+  const where = { companyId, state: 'RESERVED' as const };
+  const sums = await db.item.groupBy({ by: ['outPartnerId'], where, _count: { _all: true }, _sum: { cost: true } });
+  const partnerIds = sums.map((g) => g.outPartnerId).filter((x): x is string => !!x);
+  const partners = partnerIds.length ? await db.partner.findMany({ where: { companyId, id: { in: partnerIds } }, select: { id: true, name: true } }) : [];
   const pName = new Map(partners.map((p) => [p.id, p.name]));
-  const uName = new Map(users.map((u) => [u.id, u.name]));
-  const groups = new Map<string, { partnerId: string | null; partnerName: string | null; items: Array<(typeof items)[number] & { outByName: string | null }> }>();
-  for (const i of items) {
-    const key = i.outPartnerId ?? '';
-    if (!groups.has(key)) groups.set(key, { partnerId: i.outPartnerId, partnerName: i.outPartnerId ? pName.get(i.outPartnerId) ?? null : null, items: [] });
-    groups.get(key)!.items.push({ ...i, outByName: i.outById ? uName.get(i.outById) ?? null : null });
+  const all = sums
+    .map((g) => ({ partnerId: g.outPartnerId, partnerName: g.outPartnerId ? pName.get(g.outPartnerId) ?? null : null, count: g._count._all, cost: num(g._sum.cost) }))
+    .sort((a, b) => (a.partnerName ?? '￿').localeCompare(b.partnerName ?? '￿', 'hr'));
+  // koje skupine (i koji dio svake) padaju na stranicu
+  let skip = page.skip;
+  let take = page.take;
+  const slices: Array<{ group: (typeof all)[number]; skip: number; take: number }> = [];
+  for (const g of all) {
+    if (take <= 0) break;
+    if (skip >= g.count) {
+      skip -= g.count;
+      continue;
+    }
+    const n = Math.min(take, g.count - skip);
+    slices.push({ group: g, skip, take: n });
+    take -= n;
+    skip = 0;
   }
-  return [...groups.values()].sort((a, b) => (a.partnerName ?? '￿').localeCompare(b.partnerName ?? '￿', 'hr'));
+  const lists = await Promise.all(
+    slices.map((s) =>
+      db.item.findMany({
+        where: { ...where, outPartnerId: s.group.partnerId },
+        orderBy: [{ outAt: 'desc' }, { serial: 'asc' }, { id: 'asc' }],
+        skip: s.skip,
+        take: s.take,
+        select: {
+          id: true,
+          serial: true,
+          cost: true,
+          outAt: true,
+          outById: true,
+          outPartnerId: true,
+          outNote: true,
+          model: { select: { brand: true, name: true } },
+          warehouse: { select: { name: true } },
+        },
+      }),
+    ),
+  );
+  const userIds = [...new Set(lists.flat().map((i) => i.outById).filter((x): x is string => !!x))];
+  const users = userIds.length ? await db.user.findMany({ where: { companyId, id: { in: userIds } }, select: { id: true, name: true } }) : [];
+  const uName = new Map(users.map((u) => [u.id, u.name]));
+  return {
+    total: all.reduce((a, g) => a + g.count, 0),
+    groups: slices.map((s, i) => ({
+      ...s.group,
+      /** Redni broj prvog prikazanog uređaja u skupini (0 = od početka). */
+      from: s.skip,
+      items: lists[i].map((it) => ({ ...it, outByName: it.outById ? uName.get(it.outById) ?? null : null })),
+    })),
+  };
 }
 
 /** Uređaji na ugovorima koji bi se trebali vratiti (istek, raskid, kraj sezone ili plana). */

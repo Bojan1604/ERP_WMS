@@ -3,7 +3,7 @@
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import { authenticatePortalUser, clearPortalSession, createPortalSession, requestMeta, setPortalCookie } from '@/server/portal/auth';
-import { TOO_MANY, beginAttempt, loginKeys, succeedAttempt } from '@/server/services/login-attempts';
+import { beginAttempt, loginKeys, succeedAttempt } from '@/server/services/login-attempts';
 
 const schema = z.object({ email: z.string().trim().toLowerCase().min(1).max(200), password: z.string().min(1).max(200) });
 
@@ -15,7 +15,7 @@ export async function portalLogin(_: unknown, fd: FormData): Promise<{ error?: s
   const meta = await requestMeta();
   // pokušaj se upisuje u bazu prije provjere lozinke (po adresi i po IP-u)
   const attempt = await beginAttempt(loginKeys('portal', email, meta.ip));
-  if (!attempt.allowed) return { error: TOO_MANY };
+  if (!attempt.allowed) return { error: attempt.message };
 
   const user = await authenticatePortalUser(email, password);
   if (!user) return { error: 'Pogrešna e-adresa ili lozinka.' };

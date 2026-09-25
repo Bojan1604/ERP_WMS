@@ -5,7 +5,7 @@ import { approvalRequests, type ApprovalRow } from '@/server/queries/approvals';
 import { getLookups } from '@/server/queries/lookups';
 import { can } from '@/domain/permissions';
 import { Badge, Card, COLOR_TONE, Empty, PageHeader } from '@/components/ui/misc';
-import { AckButton, ApprovalButtons, ReceiveApprovalButtons } from '@/components/warehouse/approval-buttons';
+import { AckButton, ApprovalButtons, ReceiveApprovalButtons, RejectButton } from '@/components/warehouse/approval-buttons';
 import { AttachmentGallery } from '@/components/warehouse/attachments';
 import { dateTime } from '@/lib/format';
 
@@ -24,6 +24,15 @@ export default async function ApprovalsPage() {
     if (!canEdit) return null;
     if (r.kind === 'RECEIVE') {
       return <ReceiveApprovalButtons id={r.id} serials={r.serials.length} returning={r.items.length} warehouseId={r.warehouse?.id ?? null} warehouses={warehouses} />;
+    }
+    // vlastiti zahtjev odobrava drugi korisnik (services/warehouse resolveApproval) — ostaje samo odbijanje (povlačenje)
+    if (r.requesterId ? r.requesterId === user.id : r.requestedBy === user.name) {
+      return (
+        <div className="flex flex-col items-end gap-1">
+          <RejectButton id={r.id} />
+          <span className="text-xs text-fg-3">Vlastiti zahtjev odobrava drugi korisnik.</span>
+        </div>
+      );
     }
     return <ApprovalButtons id={r.id} count={r.items.length} onContract={r.items.filter((i) => i.contractItem).length} target={r.target?.name ?? '—'} targetKind={r.target?.kind ?? ''} />;
   };

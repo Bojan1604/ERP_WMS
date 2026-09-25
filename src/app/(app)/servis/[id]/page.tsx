@@ -86,7 +86,7 @@ export default async function ServiceOrderPage({ params }: { params: Promise<{ i
             </LinkButton>
             <PdfButton kind={open ? 'service' : 'service-delivery'} id={id} send={canEdit} />
             {canEdit && <SendEmailButton kind="service" id={id} />}
-            {canEdit && o.status !== 'REPLACED' && o.status !== 'WRITTEN_OFF' && !o.invoice && (
+            {canEdit && o.status !== 'REPLACED' && o.status !== 'WRITTEN_OFF' && (
               <ActionButton
                 action={deleteServiceAction}
                 input={{ id }}
@@ -106,7 +106,7 @@ export default async function ServiceOrderPage({ params }: { params: Promise<{ i
 
       <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
         <div className="min-w-0 space-y-4">
-          {canEdit && (
+          {canEdit && !(o.status === 'WRITTEN_OFF' && item?.state === 'WRITTEN_OFF') && (
             <Card title="Status">
               <StatusControl id={id} current={o.status} hasItem={!!item} action={serviceStatusAction} />
             </Card>

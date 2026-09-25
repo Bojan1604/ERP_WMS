@@ -107,7 +107,8 @@ export async function packageToDocument(tx: Tx, actor: Actor, id: string, partne
   ]);
   assert(partner, 'Kupac ne postoji.');
   const list = p.items.map((i) => byId.get(i.itemId)!);
-  const prices = distributePackagePrice(list.map((d) => d.price), p.price === null ? null : num(p.price));
+  // isti model = ista cijena (razlika zaokruživanja na jednu stavku)
+  const prices = distributePackagePrice(list.map((d) => d.price), p.price === null ? null : num(p.price), list.map((d) => d.modelId));
   const vat = customerVat(partner, { vatRegistered: company.vatRegistered, vatRate: num(company.vatRate), country: company.country });
   const date = today();
   const note = [`Paket: ${p.name}`, p.note].filter(Boolean).join('\n');

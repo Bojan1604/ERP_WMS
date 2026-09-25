@@ -26,6 +26,15 @@ export interface RentContext {
   locked?: boolean;
 }
 
+/** Ključ grupe u editoru: isti model, cijena i vrsta → jedna stavka s popisom serijskih (null = zasebna stavka). */
+export function editorGroupKey(l: EditorLine): string | null {
+  const k = deviceLineKey(l);
+  return k === null ? null : `${k}|${l.lineType ?? ''}|${l.monthly ?? ''}`;
+}
+
+/** Broj stavki kako ih editor prikazuje (grupirani uređaji su jedna stavka). */
+export const editorLineCount = (lines: EditorLine[]) => groupLines(lines, editorGroupKey).length;
+
 /** Tablica stavki u editoru računa i ponude. */
 export function LinesTable({
   lines,
@@ -49,10 +58,7 @@ export function LinesTable({
   const switchType = (keys: string[], to: LineType) => rent && onChange(lines.map((l) => (keys.includes(l.key) ? switchLineType(l, to, rent) : l)));
   const inv = mode === 'invoice';
   // isti model, cijena i vrsta → jedna stavka s popisom serijskih
-  const groups = groupLines(lines, (l) => {
-    const k = deviceLineKey(l);
-    return k === null ? null : `${k}|${l.lineType ?? ''}|${l.monthly ?? ''}`;
-  });
+  const groups = groupLines(lines, editorGroupKey);
 
   if (!lines.length) {
     return <p className="px-4 py-10 text-center text-sm text-fg-3">Još nema stavki — dodajte uređaje, usluge ili ručnu stavku.</p>;

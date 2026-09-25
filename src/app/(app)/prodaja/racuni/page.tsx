@@ -7,7 +7,7 @@ import { getPartnerOptions } from '@/server/queries/lookups';
 import { invoiceYears, listInvoices, pendingOut, readInvoiceFilters, unsentCorrections } from '@/server/queries/sales';
 import { pendingForCompany } from '@/server/services/rentals';
 import { attachmentCounts } from '@/server/services/attachments';
-import { paymentState } from '@/domain/invoice';
+import { overpaidAmount, paymentState } from '@/domain/invoice';
 import { toISO, today } from '@/domain/dates';
 import { num } from '@/domain/money';
 import { EINVOICE_FILTER, EINVOICE_FILTER_LABEL, EINVOICE_STATUS_LABEL, EINVOICE_STATUS_TONE, type EInvoiceStatusCode } from '@/domain/sales-lines';
@@ -207,6 +207,9 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
                 );
                 const href = `${BASE}/${r.id}`;
                 const counting = r.status === 'ISSUED' && (r.kind === 'INVOICE' || r.kind === 'ADVANCE') && !r.stornoed;
+                const overpaid = counting
+                  ? overpaidAmount({ kind: r.kind, stornoed: r.stornoed, total: num(r.grandTotal), advance: num(r.advanceAmount), paid: num(r.paidTotal), credited: num(r.creditedTotal) })
+                  : 0;
                 const eStatus = r.eInvoiceStatus as EInvoiceStatusCode | null;
                 const unsentCorrection = (r.kind === 'STORNO' || r.kind === 'CREDIT_NOTE') && r.status === 'ISSUED' && !eStatus && !!r.refInvoice?.eInvoiceStatus;
                 const nFiles = files.get(r.id) ?? 0;
@@ -257,7 +260,14 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
                     <td className="num text-fg-2">{r._count.lines || '—'}</td>
                     <td className="num">{amount(num(r.netTotal))}</td>
                     <td className="num font-medium">{amount(num(r.grandTotal))}</td>
-                    <td className={cn('num', num(r.openAmount) > 0 && 'font-medium')}>{counting ? amount(num(r.openAmount)) : '—'}</td>
+                    <td className={cn('num', num(r.openAmount) > 0 && 'font-medium')}>
+                      {counting ? amount(num(r.openAmount)) : '—'}
+                      {overpaid > 0 && (
+                        <span className="block text-xs font-medium text-warn" title="Preplata — iznos za povrat kupcu">
+                          povrat {amount(overpaid)}
+                        </span>
+                      )}
+                    </td>
                     <td className="num">
                       {counting ? (
                         <Badge tone={PAY_TONE[st.tone]} title={st.key === 'paid' ? 'Dana do plaćanja' : 'Dana od izdavanja'}>

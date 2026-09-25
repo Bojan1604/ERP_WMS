@@ -193,6 +193,14 @@ export async function changeServiceStatus(
   assert(status !== 'REPLACED', 'Status „Zamijenjeno" postavlja se odabirom zamjenskog uređaja.');
   assert(o.status !== 'REPLACED', 'Nalog je zatvoren zamjenom uređaja.');
   assert(status !== o.status, 'Nalog je već u tom statusu.');
+  // izlaz iz otpisa: ako je uređaj otpisan po ovom nalogu, nalog ostaje zatvoren (kao zamjena)
+  if (o.status === 'WRITTEN_OFF' && o.itemId) {
+    const [item, wo] = await Promise.all([
+      tx.item.findFirst({ where: { id: o.itemId, companyId: actor.companyId }, select: { state: true } }),
+      tx.itemEvent.count({ where: { itemId: o.itemId, type: 'WRITE_OFF', refType: 'service', refId: o.id } }),
+    ]);
+    assert(!(item?.state === 'WRITTEN_OFF' && wo > 0), `Uređaj ${o.serial ?? ''} otpisan je po ovom nalogu — nalog se ne može ponovno otvoriti.`);
+  }
   // ponovno otvaranje zatvorenog naloga: uređaj smije imati samo jedan otvoren nalog
   if (o.itemId && isClosing(o.status) && !isClosing(status)) {
     const other = await tx.serviceOrder.findFirst({
@@ -409,6 +417,8 @@ export async function replaceDevice(
       status: 'REPLACED',
       replacementItemId: repl.id,
       closedAt: o.closedAt ?? fromISO(today()),
+      // zamjena iz „Prijavljeno": uređaj je time i zaprimljen (kao kod ostalih promjena statusa)
+      receivedAt: o.receivedAt ?? fromISO(today()),
       solution: o.solution ?? `Zamjena uređajem ${repl.serial}`,
       timeline: toJson([...timelineOf(o.timeline), entry(actor, 'REPLACED', note)]),
     },
@@ -427,17 +437,15 @@ export async function replaceDevice(
 export async function deleteServiceOrder(tx: Tx, actor: Actor, id: string) {
   const o = await loadOrder(tx, actor, id);
   assert(o.status !== 'REPLACED', `Nalog ${o.number} zatvoren je zamjenom uređaja — ne može se obrisati.`);
-  // otpis je trag zašto je uređaj otpisan; račun iz naloga bi izgubio izvor
+  // otpis je trag zašto je uređaj otpisan
   assert(o.status !== 'WRITTEN_OFF', `Nalog ${o.number} zatvoren je otpisom — ne može se obrisati.`);
-  if (o.invoiceId) {
-    const inv = await tx.invoice.findFirst({ where: { id: o.invoiceId, companyId: actor.companyId }, select: { number: true, status: true } });
-    assert(
-      !inv,
-      inv?.status === 'DRAFT'
-        ? `Za nalog ${o.number} postoji nacrt računa — prvo obrišite nacrt, pa tek onda nalog.`
-        : `Za nalog ${o.number} izdan je račun ${inv?.number ?? ''} — nalog se ne može obrisati.`,
-    );
+  // i nakon ponovnog otvaranja: povijest uređaja kaže je li ga ovaj nalog otpisao
+  if (o.itemId) {
+    const wo = await tx.itemEvent.count({ where: { itemId: o.itemId, type: 'WRITE_OFF', refType: 'service', refId: o.id } });
+    assert(!wo, `Po nalogu ${o.number} uređaj je otpisan — nalog se ne može obrisati.`);
   }
+  // Račun uz nalog (invoiceId) je izvorni račun uređaja (prodaja/rata, radi jamstva), a ne račun
+  // izdan iz naloga — on ne priječi brisanje; brisanjem naloga račun ostaje netaknut.
   if (o.itemId) {
     // uređaj u servisu mora imati nalog (otvoren ili popravljen, čeka povrat) — ako je ovo jedini, ne briše se
     const [item, other] = await Promise.all([

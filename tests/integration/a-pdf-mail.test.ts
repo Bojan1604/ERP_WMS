@@ -49,6 +49,9 @@ async function setup(tag: string) {
       email: 'racuni@firma.hr',
       logo: LOGO,
       legalFooter: 'Temeljni kapital 2.654,46 EUR · Trgovački sud u Zagrebu · MBS 080000000',
+      // zadane KPD šifre: eRačun (B2B) se bez KPD-a na svakoj stavci ne izdaje (HR-BR-25)
+      kpdSale: '26.20.11',
+      kpdService: '62.90.10',
       proformaTitle: 'Proforma',
       invoicePremises: 'PP1',
       invoiceDevice: '1',
@@ -236,7 +239,9 @@ test('PDF predračuna, ponude, otpremnice, servisnog naloga, narudžbenice, prim
   assert.doesNotMatch(sv, /Neispravno napajanje/);
   const sd = texts((await documentDefinitionFor('service-delivery', so.id, s.companyId)).def);
   assert.match(sd, /NALOG ZA DOSTAVU/);
-  assert.match(sd, /Neispravno napajanje/);
+  // dijagnoza je interna (kao na portalu) — klijent na nalogu za dostavu vidi rješenje
+  assert.doesNotMatch(sd, /Neispravno napajanje/);
+  assert.match(sd, /Zamijenjeno napajanje/);
   assert.match(sd, /Uređaj preuzeo \(klijent\)/);
 
   const model = await db.deviceModel.create({ data: { companyId: s.companyId, name: 'ThinkPad X1', brand: 'Lenovo', code: 'TP-X1' } });
@@ -338,7 +343,8 @@ test('e-pošta: postavke (šifrirana lozinka), predlošci, slanje s PDF-om, ZIP 
   const d1 = await buildEmailDraft(s.user, 'invoice', inv.id);
   assert.equal(d1.configured, true);
   assert.ok(d1.subject.startsWith(`Vaš račun ${inv.number} — Firma mail`));
-  assert.match(d1.body, /^Iznos 125,00 €, dospijeće \d\d\.\d\d\.\d{4}\.?, kupac Kupac Čćžšđ d\.o\.o\.\.$/);
+  // vrijednost koja završava točkom („d.o.o.") ispred točke u predlošku — bez dvostruke točke
+  assert.match(d1.body, /^Iznos 125,00 €, dospijeće \d\d\.\d\d\.\d{4}\.?, kupac Kupac Čćžšđ d\.o\.o\.$/);
   const stored = (await db.company.findUniqueOrThrow({ where: { id: s.companyId }, select: { mailTemplates: true } })).mailTemplates as Record<string, unknown>;
   assert.deepEqual(Object.keys(stored), ['invoice'], 'zadani tekstovi se ne spremaju');
 

@@ -1,7 +1,12 @@
 import 'server-only';
 import { Prisma } from '@prisma/client';
 import { db } from '../db';
-import { num } from '@/domain/money';
+import { num, r2 } from '@/domain/money';
+import { escapeLike } from '@/lib/like';
+import { deviceWarrantyEnd } from './service';
+
+/** Uređaji „kod partnera" — otpisani se ne broje ni ne prikazuju (kao na portalu). */
+const ACTIVE_DEVICE: Prisma.ItemWhereInput = { state: { not: 'WRITTEN_OFF' } };
 
 export type PartnerParams = Record<string, string | string[] | undefined>;
 const str = (v: string | string[] | undefined) => (typeof v === 'string' ? v.trim() : '');
@@ -12,12 +17,13 @@ export function partnerWhere(companyId: string, params: PartnerParams): Prisma.P
   const type = str(params.tip);
   const where: Prisma.PartnerWhereInput = { companyId };
   if (q) {
+    const lit = escapeLike(q);
     where.OR = [
-      { name: { contains: q, mode: 'insensitive' } },
-      { oib: { startsWith: q } },
-      { vatId: { contains: q, mode: 'insensitive' } },
-      { city: { contains: q, mode: 'insensitive' } },
-      { email: { contains: q, mode: 'insensitive' } },
+      { name: { contains: lit, mode: 'insensitive' } },
+      { oib: { startsWith: lit } },
+      { vatId: { contains: lit, mode: 'insensitive' } },
+      { city: { contains: lit, mode: 'insensitive' } },
+      { email: { contains: lit, mode: 'insensitive' } },
     ];
   }
   if (type === 'kupci') where.isCustomer = true;
@@ -45,7 +51,7 @@ export async function partnerStats(companyId: string, ids: string[]) {
       _sum: { openAmount: true, grandTotal: true },
       _count: { _all: true },
     }),
-    db.item.groupBy({ by: ['partnerId'], where: { companyId, partnerId: { in: ids } }, _count: { _all: true } }),
+    db.item.groupBy({ by: ['partnerId'], where: { companyId, partnerId: { in: ids }, ...ACTIVE_DEVICE }, _count: { _all: true } }),
     db.contract.groupBy({ by: ['partnerId'], where: { companyId, partnerId: { in: ids }, status: 'ACTIVE' }, _count: { _all: true } }),
   ]);
   const out = new Map<string, S>(ids.map((id) => [id, { open: 0, devices: 0, contracts: 0, invoices: 0, turnover: 0 }]));
@@ -91,7 +97,7 @@ export async function getPartner(companyId: string, id: string) {
 export async function partnerCounts(companyId: string, partnerId: string) {
   const [invoices, devices, contracts, prices, open] = await Promise.all([
     db.invoice.count({ where: { companyId, partnerId } }),
-    db.item.count({ where: { companyId, partnerId } }),
+    db.item.count({ where: { companyId, partnerId, ...ACTIVE_DEVICE } }),
     db.contract.count({ where: { companyId, partnerId } }),
     db.priceAgreement.count({ where: { companyId, partnerId } }),
     db.invoice.aggregate({ where: { companyId, partnerId, status: 'ISSUED', openAmount: { gt: 0 } }, _sum: { openAmount: true }, _count: true }),
@@ -120,18 +126,19 @@ export async function partnerInvoices(companyId: string, partnerId: string, page
 
 export const partnerDeviceSelect = {
   id: true, serial: true, state: true, issueDate: true, warrantyStart: true, warrantyMonths: true, salePrice: true,
-  model: { select: { brand: true, name: true } },
+  model: { select: { brand: true, name: true, warrantyMonths: true } },
   status: { select: { name: true, color: true } },
   contractItem: { select: { contract: { select: { id: true, number: true } } } },
 } satisfies Prisma.ItemSelect;
 
 export async function partnerDevices(companyId: string, partnerId: string, page?: { skip: number; take: number }) {
-  const where: Prisma.ItemWhereInput = { companyId, partnerId };
+  const where: Prisma.ItemWhereInput = { companyId, partnerId, ...ACTIVE_DEVICE };
   const [rows, total] = await Promise.all([
     db.item.findMany({ where, orderBy: [{ model: { name: 'asc' } }, { serial: 'asc' }], select: partnerDeviceSelect, ...(page ? { skip: page.skip, take: page.take } : {}) }),
     db.item.count({ where }),
   ]);
-  return { rows, total };
+  // kraj jamstva isto kao na portalu: početak jamstva ili izdavanja + trajanje uređaja ili modela
+  return { rows: rows.map((r) => ({ ...r, warrantyEnd: deviceWarrantyEnd(r) })), total };
 }
 
 export async function partnerContracts(companyId: string, partnerId: string) {
@@ -172,11 +179,9 @@ export interface LedgerRow {
  * tekućim saldom izračunatim u bazi. Storno i odobrenje su negativni pa sami
  * umanjuju dug; kod konačnog računa oduzima se već plaćeni predujam.
  */
-export async function partnerLedger(companyId: string, partnerId: string, limit = 1000) {
-  const rows = await db.$queryRaw<
-    Array<{ date: Date; kind: 'invoice' | 'payment'; invoiceId: string; number: string | null; invKind: string | null; description: string | null; debit: Prisma.Decimal; credit: Prisma.Decimal; balance: Prisma.Decimal }>
-  >`
-    WITH t AS (
+export async function partnerLedger(companyId: string, partnerId: string, page: { skip: number; take: number } = { skip: 0, take: 1000 }) {
+  // stranica 1 = najnovije stavke (prikazane kronološki); saldo je tekući preko cijele kartice, zbrojevi agregatom
+  const t = Prisma.sql`
       SELECT i."date", 'invoice' AS kind, i.id AS "invoiceId", i."number", i."kind"::text AS "invKind", i."description",
              (i."grandTotal" - i."advanceAmount") AS debit, 0::numeric AS credit, 0 AS ord, i."seq" AS seq, i.id AS rid
       FROM "Invoice" i
@@ -184,14 +189,29 @@ export async function partnerLedger(companyId: string, partnerId: string, limit 
       UNION ALL
       SELECT p."date", 'payment', i.id, i."number", NULL, p."note", 0::numeric, p."amount", 1, i."seq", p.id
       FROM "Payment" p JOIN "Invoice" i ON i.id = p."invoiceId"
-      WHERE i."companyId" = ${companyId} AND i."partnerId" = ${partnerId} AND i."status" = 'ISSUED'
-    ), r AS (
+      WHERE i."companyId" = ${companyId} AND i."partnerId" = ${partnerId} AND i."status" = 'ISSUED'`;
+  const [rows, [sum]] = await Promise.all([
+    db.$queryRaw<
+      Array<{ date: Date; kind: 'invoice' | 'payment'; invoiceId: string; number: string | null; invKind: string | null; description: string | null; debit: Prisma.Decimal; credit: Prisma.Decimal; balance: Prisma.Decimal }>
+    >`
+    WITH t AS (${t}), r AS (
       SELECT *, SUM(debit - credit) OVER (ORDER BY "date", ord, seq, rid ROWS UNBOUNDED PRECEDING) AS balance,
              ROW_NUMBER() OVER (ORDER BY "date" DESC, ord DESC, seq DESC, rid DESC) AS rn
       FROM t
     )
     SELECT "date", kind, "invoiceId", "number", "invKind", "description", debit, credit, balance
-    FROM r WHERE rn <= ${limit}
-    ORDER BY "date", ord, seq, rid`;
-  return rows.map<LedgerRow>((r) => ({ ...r, debit: num(r.debit), credit: num(r.credit), balance: num(r.balance) }));
+    FROM r WHERE rn > ${page.skip} AND rn <= ${page.skip + page.take}
+    ORDER BY "date", ord, seq, rid`,
+    db.$queryRaw<Array<{ cnt: number; debit: Prisma.Decimal | null; credit: Prisma.Decimal | null }>>`
+    SELECT COUNT(*)::int AS cnt, SUM(debit) AS debit, SUM(credit) AS credit FROM (${t}) t`,
+  ]);
+  const debit = num(sum.debit);
+  const credit = num(sum.credit);
+  return {
+    rows: rows.map<LedgerRow>((r) => ({ ...r, debit: num(r.debit), credit: num(r.credit), balance: num(r.balance) })),
+    total: sum.cnt,
+    debit,
+    credit,
+    balance: r2(debit - credit),
+  };
 }

@@ -6,14 +6,14 @@ import { audit, diff } from '../audit';
 import { nextDocNumber } from '../numbering';
 import { changeItemStatus, itemEvents, type Actor } from './items';
 import { createDraft, issueInvoice, markPaid, type LineInput } from './invoices';
-import { addPausedPeriods, coveredPeriods, toDevice, toReturnedDevice, toTerms, type PauseRow } from './contract-items';
+import { addPausedPeriods, billingItems, coveredPeriods, toDevice, toReturnedDevice, toTerms, type PauseRow } from './contract-items';
 import {
   pendingInstallments, installmentDate, planSummary, scheduledCharges, BILLING_LABEL,
-  type BillingCode, type BillingModeCode, type PendingInstallment, type PlanPeriodInput,
+  type BillingCode, type BillingModeCode, type ContractDevice, type PendingInstallment, type PlanPeriodInput,
 } from '@/domain/billing';
 import { addMonths, formatDate, fromISO, periodLabel, toISO, today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
-import { applyBulkTerms, BULK_SEASON_OPTIONS, bulkCutoff, pastPeriods, validatePlan, type BulkSeason } from '@/domain/plan';
+import { applyBulkTerms, BULK_SEASON_OPTIONS, pastPeriods, rebasePlan, validatePlan, type BulkSeason } from '@/domain/plan';
 import { customerVat } from '@/domain/tax';
 
 export { toDevice, toReturnedDevice, toTerms } from './contract-items';
@@ -32,7 +32,7 @@ export async function attachItems(
   const ids = rows.map((r) => r.itemId);
   const items = await tx.item.findMany({
     where: { id: { in: ids }, companyId: actor.companyId },
-    select: { id: true, serial: true, state: true, partnerId: true, contractItem: { select: { contractId: true } } },
+    select: { id: true, serial: true, state: true, partnerId: true, issueDate: true, contractItem: { select: { contractId: true } } },
   });
   assert(items.length === ids.length, 'Neki uređaji ne postoje.');
   const taken = items.filter((i) => i.contractItem);
@@ -49,22 +49,27 @@ export async function attachItems(
       skipped: r.skipped ?? [],
     })),
   });
-  const date = opts.issueDate ?? today();
-  await changeItemStatus(tx, actor, ids, {
-    kind: 'RENTED',
-    data: { partnerId: c.partnerId, issueDate: new Date(`${date}T00:00:00Z`), warrantyStart: new Date(`${date}T00:00:00Z`), warehouseId: null },
-    event: { type: 'RENTED', message: `U najmu — ugovor ${c.number} (${c.partner.name})`, refType: 'contract', refId: contractId },
-  });
+  const date = fromISO(opts.issueDate ?? today());
+  const event = { type: 'RENTED', message: `U najmu — ugovor ${c.number} (${c.partner.name})`, refType: 'contract', refId: contractId } as const;
+  // uređaj koji je već kod tog klijenta zadržava datum izdavanja i početak jamstva
+  const atClient = new Set(items.filter((i) => i.state !== 'IN_STOCK' && i.state !== 'RESERVED' && i.partnerId === c.partnerId && i.issueDate).map((i) => i.id));
+  const fresh = ids.filter((id) => !atClient.has(id));
+  if (fresh.length) {
+    await changeItemStatus(tx, actor, fresh, { kind: 'RENTED', data: { partnerId: c.partnerId, issueDate: date, warrantyStart: date, warehouseId: null }, event });
+  }
+  if (atClient.size) await changeItemStatus(tx, actor, [...atClient], { kind: 'RENTED', data: { partnerId: c.partnerId, warehouseId: null }, event });
 }
 
 /**
- * Ugovori koji mogu imati rate za izdati: aktivni i zatvoreni u programu (raskinut
- * ili istekao) s krajem unutar razdoblja koje motor gleda unatrag.
+ * Ugovori koji mogu imati rate za izdati: aktivni, pauzirani s poznatim početkom
+ * pauze (rate prije pauze) i zatvoreni u programu (raskinut ili istekao) s krajem
+ * unutar razdoblja koje motor gleda unatrag.
  */
 export function billableContractWhere(now: string): Prisma.ContractWhereInput {
   return {
     OR: [
       { status: 'ACTIVE' },
+      { status: 'PAUSED', pausedSince: { not: null } },
       { status: { in: ['EXPIRED', 'TERMINATED'] }, closedAt: { not: null }, endDate: { gte: fromISO(addMonths(now, -25)) } },
     ],
   };
@@ -79,17 +84,29 @@ export const billingDevices = (c: { items: ContractItem[]; returnedItems: Parame
   ...c.returnedItems.map(toReturnedDevice),
 ];
 
+/** Koliko mjeseci unatrag „Rate za izdati" traže neizdane rate. */
+const PENDING_LOOKBACK = 24;
+
 /** Rate za izdati po ugovorima firme (ili jednom ugovoru). */
 export async function pendingForCompany(tx: Tx, companyId: string, opts: { contractId?: string; now?: string } = {}) {
   const now = opts.now ?? today();
-  const contracts = await tx.contract.findMany({
-    where: { companyId, ...billableContractWhere(now), ...(opts.contractId ? { id: opts.contractId } : {}), partner: { excluded: false } },
-    include: { items: true, returnedItems: { where: returnedWhere(now) }, partner: { select: { id: true, name: true } } },
-  });
-  const covered = await coveredPeriods(tx, contracts.map((c) => c.id));
+  // pokrivenost, preskočena i pauzirana razdoblja samo u prozoru gledanja unatrag (motor ne gleda starija)
+  const since = addMonths(now, -PENDING_LOOKBACK).slice(0, 7);
+  const where: Prisma.ContractWhereInput = { companyId, ...billableContractWhere(now), ...(opts.contractId ? { id: opts.contractId } : {}), partner: { excluded: false } };
+  // upiti idu usporedno: uređaji i pokrivenost za sve ugovore firme, ugovori bez naplate se preskaču ispod
+  const [contracts, items, returned, covered] = await Promise.all([
+    tx.contract.findMany({ where, include: { partner: { select: { id: true, name: true } } } }),
+    billingItems(tx, companyId, since, opts.contractId),
+    tx.returnedContractItem.findMany({ where: { contract: where, ...returnedWhere(now) } }),
+    coveredPeriods(tx, opts.contractId ? [opts.contractId] : { companyId }, { since }),
+  ]);
+  const devices = new Map<string, ContractDevice[]>(contracts.map((c) => [c.id, []]));
+  for (const d of items) devices.get(d.contractId)?.push(d.device);
+  // skinuti uređaji iza trenutnih (kao `billingDevices`)
+  for (const r of returned) devices.get(r.contractId)?.push(toReturnedDevice(r));
   const out: Array<PendingInstallment & { contractId: string; contractNumber: string; partner: { id: string; name: string } }> = [];
   for (const c of contracts) {
-    const rows = pendingInstallments(toTerms(c), billingDevices(c), covered.get(c.id) ?? new Set(), now);
+    const rows = pendingInstallments(toTerms(c), devices.get(c.id)!, covered.get(c.id) ?? new Set(), now, PENDING_LOOKBACK);
     for (const r of rows) out.push({ ...r, contractId: c.id, contractNumber: c.number, partner: c.partner });
   }
   return out.sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.contractNumber.localeCompare(b.contractNumber));
@@ -99,7 +116,7 @@ export async function pendingForCompany(tx: Tx, companyId: string, opts: { contr
  * Nacrt računa za ratu: stavke su uređaji koji su tog razdoblja u naplati,
  * svaki s mjesečnom cijenom × brojem mjeseci naplate.
  */
-export async function draftInstallment(tx: Tx, actor: Actor, contractId: string, period: string) {
+export async function draftInstallment(tx: Tx, actor: Actor, contractId: string, period: string, opts: { date?: string } = {}) {
   const c = await tx.contract.findFirst({
     where: { id: contractId, companyId: actor.companyId },
     include: {
@@ -113,21 +130,22 @@ export async function draftInstallment(tx: Tx, actor: Actor, contractId: string,
   const covered = (await coveredPeriods(tx, [c.id])).get(c.id) ?? new Set();
   const terms = toTerms(c);
   const pending = pendingInstallments(terms, billingDevices(c), covered, installmentDate(terms, period), 1200).find((p) => p.period === period);
-  assert(pending, `Za razdoblje ${period} nema rate za izdati.`);
+  assert(pending, `Za razdoblje ${periodLabel(period)} nema rate za izdati.`);
 
   const byItem = new Map([...c.returnedItems, ...c.items].map((ci) => [ci.itemId, ci.item]));
   const lines: LineInput[] = pending.lines.map((l) => {
     const item = byItem.get(l.itemId)!;
     const name = [item.model.brand, item.model.name].filter(Boolean).join(' ');
-    const months = l.billing === 'ONCE' ? l.months : l.months;
+    const months = l.months;
     return {
       kind: 'DEVICE',
       itemId: l.itemId,
       modelId: item.modelId,
       // serijski broj se ispisuje iz uređaja — bez njega u opisu isti modeli idu kao jedna stavka
-      description: `Najam ${name} — ${BILLING_LABEL[l.billing].toLowerCase()}`,
-      unit: 'mj',
-      kpd: item.model.kpd,
+      // količina = broj uređaja (isti modeli se na ispisu spajaju), pa jedinica nije „mj" — mjeseci su u opisu
+      description: `Najam ${name} — ${BILLING_LABEL[l.billing].toLowerCase()}${l.billing !== 'MONTHLY' || months !== 1 ? ` (${months} mj.)` : ''}`,
+      unit: 'kom',
+      // KPD: model za najam → zadani za najam u firmi → model (defaultKpd pri upisu stavke)
       qty: 1,
       monthly: l.monthly,
       months,
@@ -135,13 +153,12 @@ export async function draftInstallment(tx: Tx, actor: Actor, contractId: string,
     };
   });
   const vat = customerVat(c.partner, { vatRegistered: c.company.vatRegistered, vatRate: num(c.company.vatRate), country: c.company.country });
-  // datum rate, ali ne kasniji od danas ni raniji od zadnjeg izdanog računa
-  let date = installmentDate(toTerms(c), period);
-  if (date > today()) date = today();
+  // datum računa je dan izdavanja (serija tekuće godine), ne datum rate — razdoblje ostaje u opisu i `period`
+  const date = await notBeforeLastIssued(tx, actor.companyId, opts.date ?? today());
   return createDraft(tx, actor, {
     type: 'RENT',
     partnerId: c.partnerId,
-    date: await notBeforeLastIssued(tx, actor.companyId, date),
+    date,
     vatRate: vat.rate,
     taxCategory: vat.category,
     taxExemptReason: vat.exemptReason ?? null,
@@ -152,7 +169,7 @@ export async function draftInstallment(tx: Tx, actor: Actor, contractId: string,
   });
 }
 
-/** Datum rate ne smije biti raniji od zadnjeg izdanog računa u godini (redni broj prati datum). */
+/** Datum računa ne smije biti raniji od zadnjeg izdanog računa u godini (redni broj prati datum). */
 async function notBeforeLastIssued(tx: Tx, companyId: string, date: string) {
   const last = await tx.invoice.findFirst({
     where: { companyId, status: 'ISSUED', year: Number(date.slice(0, 4)) },
@@ -165,10 +182,10 @@ async function notBeforeLastIssued(tx: Tx, companyId: string, date: string) {
 /** Izdavanje jedne ili više rata odjednom (u jednoj transakciji), po želji odmah plaćeno. */
 export async function issueInstallments(tx: Tx, actor: Actor, rows: Array<{ contractId: string; period: string }>, opts: { paid?: boolean } = {}) {
   await lockInstallments(tx, actor.companyId, rows);
-  // datum mora pratiti redni broj — izdaje se kronološki
+  // svi računi nose datum izdavanja (danas) — izdaju se redom razdoblja
   const drafts = [];
   for (const r of rows) drafts.push(await draftInstallment(tx, actor, r.contractId, r.period));
-  drafts.sort((a, b) => a.date.getTime() - b.date.getTime());
+  drafts.sort((a, b) => (a.period ?? '').localeCompare(b.period ?? ''));
   const numbers: string[] = [];
   for (const d of drafts) {
     const { number } = await issueInvoice(tx, actor, d.id);
@@ -259,9 +276,17 @@ async function manualNumber(tx: Tx, companyId: string, raw: string | null | unde
   const number = String(raw ?? '').trim().replace(/\s+/g, ' ');
   if (!number) return null;
   assert(number.length <= 40, 'Broj ugovora može imati najviše 40 znakova.');
-  const dup = await tx.contract.findFirst({ where: { companyId, number, ...(exceptId ? { id: { not: exceptId } } : {}) }, select: { id: true } });
-  assert(!dup, `Ugovor s brojem ${number} već postoji.`);
+  assert(!(await contractNumberTaken(tx, companyId, number, exceptId)), `Ugovor s brojem ${number} već postoji.`);
   return number;
+}
+
+/** Je li broj ugovora zauzet u firmi (bez obzira na velika i mala slova). */
+async function contractNumberTaken(tx: Tx, companyId: string, number: string, exceptId?: string) {
+  const dup = await tx.contract.findFirst({
+    where: { companyId, number: { equals: number, mode: 'insensitive' }, ...(exceptId ? { id: { not: exceptId } } : {}) },
+    select: { id: true },
+  });
+  return !!dup;
 }
 
 function termsData(t: ContractTermsInput) {
@@ -298,7 +323,7 @@ export async function createContract(tx: Tx, actor: Actor, input: ContractTermsI
   assert(partner, 'Klijent ne postoji.');
   const data = termsData(input);
   const number =
-    (await manualNumber(tx, actor.companyId, input.number)) ?? (await nextDocNumber(tx, actor.companyId, 'CONTRACT', Number(input.startDate.slice(0, 4))));
+    (await manualNumber(tx, actor.companyId, input.number)) ?? (await nextDocNumber(tx, actor.companyId, 'CONTRACT', Number(input.startDate.slice(0, 4)), (n) => contractNumberTaken(tx, actor.companyId, n)));
   const c = await tx.contract.create({
     data: { companyId: actor.companyId, number, partnerId: partner.id, status: 'ACTIVE', ...data, createdBy: actor.name },
   });
@@ -313,13 +338,37 @@ export async function updateContractTerms(tx: Tx, actor: Actor, id: string, inpu
   const data = { ...termsData(input), ...(number && number !== c.number ? { number } : {}) };
   const changes = diff(c as unknown as Record<string, unknown>, data as unknown as Record<string, unknown>);
   await tx.contract.update({ where: { id }, data });
+  // nova naplata ne otvara fakturirana ni prošla razdoblja: uređaji zadržavaju stare uvjete do prve neizdane rate
+  const next = await tx.contract.findUniqueOrThrow({ where: { id } });
+  const [oldTerms, newTerms] = [toTerms(c), toTerms(next)];
+  const res: Rebased[] = [];
+  if (JSON.stringify({ ...oldTerms, closedAt: null }) !== JSON.stringify({ ...newTerms, closedAt: null })) {
+    const now = today();
+    const [items, returned, coveredBy] = await Promise.all([
+      tx.contractItem.findMany({ where: { contractId: id } }),
+      tx.returnedContractItem.findMany({ where: { contractId: id, ...returnedWhere(now) } }),
+      coveredByItem(tx, id),
+    ]);
+    const rows = [
+      ...items.map((r) => ({ id: r.id, returned: false, device: toDevice(r) })),
+      ...returned.map((r) => ({ id: r.id, returned: true, device: toReturnedDevice(r) })),
+    ];
+    for (const r of rows) {
+      const next = rebasePlan({ terms: oldTerms, nextTerms: newTerms, device: r.device, next: r.device.plan ?? [], covered: coveredBy.get(r.device.itemId) ?? new Set(), now });
+      if (next.cut) res.push({ id: r.id, returned: r.returned, ...next });
+    }
+    await writePlans(tx, res);
+  }
+  const what: string[] = [];
+  whenCut(what, res);
   if (Object.keys(changes).length) {
     await audit(tx, actor, {
       entity: 'contract', entityId: id, action: 'update',
-      summary: `Uvjeti ugovora ${c.number} izmijenjeni (${Object.keys(changes).map((k) => TERM_LABEL[k] ?? k).join(', ')})`,
+      summary: `Uvjeti ugovora ${c.number} izmijenjeni (${Object.keys(changes).map((k) => TERM_LABEL[k] ?? k).join(', ')})${what.length ? ` — ${what[0]}, ranija razdoblja po starim uvjetima (${res.filter((r) => r.cut).length} uređaja)` : ''}`,
       diff: changes as unknown as Prisma.InputJsonValue,
     });
   }
+  return { from: res.map((r) => r.cut).filter((x): x is string => !!x).sort()[0] ?? null };
 }
 
 const TERM_LABEL: Record<string, string> = {
@@ -437,6 +486,43 @@ const serials = (rows: Array<{ item: { serial: string } }>) => {
   return s.length > 6 ? `${s.slice(0, 6).join(', ')} i još ${s.length - 6}` : s.join(', ');
 };
 
+/** Fakturirana razdoblja ugovora po uređaju (itemId → YYYY-MM). */
+async function coveredByItem(tx: Tx, contractId: string) {
+  const all = (await coveredPeriods(tx, [contractId])).get(contractId) ?? new Set<string>();
+  const out = new Map<string, Set<string>>();
+  for (const k of all) {
+    const [itemId, period] = k.split('|');
+    out.set(itemId, (out.get(itemId) ?? new Set()).add(period));
+  }
+  return out;
+}
+
+type Rebased = { id: string; returned?: boolean; plan: PlanPeriodInput[]; cut: string | null };
+
+/** Upis planova nakon `rebasePlan`, po skupinama istog plana (tisuće istih uređaja = nekoliko upita). */
+async function writePlans(tx: Tx, rows: Rebased[]) {
+  const groups = new Map<string, { plan: PlanPeriodInput[]; returned: boolean; ids: string[] }>();
+  for (const r of rows) {
+    const err = validatePlan(r.plan);
+    assert(!err, err ?? '');
+    const key = JSON.stringify([r.plan, !!r.returned]);
+    const g = groups.get(key) ?? { plan: r.plan, returned: !!r.returned, ids: [] };
+    g.ids.push(r.id);
+    groups.set(key, g);
+  }
+  for (const g of groups.values()) {
+    const data = { plan: g.plan as unknown as Prisma.InputJsonValue };
+    if (g.returned) await tx.returnedContractItem.updateMany({ where: { id: { in: g.ids } }, data });
+    else await tx.contractItem.updateMany({ where: { id: { in: g.ids } }, data });
+  }
+}
+
+/** „vrijedi od …" u opisu izmjene kad su prošla/fakturirana razdoblja ostala po starim uvjetima. */
+function whenCut(what: string[], rows: Rebased[]) {
+  const cuts = [...new Set(rows.map((r) => r.cut).filter((x): x is string => !!x))].sort();
+  if (cuts.length) what.push(`vrijedi od ${formatDate(cuts[0])}${cuts.length > 1 ? ' (po uređaju od prve neizdane rate)' : ''}`);
+}
+
 /** Grupna izmjena uređaja na ugovoru: mjesečna cijena, plan naplate ili pauza. */
 export async function updateContractItems(
   tx: Tx,
@@ -448,6 +534,7 @@ export async function updateContractItems(
   const c = await ownContract(tx, actor, contractId);
   assert(editable(c.status), 'Uređaji raskinutog ili isteklog ugovora se ne mijenjaju.');
   const rows = await ownItems(tx, contractId, ids);
+  let from: string | null = null;
   const full = patch.status !== undefined ? await tx.contractItem.findMany({ where: { contractId, id: { in: ids } } }) : [];
   const data: Prisma.ContractItemUpdateManyMutationInput = {};
   const what: string[] = [];
@@ -457,7 +544,8 @@ export async function updateContractItems(
     what.push(`mjesečna cijena ${r2(patch.monthly).toFixed(2).replace('.', ',')} €`);
   }
   if (patch.plan !== undefined) {
-    data.plan = patch.plan as unknown as Prisma.InputJsonValue;
+    const err = validatePlan(patch.plan);
+    assert(!err, err ?? '');
     what.push(patch.plan.length ? `plan naplate: ${planSummary(toTerms(c), { itemId: '', monthly: 0, plan: patch.plan })}` : 'plan naplate prati ugovor');
   }
   if (patch.status !== undefined) {
@@ -465,47 +553,25 @@ export async function updateContractItems(
     what.push(patch.status === 'PAUSED' ? 'pauzirano' : 'nastavljeno');
   }
   // skupna naplata i/ili sezona (C6): plan svakog uređaja mijenja se zasebno, upis po skupinama istog plana
-  const bulkPlan = patch.plan === undefined && (patch.billing || patch.season);
+  const bulkPlan = patch.plan === undefined && Boolean(patch.billing || patch.season);
   if (bulkPlan) {
     if (patch.billing) what.push(`naplata ${BILLING_LABEL[patch.billing].toLowerCase()}`);
     if (patch.season) what.push(`sezona: ${BULK_SEASON_OPTIONS.find((o) => o.value === patch.season)?.label.toLowerCase()}`);
   }
   assert(what.length, 'Nema promjene.');
-  if (bulkPlan) {
+  if (bulkPlan || patch.plan !== undefined) {
+    // novi plan tek od prve neizdane rate — prošla, fakturirana i pauzirana razdoblja ostaju (rebasePlan)
     const terms = toTerms(c);
     const base = terms.firstBillingDate || terms.startDate;
-    const [cur, coveredAll] = await Promise.all([
-      tx.contractItem.findMany({ where: { contractId, id: { in: ids } } }),
-      coveredPeriods(tx, [contractId]).then((m) => m.get(contractId) ?? new Set<string>()),
-    ]);
-    // pokrivena razdoblja po uređaju (ključevi `itemId|YYYY-MM`)
-    const coveredBy = new Map<string, Set<string>>();
-    for (const k of coveredAll) {
-      const [itemId, period] = k.split('|');
-      coveredBy.set(itemId, (coveredBy.get(itemId) ?? new Set()).add(period));
-    }
-    const now = today();
-    const cuts = new Set<string>();
-    const groups = new Map<string, { plan: PlanPeriodInput[]; ids: string[] }>();
-    for (const r of cur) {
-      // nova pravila tek od prve neizdane rate — prošla i fakturirana razdoblja ostaju
-      const cut = bulkCutoff(terms, toDevice(r), coveredBy.get(r.itemId) ?? new Set(), now);
-      if (cut > base) cuts.add(cut);
-      const next = applyBulkTerms((r.plan as unknown as PlanPeriodInput[]) ?? [], base, { billing: patch.billing, season: patch.season }, cut);
-      const err = validatePlan(next);
-      assert(!err, err ?? '');
-      const key = JSON.stringify(next);
-      const g = groups.get(key) ?? { plan: next, ids: [] };
-      g.ids.push(r.id);
-      groups.set(key, g);
-    }
-    for (const g of groups.values()) {
-      await tx.contractItem.updateMany({ where: { contractId, id: { in: g.ids } }, data: { plan: g.plan as unknown as Prisma.InputJsonValue } });
-    }
-    if (cuts.size) {
-      const first = [...cuts].sort()[0];
-      what.push(`vrijedi od ${formatDate(first)}${cuts.size > 1 ? ' (po uređaju od prve neizdane rate)' : ''}`);
-    }
+    const [cur, coveredBy] = await Promise.all([tx.contractItem.findMany({ where: { contractId, id: { in: ids } } }), coveredByItem(tx, contractId)]);
+    const res = cur.map((r) => {
+      const old = (r.plan as unknown as PlanPeriodInput[]) ?? [];
+      const next = patch.plan ?? applyBulkTerms(old, base, { billing: patch.billing, season: patch.season });
+      return { id: r.id, ...rebasePlan({ terms, device: toDevice(r), next, covered: coveredBy.get(r.itemId) ?? new Set(), now: today() }) };
+    });
+    await writePlans(tx, res);
+    whenCut(what, res);
+    from = res.map((r) => r.cut).filter((x): x is string => !!x).sort()[0] ?? null;
   }
   const t = today();
   if (patch.status === 'PAUSED') {
@@ -524,6 +590,7 @@ export async function updateContractItems(
     entity: 'contract', entityId: contractId, action: 'items',
     summary: `${rows.length} uređaja (${serials(rows)}): ${what.join(', ')}`,
   });
+  return { from };
 }
 
 /**
@@ -590,6 +657,7 @@ export async function setRentOverride(tx: Tx, actor: Actor, input: { itemId: str
     await audit(tx, actor, { entity: 'item', entityId: item.id, action: 'rent-override', summary: `SN ${item.serial}: ručni iznos najma za ${label} uklonjen` });
     return;
   }
+  assert(Number.isFinite(input.amount) && input.amount >= 0, 'Iznos ne može biti negativan.');
   const amount = r2(input.amount);
   await tx.rentOverride.upsert({
     where: key,
@@ -620,12 +688,12 @@ export async function tryLockInstallment(tx: Tx, companyId: string, contractId: 
 }
 
 /** Postojeći nacrt za ratu (npr. otvoren preko „Pregledaj") ili novi. */
-async function draftFor(tx: Tx, actor: Actor, contractId: string, period: string) {
+async function draftFor(tx: Tx, actor: Actor, contractId: string, period: string, date?: string) {
   const existing = await tx.invoice.findFirst({
     where: { companyId: actor.companyId, contractId, period, status: 'DRAFT', type: 'RENT', kind: 'INVOICE' },
     orderBy: { createdAt: 'desc' },
   });
-  return existing ?? (await draftInstallment(tx, actor, contractId, period));
+  return existing ?? (await draftInstallment(tx, actor, contractId, period, { date }));
 }
 
 /** „Pregledaj": nacrt rate koji se uređuje u Prodaji — postojeći se ponovno koristi. */
@@ -641,21 +709,22 @@ export async function previewInstallment(tx: Tx, actor: Actor, contractId: strin
  * Izdavanje označenih rata u jednoj transakciji (kao `issueInstallments`, ali
  * postojeći nacrti rate se izdaju umjesto da nastane još jedan račun).
  */
-export async function issuePending(tx: Tx, actor: Actor, rows: Array<{ contractId: string; period: string }>, opts: { paid?: boolean } = {}) {
+export async function issuePending(tx: Tx, actor: Actor, rows: Array<{ contractId: string; period: string }>, opts: { paid?: boolean; date?: string } = {}) {
   assert(rows.length, 'Odaberite barem jednu ratu.');
   for (const r of rows) await ownContract(tx, actor, r.contractId);
   // isto zaključavanje kao automatsko izdavanje — dvije istodobne transakcije ne izdaju istu ratu dvaput
   await lockInstallments(tx, actor.companyId, rows);
   const drafts = [];
   for (const r of rows) {
-    drafts.push(await draftFor(tx, actor, r.contractId, r.period));
+    drafts.push(await draftFor(tx, actor, r.contractId, r.period, opts.date));
   }
-  drafts.sort((a, b) => a.date.getTime() - b.date.getTime());
+  // redoslijed izdavanja: po razdoblju (svi računi nose isti datum izdavanja)
+  drafts.sort((a, b) => (a.period ?? '').localeCompare(b.period ?? '') || a.createdAt.getTime() - b.createdAt.getTime());
   const numbers: string[] = [];
   const ids: string[] = [];
   for (const d of drafts) {
-    // postojeći nacrt može imati stari datum — ne raniji od zadnjeg izdanog računa (redni broj prati datum)
-    const date = await notBeforeLastIssued(tx, actor.companyId, toISO(d.date));
+    // datum izdavanja je danas (i nacrt otvoren ranije) — ne raniji od zadnjeg izdanog računa (redni broj prati datum)
+    const date = await notBeforeLastIssued(tx, actor.companyId, opts.date ?? today());
     if (date !== toISO(d.date)) await tx.invoice.update({ where: { id: d.id }, data: { date: fromISO(date), year: Number(date.slice(0, 4)) } });
     const { number } = await issueInvoice(tx, actor, d.id);
     numbers.push(number);

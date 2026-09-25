@@ -4,7 +4,8 @@
  * samo po stupcima s popisa (whitelist), datumi samo u obliku YYYY-MM-DD.
  *
  * Konvencije (iste kao u src/components/ui/filters.tsx i sort-header.tsx):
- *   ?partner=a,b,c        više vrijednosti jednog filtra, odvojene zarezom
+ *   ?partner=a,b,c        više vrijednosti jednog filtra, odvojene zarezom; zarez UNUTAR vrijednosti
+ *                         piše se „\," (a „\" kao „\\") — `joinMulti` / `splitMulti`; radi i ?cpu=a&cpu=b
  *   ?sort=kolona&dir=asc  sortiranje (dir: asc | desc)
  *   ?od=YYYY-MM-DD&do=YYYY-MM-DD   raspon datuma (oba neobavezna)
  */
@@ -12,6 +13,29 @@ export type SearchParams = Record<string, string | string[] | undefined>;
 export type SortDir = 'asc' | 'desc';
 
 type Source = SearchParams | URLSearchParams;
+
+/**
+ * Više vrijednosti → jedan parametar: zarez i obrnuta kosa crta unutar vrijednosti se
+ * „escapeaju" (CPU „ARM Cortex-A53, 4 jezgre" ostaje jedna vrijednost).
+ */
+export const joinMulti = (values: readonly string[]) => values.map((v) => v.replace(/\\/g, '\\\\').replace(/,/g, '\\,')).join(',');
+
+/** Obrat `joinMulti`: dijeli po zarezima koji nisu „escapeani". Stari URL-ovi (bez „\") čitaju se isto. */
+export function splitMulti(raw: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === '\\' && i + 1 < raw.length && (raw[i + 1] === ',' || raw[i + 1] === '\\')) {
+      cur += raw[++i];
+    } else if (ch === ',') {
+      out.push(cur);
+      cur = '';
+    } else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
 
 const get = (sp: Source, name: string): string => {
   const v = sp instanceof URLSearchParams ? sp.get(name) : sp[name];
@@ -23,7 +47,12 @@ const get = (sp: Source, name: string): string => {
 export const paramStr = (sp: Source, name: string) => get(sp, name).trim();
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
-export const isIsoDate = (v: string) => ISO.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`));
+/** Kalendarski ispravan datum YYYY-MM-DD (2026-02-30 i 2026-13-45 nisu). */
+export const isIsoDate = (v: string) => {
+  if (!ISO.test(v)) return false;
+  const d = new Date(`${v}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+};
 
 /**
  * Više vrijednosti iz jednog parametra (`?status=a,b`). Prazne i ponovljene se
@@ -31,10 +60,12 @@ export const isIsoDate = (v: string) => ISO.test(v) && !Number.isNaN(Date.parse(
  * Najviše 200 vrijednosti — zaštita od predugog upita.
  */
 export function parseMulti<T extends string = string>(sp: Source, name: string, allowed?: readonly T[]): T[] {
-  const raw = get(sp, name);
-  if (!raw) return [];
+  // ponovljeni parametar (?cpu=a&cpu=b) — svaki dio je zaseban popis
+  const v0 = sp instanceof URLSearchParams ? sp.getAll(name) : sp[name];
+  const raws = (Array.isArray(v0) ? v0 : [v0]).filter((x): x is string => typeof x === 'string' && x !== '');
+  if (!raws.length) return [];
   const out = new Set<string>();
-  for (const part of raw.split(',')) {
+  for (const part of raws.flatMap(splitMulti)) {
     const v = part.trim();
     if (!v || v.length > 200) continue;
     if (allowed && !allowed.includes(v as T)) continue;

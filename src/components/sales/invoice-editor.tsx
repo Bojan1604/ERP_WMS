@@ -9,20 +9,21 @@ import { Combobox } from '@/components/ui/combobox';
 import { useAction } from '@/components/ui/action';
 import { useToast } from '@/components/ui/toast';
 import { eur } from '@/lib/format';
-import { deviceLineKey, documentTotals, groupLines, unifyDevicePrices } from '@/domain/invoice';
+import { documentTotals, unifyDevicePrices } from '@/domain/invoice';
 import { customerVat, mixedSupplyError, supplyKindOf } from '@/domain/tax';
-import { addDays } from '@/domain/dates';
+import { addDays, today } from '@/domain/dates';
 import { r2 } from '@/domain/money';
 import { PAYMENT_METHOD_LABEL, PAYMENT_METHODS, type PaymentMethodCode } from '@/domain/fiscal';
 import { customerPrices, saveInvoice } from '@/app/(app)/prodaja/racuni/actions';
 import { DevicePicker, type PickMode } from './device-picker';
 import { ServicePicker } from './service-picker';
-import { LinesTable } from './lines-table';
+import { LinesTable, editorLineCount } from './lines-table';
 import { TaxFields } from './invoice-tax-fields';
 import { TotalsBox } from './totals-box';
 import { lineKey } from './inputs';
 import { autoKpd, deviceToLine as toLine, isRentLine, withRentMonths } from './line-tools';
 import { IssueDialog } from './invoice-issue-dialog';
+import { AdvancePicker, type AdvanceChoice } from './invoice-advances';
 import { RentCard, rentMonthsFor, type ContractOpt, type RentNextValue, type RentTermsValue } from './invoice-rent-card';
 import type { DeviceOpt, EditorCharge, EditorLine, SalesLookups, ServiceOpt } from './types';
 
@@ -39,7 +40,8 @@ export interface InvoiceEditorValue {
   taxExemptReason: string;
   discountPct: number;
   discountAmount: number;
-  advanceAmount: number;
+  /** Uračunati predujmovi (samo konačni račun). */
+  advances: AdvanceChoice[];
   charges: EditorCharge[];
   paymentMethod: PaymentMethodCode;
   description: string;
@@ -124,14 +126,17 @@ export function InvoiceEditor({
   const choosePartner = (id: string | null) => {
     const p = partners.find((x) => x.id === id);
     if (!p) return set({ partnerId: null });
+    // dogovorene cijene prethodnog kupca ne vrijede za novog — stavke dobivaju cijenu novog kupca ili standardnu
+    if (p.id !== v.partnerId && v.lines.some((l) => l.agreedPrice)) void repriceFor(p.id, false);
     const t = customerVat(p, company, vatKind);
     set({
       partnerId: p.id,
       vatRate: t.rate,
       taxCategory: t.category,
       taxExemptReason: t.exemptReason ?? '',
-      // ugovor pripada kupcu — promjenom kupca odabir ugovora se briše
+      // ugovor i predujmovi pripadaju kupcu — promjenom kupca odabir se briše
       ...(v.rentLocked ? {} : { contractId: null }),
+      advances: [],
       ...(dueTouched ? {} : { dueDate: addDays(v.date, p.paymentTermDays ?? company.paymentTermDays) }),
     });
   };
@@ -178,31 +183,44 @@ export function InvoiceEditor({
     if (mode === 'rented' && cs.length === 1 && !v.contractId && !v.rentLocked) set({ contractId: cs[0] });
   };
 
-  /** „Primijeni cjenik kupca": dogovorene cijene kupca na sve stavke s uređajem ili modelom. */
-  const applyPriceList = async () => {
-    if (!v.partnerId) return;
-    const withModel = v.lines.filter((l) => l.itemId || l.modelId);
-    const r = await prices.run({ partnerId: v.partnerId, lines: withModel.map((l) => ({ key: l.key, itemId: l.itemId ?? null, modelId: l.modelId ?? null, lineType: isRentLine(l, v.type) ? 'RENT' : 'SALE' })) });
+  /**
+   * Cijene stavki za kupca: `all` — „Primijeni cjenik kupca" (dogovorene cijene na sve stavke,
+   * a stavke s dogovorenom cijenom drugog kupca vraćaju se na standardnu); inače samo stavke
+   * s dogovorenom cijenom (promjena kupca — cijena prethodnog kupca ne ostaje na računu).
+   */
+  const repriceFor = async (partnerId: string, all: boolean) => {
+    const withModel = v.lines.filter((l) => (l.itemId || l.modelId) && (all || l.agreedPrice));
+    if (!withModel.length) return;
+    const r = await prices.run({ partnerId, lines: withModel.map((l) => ({ key: l.key, itemId: l.itemId ?? null, modelId: l.modelId ?? null, lineType: isRentLine(l, v.type) ? 'RENT' : 'SALE' })) });
     if (!r.ok || !r.data) return;
-    const found = r.data;
-    const n = Object.keys(found).length;
-    setV((cur) => ({
-      ...cur,
-      lines: cur.lines.map((l) => {
-        const p = found[l.key];
-        if (p === undefined) return l;
-        // kod najma je dogovorena cijena mjesečna — iznos se izvodi iz nje
-        return isRentLine(l, cur.type) ? { ...l, monthly: p, unitPrice: r2(p * (l.months ?? rentMonths)), agreedPrice: true } : { ...l, unitPrice: p, agreedPrice: true };
-      }),
-    }));
-    toast(n ? 'ok' : 'bad', n ? `Cjenik kupca primijenjen na ${n} stavki.` : 'Kupac nema dogovorenih cijena za ove modele.');
+    const found = r.data as Record<string, { price: number; agreed: boolean }>;
+    const next = new Map<string, EditorLine>();
+    let agreed = 0;
+    let reset = 0;
+    for (const l of v.lines) {
+      const p = found[l.key];
+      // bez dogovorene cijene: mijenja se samo stavka koja je nosila dogovorenu cijenu (ručne cijene ostaju)
+      if (!p || (!p.agreed && !l.agreedPrice)) continue;
+      if (p.agreed) agreed++;
+      else reset++;
+      // kod najma je cijena mjesečna — iznos se izvodi iz nje
+      next.set(
+        l.key,
+        isRentLine(l, v.type) ? { ...l, monthly: p.price, unitPrice: r2(p.price * (l.months ?? rentMonths)), agreedPrice: p.agreed } : { ...l, unitPrice: p.price, agreedPrice: p.agreed },
+      );
+    }
+    setV((cur) => ({ ...cur, lines: cur.lines.map((l) => next.get(l.key) ?? l) }));
+    const msg = [agreed ? `dogovorena cijena na ${agreed} stavki` : null, reset ? `standardna cijena vraćena na ${reset} stavki` : null].filter(Boolean).join(', ');
+    if (all || msg) toast(agreed || reset ? 'ok' : 'bad', msg ? `Cjenik kupca: ${msg}.` : 'Kupac nema dogovorenih cijena za ove modele.');
   };
+  const applyPriceList = () => (v.partnerId ? repriceFor(v.partnerId, true) : undefined);
 
   const save = (issue: boolean) =>
     run({
       ...v,
       issue,
       charges: v.charges.filter((c) => c.amount || c.pct),
+      advances: v.kind === 'INVOICE' ? v.advances.filter((a) => a.amount > 0) : [],
       contractId: rentUsed ? (v.contractId ?? null) : null,
       period: rentUsed ? v.period || null : null,
       rent: rentUsed && v.contractId === 'new' ? v.rent : null,
@@ -274,7 +292,7 @@ export function InvoiceEditor({
           <Field label="Dokument" className="md:col-span-2">
             <Select
               value={v.kind}
-              onChange={(e) => set({ kind: e.target.value as 'INVOICE' | 'ADVANCE' })}
+              onChange={(e) => set({ kind: e.target.value as 'INVOICE' | 'ADVANCE', advances: [] })}
               options={[
                 { value: 'INVOICE', label: 'Račun' },
                 { value: 'ADVANCE', label: 'Račun za predujam' },
@@ -317,6 +335,11 @@ export function InvoiceEditor({
             Porezni tretman: <Badge tone={treatment.category === 'S' ? 'brand' : 'info'}>{treatment.label}</Badge>
             {(treatment.rate !== v.vatRate || treatment.category !== v.taxCategory) && <Badge tone="warn">ručno promijenjeno</Badge>}
           </p>
+        )}
+        {v.date > today() && (
+          <div className="mt-3">
+            <Notice tone="warn">Datum računa je u budućnosti — nacrt se može spremiti, a račun se izdaje najkasnije s današnjim datumom (na dan isporuke).</Notice>
+          </div>
         )}
         {mixedError && (
           <div className="mt-3">
@@ -378,19 +401,24 @@ export function InvoiceEditor({
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_22rem]">
         <Card title="Popust, porez i naknade">
           <TaxFields v={v} set={(p) => set(p as Partial<InvoiceEditorValue>)} />
+          {v.kind === 'INVOICE' && (
+            <div className="mt-3">
+              <AdvancePicker partnerId={v.partnerId} invoiceId={v.id} value={v.advances} onChange={(advances) => set({ advances })} maxTotal={totals.total} />
+            </div>
+          )}
           <Field label="Napomena (ispisuje se ispod stavki)" className="mt-3">
             <Textarea value={v.note} onChange={(e) => set({ note: e.target.value })} rows={2} />
           </Field>
         </Card>
         <Card title="Zbroj">
-          <TotalsBox t={totals} vatRate={v.vatRate} advance={v.advanceAmount} />
+          <TotalsBox t={totals} vatRate={v.vatRate} advance={v.kind === 'INVOICE' ? r2(v.advances.reduce((a, x) => a + x.amount, 0)) : 0} />
         </Card>
       </div>
 
       <div className="no-print sticky bottom-[calc(3.75rem+env(safe-area-inset-bottom))] z-30 -mx-3 mt-4 border-t border-line bg-panel/95 px-3 py-2.5 backdrop-blur sm:-mx-5 sm:px-5 lg:bottom-0 lg:-mb-5">
         <div className="flex flex-wrap items-center justify-end gap-2">
           <span className="mr-auto text-sm text-fg-3 max-sm:w-full">
-            {groupLines(v.lines, deviceLineKey).length} stavki · ukupno <b className="text-fg tnum">{eur(totals.total)}</b>
+            {editorLineCount(v.lines)} stavki · ukupno <b className="text-fg tnum">{eur(totals.total)}</b>
           </span>
           <Button icon={<Save className="size-4" />} loading={pending} disabled={!v.partnerId} onClick={() => save(false)} className="max-sm:flex-1">
             Spremi nacrt

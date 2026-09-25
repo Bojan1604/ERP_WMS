@@ -42,12 +42,23 @@ export function readFilters(params: Params): OverviewFilters {
   };
 }
 
+/** Uređaj na ugovoru — samo stupci za izračun (bez preskočenih razdoblja: ne utječu na rate u pregledu, a znaju biti duga). */
+interface RowContractItem {
+  contractId: string;
+  itemId: string;
+  monthly: number;
+  plan: unknown;
+  status: ContractStatus | null;
+  paused: string[];
+}
+
 /**
  * Redci mreže, filtrirani i poredani u bazi: uređaji na ugovoru koji se
  * preklapa s godinom, uređaji s ručnim upisom u godini i (po želji) uređaji
- * prodani u godini. Vraća samo id-eve redom (lako i za tisuće redaka).
+ * prodani u godini. Vraća id-eve redom i, u istom upitu, stupce uređaja na
+ * ugovoru za izračun (lako i za desetke tisuća redaka).
  */
-async function rowIds(companyId: string, f: OverviewFilters): Promise<string[]> {
+async function rowIds(companyId: string, f: OverviewFilters): Promise<{ ids: string[]; cis: RowContractItem[] }> {
   const yStart = `${f.year}-01-01`;
   const yEnd = `${f.year}-12-31`;
   const t = today();
@@ -65,14 +76,15 @@ async function rowIds(companyId: string, f: OverviewFilters): Promise<string[]> 
   const onlyRent = f.kinds.length === 1 && f.kinds[0] === 'najam';
   const onlySale = f.kinds.length === 1 && f.kinds[0] === 'prodaja';
   const sold = f.sold || onlySale
-    ? Prisma.sql`OR EXISTS (
-        SELECT 1 FROM "InvoiceLine" l JOIN "Invoice" v ON v.id = l."invoiceId"
-        WHERE l."itemId" = i.id AND v."companyId" = ${companyId} AND v.status = 'ISSUED' AND v.kind = 'INVOICE'
+    ? // nekorelirani podupit: skup prodanih uređaja se gradi jednom (ne po retku uređaja)
+      Prisma.sql`OR i.id IN (
+        SELECT l."itemId" FROM "InvoiceLine" l JOIN "Invoice" v ON v.id = l."invoiceId"
+        WHERE l."itemId" IS NOT NULL AND v."companyId" = ${companyId} AND v.status = 'ISSUED' AND v.kind = 'INVOICE'
           AND v.type = 'SALE' AND NOT v.stornoed AND v.year = ${f.year})`
     : Prisma.empty;
   const q = f.q ? `%${f.q.replace(/[%_\\]/g, (m) => `\\${m}`)}%` : '';
-  const rows = await db.$queryRaw<{ id: string }[]>`
-    SELECT i.id
+  const rows = await db.$queryRaw<Array<{ id: string } & Omit<RowContractItem, 'contractId' | 'itemId'> & { contractId: string | null }>>`
+    SELECT i.id, ci."contractId", ci.monthly::float8 AS monthly, ci.plan, ci.status, ci.paused
     FROM "Item" i
     JOIN "DeviceModel" m ON m.id = i."modelId"
     LEFT JOIN "ContractItem" ci ON ci."itemId" = i.id
@@ -92,7 +104,11 @@ async function rowIds(companyId: string, f: OverviewFilters): Promise<string[]> 
       ${onlyRent ? Prisma.sql`AND c.id IS NOT NULL` : onlySale ? Prisma.sql`AND c.id IS NULL` : Prisma.empty}
       ${q ? Prisma.sql`AND (i.serial ILIKE ${q} OR m.name ILIKE ${q} OR COALESCE(m.brand, '') ILIKE ${q} OR COALESCE(p.name, '') ILIKE ${q})` : Prisma.empty}
     ORDER BY p.name NULLS LAST, i.serial, i.id`;
-  return rows.map((r) => r.id);
+  const cis: RowContractItem[] = [];
+  for (const r of rows) {
+    if (r.contractId) cis.push({ contractId: r.contractId, itemId: r.id, monthly: r.monthly, plan: r.plan, status: r.status, paused: r.paused });
+  }
+  return { ids: rows.map((r) => r.id), cis };
 }
 
 export interface Cell {
@@ -108,26 +124,31 @@ export interface Cell {
  * Vrijednosti ćelija za zadane uređaje: ručni upis > rata s ugovora u mjesecu
  * > prodaja u mjesecu računa. Budući mjeseci prazni osim ručnog upisa.
  */
-async function cellsFor(companyId: string, ids: string[], f: OverviewFilters) {
+async function cellsFor(companyId: string, ids: string[], cis: RowContractItem[], f: OverviewFilters) {
   const now = today();
   const cy = Number(now.slice(0, 4));
   const lastShown = f.year < cy ? 11 : f.year > cy ? -1 : Number(now.slice(5, 7)) - 1;
-  const [cis, overrides, sales] = await Promise.all([
-    // samo stupci za izračun (bez ugovora u svakom retku); ugovori se čitaju jednom ispod
+  const contractIds = [...new Set(cis.map((c) => c.contractId))];
+  const [overrides, sales, contracts] = await Promise.all([
+    // id-evi idu kao jedan parametar polja (`= ANY`) — `in` s desecima tisuća id-eva prelazi granicu parametara
     ids.length
-      ? db.$queryRaw<{ contractId: string; itemId: string; monthly: number; plan: unknown; status: ContractStatus | null; skipped: string[]; paused: string[] }[]>`
-          SELECT ci."contractId", ci."itemId", ci.monthly::float8 AS monthly, ci.plan, ci.status, ci.skipped, ci.paused
-          FROM "ContractItem" ci WHERE ci."itemId" = ANY(${ids})`
+      ? db.$queryRaw<{ itemId: string; month: number; amount: Prisma.Decimal }[]>`
+          SELECT r."itemId", r.month, r.amount FROM "RentOverride" r
+          WHERE r."companyId" = ${companyId} AND r.year = ${f.year} AND r."itemId" = ANY(${ids})`
       : Promise.resolve([]),
-    db.rentOverride.findMany({ where: { companyId, year: f.year, itemId: { in: ids } }, select: { itemId: true, month: true, amount: true } }),
-    f.sold || (f.kinds.length === 1 && f.kinds[0] === 'prodaja')
-      ? db.invoiceLine.findMany({
-          where: {
-            itemId: { in: ids },
-            invoice: { companyId, status: 'ISSUED', kind: 'INVOICE', type: 'SALE', stornoed: false, year: f.year },
-          },
-          select: { itemId: true, netAmount: true, invoice: { select: { date: true } } },
-        })
+    ids.length && (f.sold || (f.kinds.length === 1 && f.kinds[0] === 'prodaja'))
+      ? db.$queryRaw<{ itemId: string; netAmount: Prisma.Decimal; date: Date }[]>`
+          SELECT l."itemId", l."netAmount", v.date FROM "InvoiceLine" l JOIN "Invoice" v ON v.id = l."invoiceId"
+          WHERE l."itemId" IS NOT NULL AND v."companyId" = ${companyId} AND v.status = 'ISSUED' AND v.kind = 'INVOICE'
+            AND v.type = 'SALE' AND NOT v.stornoed AND v.year = ${f.year}`.then((rows) => {
+            // sve prodaje firme u godini (jedan prolaz po indeksu računa), pa samo uređaji iz redaka
+            const inRows = new Set(ids);
+            return rows.filter((r) => inRows.has(r.itemId));
+          })
+      : Promise.resolve([]),
+    // uvjeti ugovora jednom po ugovoru (vrlo mnogo ugovora: svi ugovori firme, unutar granice parametara)
+    contractIds.length
+      ? db.contract.findMany({ where: contractIds.length > 10_000 ? { companyId } : { companyId, id: { in: contractIds } } })
       : Promise.resolve([]),
   ]);
   const out = new Map<string, { cells: Cell[]; monthly: number; from: string | null }>();
@@ -140,20 +161,19 @@ async function cellsFor(companyId: string, ids: string[], f: OverviewFilters) {
     return r;
   };
   for (const s of sales) {
-    const m = Number(toISO(s.invoice.date).slice(5, 7)) - 1;
-    get(s.itemId!).cells[m].auto = r2(get(s.itemId!).cells[m].auto + num(s.netAmount));
+    const m = Number(toISO(s.date).slice(5, 7)) - 1;
+    get(s.itemId).cells[m].auto = r2(get(s.itemId).cells[m].auto + num(s.netAmount));
   }
-  const contracts = await db.contract.findMany({ where: { companyId, id: { in: [...new Set(cis.map((c) => c.contractId))] } } });
   const termsOf = new Map(contracts.map((c) => [c.id, toTerms(c)]));
   // uređaji istog ugovora s istom cijenom i planom daju iste rate — računaju se jednom
   const memo = new Map<string, { first: string | null; charges: { m: number; amount: number }[] }>();
   for (const ci of cis) {
     const terms = termsOf.get(ci.contractId);
     if (!terms) continue;
-    const d: ContractDevice = { itemId: ci.itemId, monthly: ci.monthly, plan: (ci.plan as PlanPeriodInput[] | null) ?? [], status: ci.status, skipped: ci.skipped, paused: ci.paused };
+    const d: ContractDevice = { itemId: ci.itemId, monthly: ci.monthly, plan: (ci.plan as PlanPeriodInput[] | null) ?? [], status: ci.status, paused: ci.paused };
     const r = get(ci.itemId);
     r.monthly = d.monthly;
-    const key = `${ci.contractId}|${d.monthly}|${d.status ?? ''}|${JSON.stringify(d.plan)}|${(d.skipped ?? []).join(',')}|${(d.paused ?? []).join(',')}`;
+    const key = `${ci.contractId}|${d.monthly}|${d.status ?? ''}|${JSON.stringify(d.plan)}|${(d.paused ?? []).join(',')}`;
     let calc = memo.get(key);
     if (!calc) {
       calc = {
@@ -163,11 +183,15 @@ async function cellsFor(companyId: string, ids: string[], f: OverviewFilters) {
       memo.set(key, calc);
     }
     if (calc.first && calc.first > now) r.from = calc.first;
-    for (const ch of calc.charges) r.cells[ch.m].auto = r2(r.cells[ch.m].auto + ch.amount);
+    // rata je već zaokružena — zbrajanje (i zaokruživanje) samo kad ćelija već ima iznos
+    for (const ch of calc.charges) {
+      const c = r.cells[ch.m];
+      c.auto = c.auto ? r2(c.auto + ch.amount) : ch.amount;
+    }
   }
   for (const id of ids) {
-    const r = get(id);
-    r.cells.forEach((c, m) => (c.v = m <= lastShown && c.auto ? c.auto : null));
+    const cells = get(id).cells;
+    for (let m = 0; m < 12; m++) cells[m].v = m <= lastShown && cells[m].auto ? cells[m].auto : null;
   }
   for (const o of overrides) {
     const c = get(o.itemId).cells[o.month - 1];
@@ -202,19 +226,20 @@ export interface OverviewTotals {
 
 /** Stranica mreže (ili sve za izvoz): redci s ćelijama i zbrojevi za cijeli filtar. */
 export async function loadOverview(companyId: string, f: OverviewFilters, page: { skip: number; take: number } | null) {
-  const all = await rowIds(companyId, f);
+  const { ids: all, cis } = await rowIds(companyId, f);
   const pageIds = page ? all.slice(page.skip, page.skip + page.take) : all;
 
   // zbrojevi za sve filtrirane retke — motor naplate treba plan svakog uređaja
-  const { map, lastShown } = await cellsFor(companyId, all, f);
+  const { map, lastShown } = await cellsFor(companyId, all, cis, f);
   const totals: OverviewTotals = { devices: all.length, monthly: 0, months: Array(12).fill(0), collected: 0, planned: 0 };
   for (const r of map.values()) {
     totals.monthly += r.monthly;
-    r.cells.forEach((c, m) => {
+    for (let m = 0; m < 12; m++) {
+      const c = r.cells[m];
       if (c.v) totals.months[m] += c.v;
       if (m <= lastShown) totals.collected += c.v ?? 0;
       else totals.planned += c.manual ? (c.v ?? 0) : c.auto;
-    });
+    }
   }
   totals.monthly = r2(totals.monthly);
   totals.months = totals.months.map(r2);

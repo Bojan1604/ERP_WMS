@@ -235,6 +235,9 @@ export async function business(companyId: string, f: MarginFilters) {
   const t = today();
   const partnerSql = f.partners.length ? Prisma.sql`AND v."partnerId" IN (${Prisma.join(f.partners)})` : Prisma.empty;
   const invWhere = Prisma.sql`v."companyId" = ${companyId} AND v.status = 'ISSUED' AND p.excluded = false AND v.date BETWEEN ${fromISO(from)} AND ${fromISO(to)} ${partnerSql}`;
+  // prihod bez računa za predujam (i njihovih storna) — prihod je na konačnom računu, inače bi se brojao dvaput
+  // (kao „Prihod po mjesecima" u izvještajima); predujam ostaje u naplati i otvorenim potraživanjima
+  const revenueSql = Prisma.sql`v.kind <> 'ADVANCE' AND NOT (v.kind = 'STORNO' AND EXISTS (SELECT 1 FROM "Invoice" r WHERE r.id = v."refInvoiceId" AND r.kind = 'ADVANCE'))`;
   const [split, sums, months, customers] = await Promise.all([
     db.$queryRaw<Array<{ bucket: string; net: Prisma.Decimal | null }>>`
       SELECT CASE
@@ -245,11 +248,11 @@ export async function business(companyId: string, f: MarginFilters) {
              END AS bucket,
              sum(l."netAmount") AS net
       FROM "InvoiceLine" l JOIN "Invoice" v ON v.id = l."invoiceId" JOIN "Partner" p ON p.id = v."partnerId"
-      WHERE ${invWhere}
+      WHERE ${invWhere} AND ${revenueSql}
       GROUP BY 1`,
     db.$queryRaw<Array<{ n: bigint; net: Prisma.Decimal | null; paid: Prisma.Decimal | null; late: Prisma.Decimal | null; open: Prisma.Decimal | null }>>`
       SELECT count(*) FILTER (WHERE v.kind IN ('INVOICE', 'ADVANCE')) AS n,
-             sum(v."netTotal") AS net,
+             sum(v."netTotal") FILTER (WHERE ${revenueSql}) AS net,
              sum(CASE WHEN v."grandTotal" <> 0 AND v.kind IN ('INVOICE', 'ADVANCE') THEN v."paidTotal" / v."grandTotal" * v."netTotal" ELSE 0 END) AS paid,
              sum(CASE WHEN v."grandTotal" <> 0 AND v."openAmount" > 0 AND COALESCE(v."dueDate", v.date) < ${fromISO(t)} THEN v."openAmount" / v."grandTotal" * v."netTotal" ELSE 0 END) AS late,
              sum(CASE WHEN v."grandTotal" <> 0 AND v."openAmount" > 0 THEN v."openAmount" / v."grandTotal" * v."netTotal" ELSE 0 END) AS open
@@ -258,10 +261,10 @@ export async function business(companyId: string, f: MarginFilters) {
     db.$queryRaw<Array<{ m: number; net: Prisma.Decimal | null }>>`
       SELECT extract(month FROM v.date)::int AS m, sum(v."netTotal") AS net
       FROM "Invoice" v JOIN "Partner" p ON p.id = v."partnerId"
-      WHERE ${invWhere}
+      WHERE ${invWhere} AND ${revenueSql}
       GROUP BY 1`,
     db.$queryRaw<Array<{ id: string; name: string; n: bigint; net: Prisma.Decimal | null; open: Prisma.Decimal | null }>>`
-      SELECT p.id, p.name, count(*) FILTER (WHERE v.kind IN ('INVOICE', 'ADVANCE')) AS n, sum(v."netTotal") AS net,
+      SELECT p.id, p.name, count(*) FILTER (WHERE v.kind IN ('INVOICE', 'ADVANCE')) AS n, COALESCE(sum(v."netTotal") FILTER (WHERE ${revenueSql}), 0) AS net,
              sum(CASE WHEN v."grandTotal" <> 0 AND v."openAmount" > 0 THEN v."openAmount" / v."grandTotal" * v."netTotal" ELSE 0 END) AS open
       FROM "Invoice" v JOIN "Partner" p ON p.id = v."partnerId"
       WHERE ${invWhere}

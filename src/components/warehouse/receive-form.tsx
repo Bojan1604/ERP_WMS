@@ -7,7 +7,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { Field, FormGrid, Input, Select, Textarea, type Option } from '@/components/ui/field';
 import { Card, Notice, Badge } from '@/components/ui/misc';
 import { useAction, FormError } from '@/components/ui/action';
-import { parseNumber, r2 } from '@/domain/money';
+import { parseAmount, parseNumber, r2 } from '@/domain/money';
 import { today } from '@/domain/dates';
 import { eur, integer } from '@/lib/format';
 import { cn } from '@/lib/cn';
@@ -117,6 +117,8 @@ export function ReceiveForm({
   const dupCount = serials.filter((s) => existing.has(s)).length;
   const newCount = skipExisting ? serials.length - dupCount : serials.length;
   const unit = parseNumber(cost);
+  // neispravan iznos („abc") poslužitelj odbija — javlja se odmah uz polje
+  const costError = cost.trim() && Number.isNaN(parseAmount(cost)) ? 'Neispravan iznos' : null;
   const total = r2(unit * newCount);
   const tooMany = serials.length > MAX_RECEIVE;
 
@@ -134,7 +136,7 @@ export function ReceiveForm({
       }
     },
   });
-  const ready = !!modelId && !!warehouseId && newCount > 0 && !tooMany && !checking && (skipExisting || !dupCount || !!dupNote.trim());
+  const ready = !!modelId && !!warehouseId && newCount > 0 && !tooMany && !checking && (skipExisting || !dupCount || !!dupNote.trim()) && !(canSeeCost && costError);
 
   const submit = () =>
     run({
@@ -201,7 +203,7 @@ export function ReceiveForm({
               </FormGrid>
               <FormGrid>
                 {canSeeCost && (
-                  <Field label="Nabavna cijena po komadu (€)">
+                  <Field label="Nabavna cijena po komadu (€)" error={costError}>
                     <Input inputMode="decimal" value={cost} onChange={(e) => setCost(e.target.value)} placeholder="0,00" className="text-right" />
                   </Field>
                 )}

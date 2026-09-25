@@ -15,11 +15,12 @@ import {
   issueInvoice,
   markPaid,
   markUnpaid,
+  refundPayment,
   stornoInvoice,
   updateDraft,
   type InvoiceInput,
 } from '@/server/services/invoices';
-import { hideDeviceCost, searchDevices } from '@/server/queries/sales';
+import { hideDeviceCost, linePrices, searchDevices } from '@/server/queries/sales';
 import { db, transaction } from '@/server/db';
 import { audit } from '@/server/audit';
 import { canSeeCost } from '@/domain/permissions';
@@ -29,6 +30,7 @@ import { num } from '@/domain/money';
 import { amsCheckInvoice, refreshEInvoiceStatus, reportWithoutSending, resetEInvoiceTrace, validateEInvoice } from '@/server/fiscal/einvoice-ops';
 import { afterIssue, fiscalizeInvoice, reportLatestPayment, sendEInvoice, withOutcome } from '@/server/fiscal';
 import { checkInvoiceContract, openInvoiceContract } from '@/server/services/invoice-rent';
+import { partnerAdvanceOptions } from '@/server/services/invoice-advances';
 
 const zLine = z.object({
   kind: z.enum(['DEVICE', 'MODEL', 'SERVICE', 'MANUAL']),
@@ -37,6 +39,7 @@ const zLine = z.object({
   serviceId: zOptId,
   description: z.string().trim().min(1, 'Opis stavke je obavezan'),
   unit: zOptText,
+  // oblik KPD-a (NN.NN.NN) provjerava servis — poruka navodi broj stavke
   kpd: zOptText,
   qty: zMoney,
   unitPrice: zMoney,
@@ -77,7 +80,8 @@ const zInvoice = z.object({
   taxExemptReason: zOptText,
   discountPct: zMoney.refine((v) => v >= 0 && v <= 100, 'Popust mora biti između 0 i 100 %'),
   discountAmount: zMoney.refine((v) => v >= 0, 'Popust ne može biti negativan'),
-  advanceAmount: zMoney.refine((v) => v >= 0, 'Predujam ne može biti negativan'),
+  /** Uračunati predujmovi: račun za predujam kupca i iznos (s PDV-om). */
+  advances: z.array(z.object({ advanceId: zId, amount: zMoney.refine((v) => v > 0, 'Uračunati iznos predujma mora biti veći od 0') })).max(50).default([]),
   charges: z.array(zCharge).default([]),
   paymentMethod: z.enum(['TRANSFER', 'CASH', 'CARD', 'OTHER']).default('TRANSFER'),
   description: zOptText,
@@ -138,7 +142,7 @@ export const saveInvoice = action({ module: 'sales', level: 'edit' }, zInvoice, 
       taxExemptReason: input.taxCategory === 'S' ? null : input.taxExemptReason,
       discountPct: input.discountPct,
       discountAmount: input.discountAmount,
-      advanceAmount: input.advanceAmount,
+      advances: input.kind === 'INVOICE' ? input.advances : [],
       charges: input.charges.map((c) => ({ kind: c.kind, label: c.label ?? undefined, amount: c.amount ?? undefined, pct: c.pct ?? undefined })),
       contractId,
       period,
@@ -182,6 +186,17 @@ export const addInvoicePayment = action(
     const r = await reportLatestPayment(p.invoiceId, user);
     return { message: r && !r.ok ? `Uplata je upisana. ${r.message}` : 'Uplata je upisana.' };
   },
+);
+
+/** Povrat kupcu (preplata): isplata kao negativna uplata. */
+export const refundInvoicePayment = action(
+  { module: 'sales', level: 'edit' },
+  z.object({ invoiceId: zId, date: zDate, amount: zMoney, method: zOptText, note: zOptText }),
+  async (p, user) =>
+    transaction(async (tx) => {
+      await refundPayment(tx, user, p.invoiceId, p);
+      return { message: 'Povrat kupcu je upisan.' };
+    }),
 );
 
 export const deleteInvoicePayment = action({ module: 'sales', level: 'edit' }, z.object({ paymentId: zId }), async ({ paymentId }, user) =>
@@ -277,31 +292,28 @@ export const partnerContracts = action({ module: 'sales', level: 'view' }, z.obj
   revalidate: [],
 }));
 
+// ---------------------------------------------------------------- uračunati predujmovi
+
+/** Računi za predujam kupca s neiskorištenim ostatkom (odabir „Uračunati predujam" na računu). */
+export const partnerAdvances = action({ module: 'sales', level: 'view' }, z.object({ partnerId: zId, invoiceId: zOptId }), async ({ partnerId, invoiceId }, user) => ({
+  data: await partnerAdvanceOptions(db, user.companyId, partnerId, invoiceId),
+  revalidate: [],
+}));
+
 // ---------------------------------------------------------------- cjenik kupca
 
 /**
- * „Primijeni cjenik kupca": dogovorene cijene kupca po modelu (prodaja ili
- * mjesečni najam) za stavke s uređajem ili modelom. Vraća cijenu po ključu stavke.
+ * Cijene stavki za kupca po ključu stavke: dogovorena cijena kupca po modelu (prodaja
+ * ili mjesečni najam, `agreed: true`), inače standardna (cijena modela / marža / najam
+ * uređaja ili modela). „Primijeni cjenik kupca" i promjena kupca na računu.
  */
 export const customerPrices = action(
   { module: 'sales', level: 'view' },
   z.object({ partnerId: zId, lines: z.array(z.object({ key: z.string().min(1), modelId: zOptId, itemId: zOptId, lineType: z.enum(['SALE', 'RENT']).nullable().optional() })).max(2000) }),
   async ({ partnerId, lines }, user) => {
-    const itemIds = [...new Set(lines.map((l) => l.itemId).filter((x): x is string => !!x))];
-    const items = itemIds.length ? await db.item.findMany({ where: { companyId: user.companyId, id: { in: itemIds } }, select: { id: true, modelId: true } }) : [];
-    const modelOf = new Map(items.map((i) => [i.id, i.modelId]));
-    const modelIds = [...new Set(lines.map((l) => l.modelId ?? (l.itemId ? modelOf.get(l.itemId) : null)).filter((x): x is string => !!x))];
-    const agreements = modelIds.length
-      ? await db.priceAgreement.findMany({ where: { companyId: user.companyId, partnerId, modelId: { in: modelIds } }, select: { modelId: true, salePrice: true, rentPrice: true } })
-      : [];
-    const byModel = new Map(agreements.map((a) => [a.modelId, a]));
-    const out: Record<string, number> = {};
-    for (const l of lines) {
-      const a = byModel.get(l.modelId ?? (l.itemId ? modelOf.get(l.itemId) ?? '' : ''));
-      const v = l.lineType === 'RENT' ? a?.rentPrice : a?.salePrice;
-      if (v != null && num(v) > 0) out[l.key] = num(v);
-    }
-    return { data: out, revalidate: [] };
+    const partner = await db.partner.findFirst({ where: { id: partnerId, companyId: user.companyId }, select: { id: true } });
+    assert(partner, 'Kupac ne postoji.');
+    return { data: await linePrices(user.companyId, partnerId, lines), revalidate: [] };
   },
 );
 

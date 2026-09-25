@@ -77,6 +77,7 @@ export function ExpensesTable({
   paidAction,
   canEdit,
   attachments = {},
+  count,
 }: {
   rows: OccurrenceRow[];
   manual: Record<string, ExpenseValue>;
@@ -88,12 +89,14 @@ export function ExpensesTable({
   canEdit: boolean;
   /** Broj priloga po trošku (oznaka spajalice). */
   attachments?: Record<string, number>;
+  /** Ukupan broj rata kad je prikazana samo jedna stranica. */
+  count?: number;
 }) {
   const [edit, setEdit] = useState<{ value: ExpenseValue; period: string | null } | null>(null);
   if (!rows.length) return <Empty title="Nema troškova za zadane filtre" description="Nabava se knjiži sama iz primki, ostalo upisujete ovdje." />;
   return (
     <>
-      <table className="data-table min-w-[1100px]">
+      <table className="data-table sm:min-w-[1100px]">
         <thead>
           <tr>
             <th>Datum</th>
@@ -170,7 +173,7 @@ export function ExpensesTable({
         </tbody>
         <tfoot>
           <tr>
-            <td colSpan={4}>Ukupno: {integer(rows.length)} stavki</td>
+            <td colSpan={4}>Ukupno: {integer(count ?? rows.length)} stavki</td>
             <td className="num">{eur(totals.net)}</td>
             <td className="num">{eur(totals.vat)}</td>
             <td className="num">{eur(Math.round((totals.net + totals.vat) * 100) / 100)}</td>

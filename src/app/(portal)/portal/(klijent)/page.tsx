@@ -59,10 +59,10 @@ export default async function PortalDevicesPage({ searchParams }: { searchParams
                 return (
                   <tr key={d.id}>
                     <td className="font-medium">{name}</td>
-                    <td className="font-mono break-all">{d.serial}</td>
-                    <td className="text-fg-2">{portalDeviceKind(d.state, d.status.name)}</td>
-                    <td>{date(d.issueDate)}</td>
-                    <td>
+                    <td data-label="Serijski broj" className="font-mono break-all">{d.serial}</td>
+                    <td data-label="Vrsta" className="text-fg-2">{portalDeviceKind(d.state, d.status.name)}</td>
+                    <td data-label="Kod vas od">{date(d.issueDate)}</td>
+                    <td data-label="Jamstvo do">
                       {d.warrantyEnd ? (
                         <Badge tone={inWarranty ? 'ok' : 'neutral'} title={inWarranty ? `još ${daysUntil(d.warrantyEnd, now)} dana` : 'jamstvo isteklo'}>
                           {date(d.warrantyEnd)}

@@ -6,7 +6,7 @@ import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import { getLookups, modelLabel } from '@/server/queries/lookups';
 import { itemFacets, listItems, parseItemFilters, type ItemListRow } from '@/server/queries/warehouse';
-import { can, canSeeCost } from '@/domain/permissions';
+import { can, canSeeCost, needsStatusApproval } from '@/domain/permissions';
 import { num } from '@/domain/money';
 import { toISO } from '@/domain/dates';
 import { suggestedSalePrice } from '@/domain/pricing';
@@ -70,7 +70,7 @@ export default async function WarehousePage({ searchParams }: { searchParams: Pr
   const perms = {
     canEdit: can(user.perms, 'warehouse', 'edit'),
     canOps: can(user.perms, 'warehouse', 'ops'),
-    needsApproval: company.statusChangeNeedsApproval,
+    needsApproval: needsStatusApproval(user, company.statusChangeNeedsApproval),
     canSeeCost: costs,
   };
   const options = {

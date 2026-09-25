@@ -50,15 +50,15 @@ export default async function PortalOrdersPage({ searchParams }: { searchParams:
                       {o.number}
                     </Link>
                   </td>
-                  <td>{date(o.reportedAt)}</td>
-                  <td>
+                  <td data-label="Datum">{date(o.reportedAt)}</td>
+                  <td data-label="Uređaj">
                     {modelName(o.item?.model)} <span className="font-mono text-fg-3">{o.item?.serial ?? o.serial}</span>
                   </td>
-                  <td className="max-w-72 whitespace-pre-line text-fg-2">{o.issue}</td>
-                  <td>
+                  <td data-label="Kvar" className="max-w-72 whitespace-pre-line text-fg-2">{o.issue}</td>
+                  <td data-label="Status">
                     <Badge tone={isOpenService(o.status) ? 'warn' : 'ok'}>{st.label}</Badge>
                   </td>
-                  <td>
+                  <td data-label="Zamjenski uređaj">
                     {o.replacement ? (
                       <>
                         <span className="font-mono font-medium break-all">{o.replacement.serial}</span>
@@ -68,7 +68,7 @@ export default async function PortalOrdersPage({ searchParams }: { searchParams:
                       <span className="text-fg-4">—</span>
                     )}
                   </td>
-                  <td className="text-fg-2">{o.solution || (o.closedAt ? `zatvoreno ${date(o.closedAt)}` : '—')}</td>
+                  <td data-label="Rješenje" className="text-fg-2">{o.solution || (o.closedAt ? `zatvoreno ${date(o.closedAt)}` : '—')}</td>
                 </tr>
               );
             })}

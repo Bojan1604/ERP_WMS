@@ -91,7 +91,7 @@ export default async function QuotePage({ params }: { params: Promise<{ id: stri
                       variant="danger"
                       icon={<Trash2 className="size-4" />}
                       confirmTitle="Brisanje ponude"
-                      confirm={`${kindLabel} ${q.number} bit će trajno obrisan(a).`}
+                      confirm={`${kindLabel} ${q.number} bit će trajno ${q.kind === 'QUOTE' ? 'obrisana' : 'obrisan'}.`}
                       confirmLabel="Obriši"
                     >
                       Obriši
@@ -124,7 +124,7 @@ export default async function QuotePage({ params }: { params: Promise<{ id: stri
             </LinkButton>
           }
         >
-          {kindLabel} je pretvoren(a) u račun {q.invoice.number ?? '(nacrt)'} i više se ne mijenja.
+          {kindLabel} je {q.kind === 'QUOTE' ? 'pretvorena' : 'pretvoren'} u račun {q.invoice.number ?? '(nacrt)'} i više se ne mijenja.
         </Notice>
       )}
       {q.contract && (

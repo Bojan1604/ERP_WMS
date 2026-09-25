@@ -3,6 +3,7 @@
  * stanje eRačuna za popise i poziv na broj predračuna. Čista logika, bez baze.
  */
 import { BILLING_MONTHS, type BillingCode, type PlanPeriodInput } from './billing';
+import { addMonths, periodEnd, periodOf, periodStart } from './dates';
 
 export type LineTypeCode = 'SALE' | 'RENT' | 'SERVICE';
 
@@ -54,10 +55,61 @@ export function billingFromMonths(months: number | null | undefined): BillingCod
 /** Broj mjeseci koje naplata pokriva (jednokratno se broji kao 1 mjesec). */
 export const monthsOfBilling = (b: BillingCode) => Math.max(1, BILLING_MONTHS[b] ?? 1);
 
+// ---------------------------------------------------------------- razdoblje najma na računu
+
+/** Broj mjeseci koje rata pokriva: najveći broj mjeseci naplate na stavkama najma (bez njih 1). */
+export const invoiceRentMonths = (lines: Array<{ months?: number | null }>) => Math.max(1, ...lines.map((l) => l.months ?? 1));
+
+/**
+ * Razdoblje koje rata najma pokriva: od prvog dana mjeseca `period` kroz `months`
+ * mjeseci (kvartalna rata za 2026-09 → 1. 9. – 30. 11. 2026., oznaka „09/2026 – 11/2026").
+ */
+export function rentPeriodRange(period: string | null | undefined, months = 1): { from: string; to: string; label: string } | null {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(period ?? ''))) return null;
+  const p = period!;
+  const last = periodOf(addMonths(periodStart(p), Math.max(1, months) - 1));
+  const mm = (x: string) => `${x.slice(5, 7)}/${x.slice(0, 4)}`;
+  return { from: periodStart(p), to: periodEnd(last), label: last === p ? mm(p) : `${mm(p)} – ${mm(last)}` };
+}
+
+/**
+ * Stavka najma na ispisu i u eRačunu: količina je broj uređaja, pa je jedinica „kom"
+ * (ne „mj" — to bi značilo broj mjeseci); opis nosi razdoblje, a napomena mjesečni iznos.
+ */
+export function rentLineView(
+  l: { description: string; unit: string; monthly?: number | null; months?: number | null },
+  range: { label: string } | null,
+): { description: string; unit: string; note: string | null } {
+  if (l.monthly == null || !l.months) return { description: l.description, unit: l.unit, note: null };
+  const unit = /^(mj|mjesec|mjeseci|mth|mon)$/i.test(l.unit.trim()) ? 'kom' : l.unit;
+  const description = range && !l.description.includes(range.label) ? `${l.description} — ${range.label}` : l.description;
+  const note = `${l.months} mj × ${l.monthly.toLocaleString('hr-HR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €/mj po uređaju`;
+  return { description, unit, note };
+}
+
 // ---------------------------------------------------------------- KPD 2025
 
 /** KPD 2025 šifra je oblika NN.NN.NN (potkategorija, 6 znamenki). */
 export const kpdValid = (code: string | null | undefined) => /^\d\d\.\d\d\.\d\d$/.test(String(code ?? '').trim());
+
+/**
+ * Traži li dokument KPD na stavkama (HR-BR-25): račun i storno računa da; račun za
+ * predujam, knjižno odobrenje i storno predujma idu bez KPD-a (kao službeni primjeri CIUS-2025).
+ */
+export const kpdRequired = (kind: 'INVOICE' | 'ADVANCE' | 'STORNO' | 'CREDIT_NOTE', refKind?: string | null) =>
+  kind === 'INVOICE' || (kind === 'STORNO' && refKind !== 'ADVANCE');
+
+/** Nedostaci KPD-a po stavkama (prazno = u redu): nedostaje šifra ili nije oblika NN.NN.NN. */
+export function kpdIssues(lines: Array<{ description: string; kpd?: string | null }>): string[] {
+  const out: string[] = [];
+  lines.forEach((l, i) => {
+    const kpd = String(l.kpd ?? '').trim();
+    const name = l.description?.trim() || 'bez opisa';
+    if (!kpd) out.push(`Stavka ${i + 1} (${name}) nema KPD 2025 šifru.`);
+    else if (!kpdValid(kpd)) out.push(`Stavka ${i + 1} (${name}): KPD „${kpd}" nije oblika NN.NN.NN.`);
+  });
+  return out;
+}
 
 /**
  * KPD stavke kad ga korisnik nije upisao: usluga (i ručna stavka računa za uslugu) → šifra usluge; uređaj/model →
@@ -75,7 +127,8 @@ export function defaultKpd(a: {
   if (a.kind === 'SERVICE') return pick(a.serviceKpd, a.company.kpdService);
   // račun za uslugu: ručne stavke su usluge
   if (a.lineType === 'SERVICE' && a.kind === 'MANUAL') return pick(a.company.kpdService);
-  if (a.lineType === 'RENT') return pick(a.modelKpdRent, a.company.kpdRent, a.kind === 'MANUAL' ? null : a.modelKpd);
+  // najam je usluga — KPD robe s modela (prodaja) nije ispravna šifra za najam; bez šifre najma korisnik je upisuje
+  if (a.lineType === 'RENT') return pick(a.modelKpdRent, a.company.kpdRent);
   if (a.kind === 'MANUAL') return pick(a.company.kpdSale);
   return pick(a.modelKpd, a.company.kpdSale);
 }

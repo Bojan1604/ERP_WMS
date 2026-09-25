@@ -2,21 +2,27 @@ import { CalendarCheck2 } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import { can } from '@/domain/permissions';
-import { companyPending } from '@/server/queries/rentals';
-import { Card, Empty, PageHeader } from '@/components/ui/misc';
+import { pendingPage } from '@/server/queries/rentals';
+import { Card, Empty, PageHeader, TableWrap } from '@/components/ui/misc';
+import { FilterBar, SearchFilter } from '@/components/ui/filters';
+import { Pagination, readPage } from '@/components/ui/pagination';
 import { LinkButton } from '@/components/ui/button';
 import { PendingTable } from '@/components/rentals/pending-table';
-import { r2 } from '@/domain/money';
 import { eur, integer } from '@/lib/format';
 
 export const metadata = { title: 'Rate za izdati' };
 
-export default async function PendingPage() {
-  const user = await pageAccess('rentals', 'view');
-  const rows = await companyPending(user.companyId);
-  const total = r2(rows.reduce((a, r) => a + r.amount, 0));
+type SP = Promise<Record<string, string | string[] | undefined>>;
 
-  if (!rows.length) {
+export default async function PendingPage({ searchParams }: { searchParams: SP }) {
+  const user = await pageAccess('rentals', 'view');
+  const params = await searchParams;
+  const q = typeof params.q === 'string' ? params.q.trim() : '';
+  // straničenje po ugovorima: sve rate jednog ugovora su na istoj stranici
+  const page = readPage(params, 50);
+  const data = await pendingPage(user.companyId, { q, skip: page.skip, take: page.take });
+
+  if (!data.unfiltered) {
     const [active, paused, excluded] = await Promise.all([
       db.contract.count({ where: { companyId: user.companyId, status: 'ACTIVE', partner: { excluded: false } } }),
       db.contract.count({ where: { companyId: user.companyId, status: 'PAUSED' } }),
@@ -51,13 +57,23 @@ export default async function PendingPage() {
     <>
       <PageHeader
         title="Rate za izdati"
-        subtitle={`${integer(rows.length)} rata · ${integer(new Set(rows.map((r) => r.contractId)).size)} ugovora · ukupno ${eur(total)} neto`}
+        subtitle={`${integer(data.count)} rata · ${integer(data.contracts)} ugovora · ukupno ${eur(data.amount)} neto`}
       />
       <p className="mb-3 max-w-3xl text-sm text-fg-3">
         Računi za najam ne izdaju se sami. Označite rate i izdajte ih odjednom, ili otvorite nacrt („Pregledaj“) za izmjenu prije izdavanja.
-        Rata koja je fakturirana izvan programa miče se gumbom „Ne izdaji — već izdano“. Prikazane su rate do 24 mjeseca unatrag.
+        Rata koja je fakturirana izvan programa miče se gumbom „Ne izdaji — već izdano“. Prikazane su rate do 24 mjeseca unatrag, po 50 ugovora na stranici (sve rate ugovora na istoj stranici).
       </p>
-      <PendingTable rows={rows} canIssue={can(user.perms, 'sales', 'edit')} canEdit={can(user.perms, 'rentals', 'edit')} />
+      <FilterBar>
+        <SearchFilter placeholder="Ugovor ili klijent…" />
+      </FilterBar>
+      {data.rows.length ? (
+        <PendingTable key={`${page.page}|${q}`} rows={data.rows} canIssue={can(user.perms, 'sales', 'edit')} canEdit={can(user.perms, 'rentals', 'edit')} />
+      ) : (
+        <TableWrap>
+          <Empty icon={<CalendarCheck2 className="size-5" />} title="Nema rata za pretragu" description="Nijedan ugovor ni klijent s ratama za izdati ne odgovara pretrazi." />
+        </TableWrap>
+      )}
+      <Pagination page={page.page} pageSize={page.pageSize} total={data.contracts} params={params} basePath="/najam/rate" />
     </>
   );
 }

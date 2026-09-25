@@ -87,6 +87,8 @@ export async function approvalRequests(companyId: string, opts: { mine?: { id: s
       id: r.id,
       status: r.status,
       requestedBy: r.requestedBy,
+      /** Id podnositelja (stariji zahtjevi nemaju) — vlastiti zahtjev se ne odobrava. */
+      requesterId: (statusPayload(r.payload).requesterId as string | null | undefined) ?? null,
       resolvedBy: r.resolvedBy,
       resolveNote: r.resolveNote,
       createdAt: r.createdAt,

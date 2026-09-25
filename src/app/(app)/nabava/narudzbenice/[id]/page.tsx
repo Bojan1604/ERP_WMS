@@ -57,7 +57,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
             <LinkButton href={`/nabava/narudzbenice/${id}/ispis`} icon={<Printer className="size-4" />}>
               Ispis
             </LinkButton>
-            {canEdit && editable && (
+            {canEdit && costs && editable && (
               <LinkButton href={`/nabava/narudzbenice/${id}/uredi`} icon={<Pencil className="size-4" />}>
                 Uredi
               </LinkButton>
@@ -136,7 +136,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
                         {canEdit && receivable && left > 0 && (
                           <ReceiveDialog
                             orderId={id}
-                            line={{ id: l.id, model: modelLabel(l.model), remaining: left, unitCost: num(l.unitCost) }}
+                            line={{ id: l.id, model: modelLabel(l.model), remaining: left, unitCost: costs ? num(l.unitCost) : 0 }}
                             warehouses={warehouses}
                             today={today()}
                             action={receiveLineAction}
@@ -208,16 +208,17 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
           <Card title="Račun dobavljača" actions={<span className="text-xs text-fg-3">nakon primke postaje ulazni račun i ide knjigovođi</span>}>
             <OrderInvoiceForm
               orderId={id}
-              orderTotal={num(order.total)}
+              orderTotal={costs ? num(order.total) : null}
               readOnly={!canEdit || !costs}
               initial={{
                 supplierInvoiceNo: order.supplierInvoiceNo,
                 supplierInvoiceDate: order.supplierInvoiceDate ? toISO(order.supplierInvoiceDate) : null,
                 supplierInvoiceDueDate: order.supplierInvoiceDueDate ? toISO(order.supplierInvoiceDueDate) : null,
                 supplierInvoiceCurrency: order.supplierInvoiceCurrency,
-                supplierInvoiceNet: order.supplierInvoiceNet === null ? null : num(order.supplierInvoiceNet),
-                supplierInvoiceVat: order.supplierInvoiceVat === null ? null : num(order.supplierInvoiceVat),
-                supplierInvoiceTotal: order.supplierInvoiceTotal === null ? null : num(order.supplierInvoiceTotal),
+                // iznosi računa dobavljača su nabavna vrijednost — bez prava „costs" ne idu u klijent
+                supplierInvoiceNet: !costs || order.supplierInvoiceNet === null ? null : num(order.supplierInvoiceNet),
+                supplierInvoiceVat: !costs || order.supplierInvoiceVat === null ? null : num(order.supplierInvoiceVat),
+                supplierInvoiceTotal: !costs || order.supplierInvoiceTotal === null ? null : num(order.supplierInvoiceTotal),
               }}
             />
           </Card>

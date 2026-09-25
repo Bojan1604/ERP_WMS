@@ -7,6 +7,7 @@ import { Badge, Empty, PageHeader, TableWrap } from '@/components/ui/misc';
 import { DateFilter, FilterBar, SearchFilter, SelectFilter } from '@/components/ui/filters';
 import { Pagination, readPage } from '@/components/ui/pagination';
 import { dateTime } from '@/lib/format';
+import { canSeeCost, redactCostDiff, redactCostSummary } from '@/domain/permissions';
 
 export const metadata = { title: 'Dnevnik promjena' };
 
@@ -18,6 +19,10 @@ const ENTITY_LABEL: Record<string, string> = {
   expense: 'Trošak', supplierInvoice: 'Ulazni račun', warehouse: 'Skladište', category: 'Kategorija', model: 'Model',
   status: 'Status', expenseCategory: 'Kategorija troška', request: 'Odobrenje', accountant: 'Knjigovođa',
   job: 'Automatski posao', import: 'Uvoz i kopije', approvalRequest: 'Odobrenje',
+  purchaseOrder: 'Narudžbenica', package: 'Paket', portalUser: 'Korisnik portala', attachment: 'Prilog', stocktake: 'Inventura',
+  rent: 'Najam', settings: 'Postavke', proforma: 'Predračun', delivery: 'Otpremnica',
+  mdmDevice: 'MDM uređaj', mdmProfile: 'MDM profil', mdmApp: 'MDM aplikacija', mdmOrg: 'MDM organizacija', mdmSite: 'MDM lokacija',
+  mdmFile: 'MDM datoteka', mdmEnrollToken: 'MDM ključ za upis', mdmCommand: 'MDM naredba', command: 'MDM naredba',
 };
 const ACTION_LABEL: Record<string, string> = {
   create: 'novo', update: 'izmjena', delete: 'brisanje', issue: 'izdavanje', storno: 'storno', payment: 'uplata',
@@ -30,6 +35,13 @@ const ACTION_LABEL: Record<string, string> = {
   password: 'lozinka', switch: 'promjena firme', 'company-grant': 'pristup firmi', 'company-revoke': 'oduzet pristup firmi',
   counter: 'numeracija', 'auto-issue': 'automatsko izdavanje', backup: 'sigurnosna kopija', 'backup-delete': 'brisanje kopije', 'backup-download': 'preuzeta kopija',
   'wipe-transactions': 'brisanje prometa', 'wipe-all': 'brisanje svih podataka', 'log-clean': 'čišćenje dnevnika', 'integrity-fix': 'popravak dosljednosti', reset: 'vraćeno na zadano',
+  command: 'naredba', enroll: 'upis', link: 'povezivanje', push: 'slanje', version: 'nova verzija', 'delete-version': 'brisanje verzije', profile: 'profil',
+  append: 'dopuna', assign: 'dodjela', book: 'knjiženje', rebook: 'ponovno knjiženje', close: 'zatvaranje', contract: 'ugovor', convert: 'pretvorba',
+  draft: 'nacrt', email: 'e-pošta', export: 'izvoz', import: 'uvoz', pdf: 'PDF', portal: 'portal', margin: 'marža', move: 'premještanje',
+  occurrence: 'ponavljanje', out: 'izlaz', overrides: 'posebni uvjeti', refund: 'povrat novca', replace: 'zamjena', return: 'povrat',
+  returned: 'vraćeno', returning: 'u povratu', skip: 'preskočeno', unskip: 'vraćeno u plan',
+  'einvoice-reset': 'eRačun poništen', 'einvoice-status': 'status eRačuna', 'fiscal-cert': 'certifikat za fiskalizaciju',
+  'fiscal-settings': 'postavke fiskalizacije', 'mail-settings': 'postavke e-pošte', 'mail-templates': 'predlošci e-pošte',
 };
 const ACTION_TONE: Record<string, 'ok' | 'bad' | 'info' | 'neutral' | 'warn'> = {
   create: 'ok', delete: 'bad', update: 'info', issue: 'ok', storno: 'warn', accept: 'ok', reject: 'bad', 'wipe-transactions': 'bad', 'wipe-all': 'bad', 'log-clean': 'warn', '2fa-reset': 'warn',
@@ -40,6 +52,7 @@ export default async function AuditLogPage({ searchParams }: { searchParams: Pro
   const user = await pageAccess('log');
   const params = await searchParams;
   const page = readPage(params, 100);
+  const showCost = canSeeCost(user.perms);
   const where: Prisma.AuditLogWhereInput = { companyId: user.companyId };
   if (typeof params.entitet === 'string' && params.entitet) where.entity = params.entitet;
   if (typeof params.korisnik === 'string' && params.korisnik) where.userId = params.korisnik;
@@ -79,27 +92,30 @@ export default async function AuditLogPage({ searchParams }: { searchParams: Pro
             </thead>
             <tbody>
               {rows.map((r) => {
-                const hasDiff = r.diff && typeof r.diff === 'object' && Object.keys(r.diff as object).length > 0;
+                // bez prava „costs" nabavne cijene, marže i nabavni iznosi se ne prikazuju
+                const diff = showCost ? r.diff : redactCostDiff(r.diff, r.entity);
+                const summary = showCost ? r.summary : redactCostSummary(r.summary, r.entity, r.action);
+                const hasDiff = !!diff && typeof diff === 'object' && Object.keys(diff as object).length > 0;
                 return (
                   <tr key={r.id} className="align-top">
                     <td className="whitespace-nowrap text-fg-2 tnum">{dateTime(r.at)}</td>
-                    <td className="whitespace-nowrap">{r.userName ?? '—'}</td>
-                    <td className="whitespace-nowrap text-fg-2">{ENTITY_LABEL[r.entity] ?? r.entity}</td>
-                    <td>
+                    <td data-label="Korisnik" className="whitespace-nowrap">{r.userName ?? '—'}</td>
+                    <td data-label="Vrsta" className="whitespace-nowrap text-fg-2">{ENTITY_LABEL[r.entity] ?? r.entity}</td>
+                    <td data-label="Radnja">
                       <Badge tone={ACTION_TONE[r.action] ?? 'neutral'} title={r.action}>
                         {ACTION_LABEL[r.action] ?? r.action}
                       </Badge>
                     </td>
-                    <td>
+                    <td data-label="Opis">
                       {hasDiff ? (
                         <details className="group">
                           <summary className="cursor-pointer list-none marker:hidden">
-                            {r.summary} <span className="text-xs text-brand group-open:hidden">· promjene</span>
+                            {summary} <span className="text-xs text-brand group-open:hidden">· promjene</span>
                           </summary>
-                          <pre className="mt-1.5 max-h-80 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap text-fg-2">{JSON.stringify(r.diff, null, 2)}</pre>
+                          <pre className="mt-1.5 max-h-80 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap text-fg-2">{JSON.stringify(diff, null, 2)}</pre>
                         </details>
                       ) : (
-                        r.summary
+                        summary
                       )}
                     </td>
                   </tr>

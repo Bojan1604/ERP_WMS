@@ -99,6 +99,15 @@ export function openAmount(args: {
   return Math.max(0, r2(args.total - args.advance - args.paid));
 }
 
+/**
+ * Preplata — iznos za povrat kupcu: uplate, uračunati predujam i odobrenja zajedno
+ * premašuju iznos računa (npr. odobrenje izdano na već plaćen račun).
+ */
+export function overpaidAmount(args: { kind: InvoiceKindCode; stornoed: boolean; total: number; advance: number; paid: number; credited: number }): number {
+  if (args.stornoed || !isReceivable(args.kind)) return 0;
+  return Math.max(0, r2(args.paid + args.advance + args.credited - args.total));
+}
+
 export type PaymentStateKey = 'draft' | 'paid' | 'partial' | 'overdue' | 'open' | 'stornoed' | 'storno' | 'credit';
 
 export interface PaymentState {

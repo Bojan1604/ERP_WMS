@@ -78,6 +78,8 @@ export default async function ContractPage({ params, searchParams }: Props) {
                 id={c.id}
                 number={c.number}
                 rented={items.filter((i) => i.item.state === 'RENTED').length}
+                pending={pending.length}
+                pendingAmount={pending.reduce((a, r) => a + r.amount, 0)}
                 warehouses={lookups.warehouses.map((w) => ({ value: w.id, label: w.name }))}
               />
             )}

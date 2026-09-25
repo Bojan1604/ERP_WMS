@@ -985,74 +985,78 @@ model PackageItem {
 }
 
 model Invoice {
-  id               String        @id @default(cuid())
-  companyId        String
-  status           InvoiceStatus @default(DRAFT)
-  kind             InvoiceKind   @default(INVOICE)
-  type             InvoiceType   @default(SALE)
+  id                  String        @id @default(cuid())
+  companyId           String
+  status              InvoiceStatus @default(DRAFT)
+  kind                InvoiceKind   @default(INVOICE)
+  type                InvoiceType   @default(SALE)
   /// Redni broj u godini — dodjeljuje se pri izdavanju, nikad se ne ponavlja.
-  seq              Int?
-  year             Int
-  number           String?
-  partnerId        String
-  date             DateTime      @db.Date
-  dueDate          DateTime?     @db.Date
-  deliveryDate     DateTime?     @db.Date
-  vatRate          Decimal       @db.Decimal(5, 2)
+  seq                 Int?
+  year                Int
+  number              String?
+  partnerId           String
+  date                DateTime      @db.Date
+  dueDate             DateTime?     @db.Date
+  deliveryDate        DateTime?     @db.Date
+  vatRate             Decimal       @db.Decimal(5, 2)
   /// Porezna kategorija (S, AE, K, G, E, O) i razlog oslobođenja za eRačun.
-  taxCategory      String        @default("S")
-  taxExemptReason  String?
-  discountPct      Decimal       @default(0) @db.Decimal(6, 2)
-  discountAmount   Decimal       @default(0) @db.Decimal(14, 2)
+  taxCategory         String        @default("S")
+  taxExemptReason     String?
+  discountPct         Decimal       @default(0) @db.Decimal(6, 2)
+  discountAmount      Decimal       @default(0) @db.Decimal(14, 2)
   /// Neoporezive naknade: [{ kind, label, amount }]
-  charges          Json          @default("[]")
-  advanceAmount    Decimal       @default(0) @db.Decimal(14, 2)
+  charges             Json          @default("[]")
+  advanceAmount       Decimal       @default(0) @db.Decimal(14, 2)
+  /// Preslika postavki firme pri izdavanju (ispis i eRačun izdanog računa ne prate kasnije
+  /// promjene postavki); null = nacrt ili stariji račun → vrijede trenutne postavke firme.
+  sellerVatRegistered Boolean?
+  vatOnPayment        Boolean?
   /// Izvorni račun je storniran (poništen stornom) — nema potraživanja.
-  stornoed         Boolean       @default(false)
+  stornoed            Boolean       @default(false)
   // zbrojevi — preračunavaju se pri svakoj izmjeni stavki ili uplata
-  netTotal         Decimal       @default(0) @db.Decimal(14, 2)
-  vatTotal         Decimal       @default(0) @db.Decimal(14, 2)
-  chargesTotal     Decimal       @default(0) @db.Decimal(14, 2)
-  grandTotal       Decimal       @default(0) @db.Decimal(14, 2)
-  paidTotal        Decimal       @default(0) @db.Decimal(14, 2)
+  netTotal            Decimal       @default(0) @db.Decimal(14, 2)
+  vatTotal            Decimal       @default(0) @db.Decimal(14, 2)
+  chargesTotal        Decimal       @default(0) @db.Decimal(14, 2)
+  grandTotal          Decimal       @default(0) @db.Decimal(14, 2)
+  paidTotal           Decimal       @default(0) @db.Decimal(14, 2)
   /// Zbroj izdanih knjižnih odobrenja na ovaj račun (pozitivan iznos).
-  creditedTotal    Decimal       @default(0) @db.Decimal(14, 2)
-  openAmount       Decimal       @default(0) @db.Decimal(14, 2)
-  costTotal        Decimal       @default(0) @db.Decimal(14, 2)
-  paidDate         DateTime?     @db.Date
-  refInvoiceId     String? // storno/odobrenje → izvorni
-  contractId       String?
-  period           String? // YYYY-MM — razdoblje najma koje rata pokriva
+  creditedTotal       Decimal       @default(0) @db.Decimal(14, 2)
+  openAmount          Decimal       @default(0) @db.Decimal(14, 2)
+  costTotal           Decimal       @default(0) @db.Decimal(14, 2)
+  paidDate            DateTime?     @db.Date
+  refInvoiceId        String? // storno/odobrenje → izvorni
+  contractId          String?
+  period              String? // YYYY-MM — razdoblje najma koje rata pokriva
   /// Račun za najam iz Prodaje: „Zatim naplata prelazi u" — od datuma `rentNextFrom` novi uređaji
   /// s računa prelaze na naplatu `rentNextBilling` (drugo razdoblje plana naplate uređaja).
-  rentNextBilling  Billing?
-  rentNextFrom     DateTime?     @db.Date
-  description      String?
-  note             String?
-  paymentRef       String? // poziv na broj
+  rentNextBilling     Billing?
+  rentNextFrom        DateTime?     @db.Date
+  description         String?
+  note                String?
+  paymentRef          String? // poziv na broj
   /// Stanje slanja eRačuna: { status, sentAt, id, error }
-  eInvoice         Json          @default("{}")
+  eInvoice            Json          @default("{}")
   /// Stanje eRačuna za filtre popisa (preslika iz eInvoice.status i posrednika):
   /// null = nije poslan · SENT · DELIVERED · ACCEPTED · REJECTED · PAID · FISCALIZED (IR, bez slanja) · REPORTED (eIzvještavanje) · ERROR
-  eInvoiceStatus   String?
-  eInvoiceStatusAt DateTime?
+  eInvoiceStatus      String?
+  eInvoiceStatusAt    DateTime?
   /// Kada je račun prijavljen u eIzvještavanje (strani kupac / izvan AMS-a).
-  eReportedAt      DateTime?
-  paymentMethod    PaymentMethod @default(TRANSFER)
+  eReportedAt         DateTime?
+  paymentMethod       PaymentMethod @default(TRANSFER)
   /// Zaštitni kod izdavatelja i jedinstveni identifikator računa (CIS).
-  zki              String?
-  jir              String?
-  fiscalStatus     FiscalStatus  @default(NOT_REQUIRED)
-  fiscalizedAt     DateTime?
-  fiscalError      String?
-  fiscalAttempts   Int           @default(0)
-  createdBy        String?
-  issuedBy         String?
-  issuedAt         DateTime?
+  zki                 String?
+  jir                 String?
+  fiscalStatus        FiscalStatus  @default(NOT_REQUIRED)
+  fiscalizedAt        DateTime?
+  fiscalError         String?
+  fiscalAttempts      Int           @default(0)
+  createdBy           String?
+  issuedBy            String?
+  issuedAt            DateTime?
   /// Kada je račun predan knjigovođi (stranica Knjigovođa); null = nije poslan.
-  accountantSentAt DateTime?
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  accountantSentAt    DateTime?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
 
   company       Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
   partner       Partner        @relation(fields: [partnerId], references: [id])
@@ -1064,6 +1068,10 @@ model Invoice {
   items         Item[]         @relation("ItemLastInvoice")
   quote         Quote?
   serviceOrders ServiceOrder[]
+  /// Konačni račun: uračunati predujmovi.
+  advanceUses   AdvanceUse[]   @relation("AdvanceUseInvoice")
+  /// Račun za predujam: konačni računi u koje je uračunat.
+  advanceUsedBy AdvanceUse[]   @relation("AdvanceUseAdvance")
 
   @@unique([companyId, year, seq])
   @@index([companyId, date])
@@ -1077,6 +1085,23 @@ model Invoice {
   // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
   @@index([partnerId])
   @@index([refInvoiceId])
+}
+
+/// Predujam uračunat u konačni račun (iznos s PDV-om). Zbroj po računu predujma ne smije
+/// premašiti njegov iznos (nestornirani računi); zbroj po konačnom računu = Invoice.advanceAmount.
+model AdvanceUse {
+  id        String   @id @default(cuid())
+  invoiceId String
+  advanceId String
+  amount    Decimal  @db.Decimal(14, 2)
+  createdAt DateTime @default(now())
+
+  invoice Invoice @relation("AdvanceUseInvoice", fields: [invoiceId], references: [id], onDelete: Cascade)
+  advance Invoice @relation("AdvanceUseAdvance", fields: [advanceId], references: [id], onDelete: Cascade)
+
+  @@unique([invoiceId, advanceId])
+  @@index([invoiceId])
+  @@index([advanceId])
 }
 
 model InvoiceLine {
@@ -1358,6 +1383,9 @@ model SupplierInvoice {
   /// Stopa PDV-a (za prikaz stupca PDV %); null = izračun iz iznosa.
   vatPct           Decimal?              @db.Decimal(5, 2)
   currency         String                @default("EUR")
+  /// „Ovo je račun za robu s primke" (trošak robe nosi primka): true/false = odluka (izričita ili
+  /// po pravilu iznosa pri spremanju), null = račun nije povezan s nabavom.
+  goodsInvoice     Boolean?
   createdAt        DateTime              @default(now())
   updatedAt        DateTime              @updatedAt
 

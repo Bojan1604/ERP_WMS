@@ -7,7 +7,6 @@ import { Pagination, readPage } from '@/components/ui/pagination';
 import { amount, date, eur, integer } from '@/lib/format';
 import { paymentState, INVOICE_KIND_LABEL } from '@/domain/invoice';
 import { CONTRACT_STATUS_LABEL, BILLING_LABEL } from '@/domain/billing';
-import { warrantyEnd } from '@/domain/pricing';
 import { toISO, today } from '@/domain/dates';
 import { num } from '@/domain/money';
 import { cn } from '@/lib/cn';
@@ -123,7 +122,7 @@ export async function DevicesTab({ companyId, partnerId, params }: { companyId: 
             </thead>
             <tbody>
               {rows.map((i) => {
-                const wEnd = warrantyEnd(i.warrantyStart ? toISO(i.warrantyStart) : null, i.warrantyMonths);
+                const wEnd = i.warrantyEnd;
                 return (
                   <tr key={i.id}>
                     <td>
@@ -203,15 +202,14 @@ export async function ContractsTab({ companyId, partnerId }: { companyId: string
   );
 }
 
-export async function LedgerTab({ companyId, partnerId }: { companyId: string; partnerId: string }) {
-  const rows = await partnerLedger(companyId, partnerId);
-  if (!rows.length) return <TableWrap><Empty title="Kartica je prazna" description="Partner nema izdanih računa ni uplata." /></TableWrap>;
-  const debit = rows.reduce((a, r) => a + r.debit, 0);
-  const credit = rows.reduce((a, r) => a + r.credit, 0);
-  const balance = rows.at(-1)!.balance;
+export async function LedgerTab({ companyId, partnerId, params }: { companyId: string; partnerId: string; params: Record<string, string | string[] | undefined> }) {
+  // stranica 1 = najnovijih 100 stavki; zbrojevi i saldo preko cijele kartice
+  const pg = readPage(params, 100);
+  const { rows, total, debit, credit, balance } = await partnerLedger(companyId, partnerId, pg);
+  if (!total) return <TableWrap><Empty title="Kartica je prazna" description="Partner nema izdanih računa ni uplata." /></TableWrap>;
   return (
     <>
-      <p className="mb-3 text-sm text-fg-3">Izdani računi (duguje) i uplate (potražuje) kronološki; storna i odobrenja umanjuju dug.</p>
+      <p className="mb-3 text-sm text-fg-3">Izdani računi (duguje) i uplate (potražuje) kronološki; storna i odobrenja umanjuju dug.{total > pg.take && ' Prva stranica prikazuje najnovije stavke.'}</p>
       <TableWrap>
         <table className="data-table">
           <thead>
@@ -244,7 +242,7 @@ export async function LedgerTab({ companyId, partnerId }: { companyId: string; p
           </tbody>
           <tfoot>
             <tr>
-              <td colSpan={3}>Ukupno</td>
+              <td colSpan={3}>Ukupno ({integer(total)} stavki)</td>
               <td className="num">{amount(debit)}</td>
               <td className="num">{amount(credit)}</td>
               <td className="num">{amount(balance)}</td>
@@ -252,6 +250,7 @@ export async function LedgerTab({ companyId, partnerId }: { companyId: string; p
           </tfoot>
         </table>
       </TableWrap>
+      <Pagination page={pg.page} pageSize={pg.take} total={total} params={params} basePath={`/partneri/${partnerId}`} />
     </>
   );
 }

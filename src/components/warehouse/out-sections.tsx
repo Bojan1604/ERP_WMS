@@ -8,7 +8,7 @@ import { SearchFilter } from '@/components/ui/filters';
 import type { Option } from '@/components/ui/field';
 import { AnnounceBar, ReservedBar, ReturningBar } from './out-bars';
 import { date, dateTime, eur } from '@/lib/format';
-import { num } from '@/domain/money';
+import { Pagination } from '@/components/ui/pagination';
 
 const serialLink = (id: string, serial: string) => (
   <Link prefetch={false} href={`/skladiste/${id}`} className="link font-mono text-sm">
@@ -25,9 +25,26 @@ const partnerLink = (p: { id: string; name: string } | null) =>
     <span className="text-fg-4">—</span>
   );
 
-export async function ReservedSection({ companyId, canOps, canSell, canRent, canSeeCost = true }: { companyId: string; canOps: boolean; canSell: boolean; canRent: boolean; canSeeCost?: boolean }) {
-  const groups = await reservedGroups(companyId);
-  if (!groups.length) return <Empty icon={<Inbox className="size-5" />} title="Nema uređaja koji su izašli iz skladišta" description="Uređaji označeni kao „Izašlo iz skladišta“ čekaju ovdje da prodaja izda račun ili ih doda na ugovor." />;
+export async function ReservedSection({
+  companyId,
+  canOps,
+  canSell,
+  canRent,
+  canSeeCost = true,
+  page,
+  params,
+}: {
+  companyId: string;
+  canOps: boolean;
+  canSell: boolean;
+  canRent: boolean;
+  canSeeCost?: boolean;
+  page: { page: number; skip: number; take: number };
+  params: Record<string, string | string[] | undefined>;
+}) {
+  // stranica po 100 uređaja (skupine po partneru); broj i vrijednost skupine su preko svih uređaja
+  const { groups, total } = await reservedGroups(companyId, page);
+  if (!groups.length && !total) return <Empty icon={<Inbox className="size-5" />} title="Nema uređaja koji su izašli iz skladišta" description="Uređaji označeni kao „Izašlo iz skladišta“ čekaju ovdje da prodaja izda račun ili ih doda na ugovor." />;
   return (
     <div className="space-y-4">
       {groups.map((g) => (
@@ -37,16 +54,21 @@ export async function ReservedSection({ companyId, canOps, canSell, canRent, can
             title={
               <span className="flex items-center gap-2">
                 {g.partnerId ? partnerLink({ id: g.partnerId, name: g.partnerName ?? '—' }) : <span className="text-fg-3">Bez navedenog kupca</span>}
-                <Badge>{g.items.length} kom</Badge>
+                <Badge>{g.count} kom</Badge>
+                {g.items.length < g.count && (
+                  <span className="text-xs font-normal text-fg-3">
+                    prikazano {g.from + 1}–{g.from + g.items.length}
+                  </span>
+                )}
               </span>
             }
-            actions={canSeeCost ? <span className="text-sm text-fg-3">{eur(g.items.reduce((s, i) => s + num(i.cost), 0))}</span> : undefined}
+            actions={canSeeCost ? <span className="text-sm text-fg-3">{eur(g.cost)}</span> : undefined}
           >
             <div className="px-3 pt-2">
               <ReservedBar partnerId={g.partnerId} canOps={canOps} canSell={canSell} canRent={canRent} />
             </div>
             <div className="overflow-x-auto scroll-slim">
-              <table className="data-table min-w-[760px]">
+              <table className="data-table sm:min-w-[760px]">
                 <thead>
                   <tr>
                     <th className="w-8">
@@ -82,6 +104,7 @@ export async function ReservedSection({ companyId, canOps, canSell, canRent, can
           </Card>
         </SelectionProvider>
       ))}
+      <Pagination page={page.page} pageSize={page.take} total={total} params={params} basePath="/skladiste/izlaz" />
     </div>
   );
 }
@@ -93,7 +116,7 @@ export async function ReturnSection({ companyId, canOps }: { companyId: string; 
     <SelectionProvider ids={rows.map((r) => r.itemId)}>
       {canOps && <AnnounceBar />}
       <TableWrap>
-        <table className="data-table min-w-[820px]">
+        <table className="data-table sm:min-w-[820px]">
           <thead>
             <tr>
               <th className="w-8">{canOps && <SelectAll />}</th>
@@ -135,7 +158,7 @@ export async function ReturningSection({ companyId, canOps, warehouses }: { comp
     <SelectionProvider ids={rows.map((r) => r.id)}>
       {canOps && <ReturningBar warehouses={warehouses} />}
       <TableWrap>
-        <table className="data-table min-w-[760px]">
+        <table className="data-table sm:min-w-[760px]">
           <thead>
             <tr>
               <th className="w-8">{canOps && <SelectAll />}</th>
@@ -184,7 +207,7 @@ export async function ManualReturnSection({ companyId, canOps, q }: { companyId:
         <SelectionProvider ids={rows.map((r) => r.id)}>
           {canOps && <AnnounceBar />}
           <TableWrap>
-            <table className="data-table min-w-[720px]">
+            <table className="data-table sm:min-w-[720px]">
               <thead>
                 <tr>
                   <th className="w-8">{canOps && <SelectAll />}</th>

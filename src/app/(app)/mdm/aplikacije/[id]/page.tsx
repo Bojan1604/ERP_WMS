@@ -100,7 +100,7 @@ export default async function AppPage({ params }: { params: Promise<{ id: string
                       {dateTime(v.createdAt)}
                       {v.file.createdBy && <div className="text-xs text-fg-3">{v.file.createdBy}</div>}
                     </td>
-                    <td className="text-sm">
+                    <td className="text-sm max-sm:col-span-2">
                       {[...v.usedBy, ...(i === 0 ? data.latestUsedBy.map((n) => `${n} (najnovija)`) : [])].map((n) => (
                         <Badge key={n} tone="brand" className="mr-1">
                           {n}

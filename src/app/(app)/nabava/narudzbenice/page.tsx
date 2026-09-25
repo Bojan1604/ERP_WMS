@@ -25,6 +25,8 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
   const filtered = ['q', 'status', 'supplier', 'year'].some((k) => typeof sp[k] === 'string' && sp[k]);
   const toOrder = low.filter((m) => m.missing > 0);
   const costs = canSeeCost(user.perms);
+  // narudžbenica su nabavne cijene — upis i izmjena samo uz pravo na nabavne cijene (costs)
+  const canCreate = canEdit && costs;
   const qs = new URLSearchParams();
   for (const k of ['q', 'status', 'supplier', 'year']) if (typeof sp[k] === 'string' && sp[k]) qs.set(k, sp[k] as string);
   const prefill = (rows: typeof low) => `/nabava/narudzbenice/novi?lines=${rows.map((m) => `${m.id}:${Math.max(1, m.missing)}`).join(',')}`;
@@ -37,7 +39,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
         actions={
           <>
             <ExportButtons href={`/api/nabava/narudzbenice?${qs}`} />
-            {canEdit && (
+            {canCreate && (
               <LinkButton href="/nabava/narudzbenice/novi" variant="primary" icon={<Plus className="size-4" />}>
                 Nova narudžbenica
               </LinkButton>
@@ -55,7 +57,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
             </span>
           }
           actions={
-            canEdit &&
+            canCreate &&
             toOrder.length > 0 && (
               <LinkButton href={prefill(toOrder)} size="sm" variant="subtle">
                 Naruči sve što nedostaje ({toOrder.length})
@@ -84,7 +86,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
                   <td className="num">{m.onOrder || '—'}</td>
                   <td className="num">{m.missing ? <b>{m.missing}</b> : <span className="text-ok">pokriveno narudžbom</span>}</td>
                   <td className="num">
-                    {canEdit && m.missing > 0 && (
+                    {canCreate && m.missing > 0 && (
                       <Link prefetch={false} href={prefill([m])} className="link text-sm">
                         Naruči
                       </Link>
@@ -115,7 +117,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
 
       <TableWrap>
         {list.rows.length ? (
-          <table className="data-table min-w-[900px]">
+          <table className="data-table sm:min-w-[900px]">
             <thead>
               <tr>
                 <th>Broj</th>
@@ -166,7 +168,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
             icon={<ClipboardList className="size-5" />}
             title={filtered ? 'Nema narudžbenica za zadane filtre' : 'Još nema narudžbenica'}
             action={
-              canEdit && !filtered ? (
+              canCreate && !filtered ? (
                 <Link prefetch={false} href="/nabava/narudzbenice/novi" className={buttonClass('primary')}>
                   Nova narudžbenica
                 </Link>

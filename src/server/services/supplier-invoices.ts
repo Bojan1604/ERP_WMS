@@ -98,7 +98,8 @@ export async function lockPurchaseDocs(tx: Tx, companyId: string, a: { orderId?:
 /**
  * Stanje veze računa s robom: povezane primke, broj njihovih troškova, vrijednosti
  * robe (zbroj primki, narudžbenica) i koliko je drugih povezanih računa već „račun za robu"
- * (neodbijeni bez vlastitog troška). Koristi se i za zadanu kvačicu na obrascu.
+ * (neodbijeni s odlukom `goodsInvoice`). Koristi se i za zadanu kvačicu na obrascu
+ * (`refs` i `otherGoodsInvoices` — obrazac preračunava zadano iz upisane osnovice).
  */
 export async function goodsInvoiceContext(
   tx: Tx,
@@ -106,7 +107,7 @@ export async function goodsInvoiceContext(
   si: { id: string | null; orderId: string | null; receiptId: string | null; netAmount: number },
 ) {
   const receipts = await linkedReceiptIds(tx, companyId, si);
-  if (!receipts.length && !si.orderId) return { receipts, receiptExpenses: 0, defaultGoods: false };
+  if (!receipts.length && !si.orderId) return { receipts, receiptExpenses: 0, defaultGoods: false, refs: [] as number[], otherGoodsInvoices: 0 };
   const [receiptExpenses, sums, order, others] = await Promise.all([
     receipts.length ? tx.expense.count({ where: { companyId, receiptId: { in: receipts } } }) : 0,
     receipts.length ? tx.goodsReceipt.aggregate({ where: { companyId, id: { in: receipts }, status: 'POSTED' }, _sum: { total: true } }) : null,
@@ -116,18 +117,19 @@ export async function goodsInvoiceContext(
         companyId,
         ...(si.id ? { id: { not: si.id } } : {}),
         status: { not: 'REJECTED' },
-        expense: { is: null },
+        goodsInvoice: true,
         OR: [...(si.orderId ? [{ orderId: si.orderId }] : []), ...(receipts.length ? [{ receiptId: { in: receipts } }] : [])],
       },
     }),
   ]);
   const refs = [num(sums?._sum.total ?? 0), order ? num(order.total) : 0];
-  return { receipts, receiptExpenses, defaultGoods: defaultGoodsInvoice({ net: si.netAmount, refs, otherGoodsInvoices: others }) };
+  return { receipts, receiptExpenses, defaultGoods: defaultGoodsInvoice({ net: si.netAmount, refs, otherGoodsInvoices: others }), refs, otherGoodsInvoices: others };
 }
 
 /**
  * Trošak ulaznog računa po pravilu „roba se knjiži jednom": ako je račun „račun za
- * robu s primke" (`goods`; undefined/null = zadano pravilo iznosa) i povezane primke
+ * robu s primke" (`goods`; undefined/null = spremljena odluka `goodsInvoice`, a bez nje
+ * zadano pravilo iznosa — odluka se sprema uz povezani račun) i povezane primke
  * imaju trošak, vlastiti trošak računa se ne stvara (postojeći se briše), a plaćenost
  * računa prelazi na troškove primki. Zaprimljeni eRačun i odbijeni ne knjiže ništa.
  * `prevPaid` = datum plaćanja prije izmjene (poništavanje plaćenosti prenesene na primke).
@@ -143,13 +145,18 @@ export async function applyInvoiceExpense(
     where: { id, companyId: actor.companyId },
     select: {
       id: true, number: true, status: true, orderId: true, receiptId: true, issueDate: true, netAmount: true, vatAmount: true, paidDate: true, category: true, note: true,
+      goodsInvoice: true,
       supplier: { select: { id: true, name: true } },
     },
   });
   assert(si, 'Ulazni račun ne postoji.');
   await lockPurchaseDocs(tx, actor.companyId, { orderId: si.orderId, receiptIds: si.receiptId ? [si.receiptId] : [] });
   const ctx = await goodsInvoiceContext(tx, actor.companyId, { id: si.id, orderId: si.orderId, receiptId: si.receiptId, netAmount: num(si.netAmount) });
-  const goods = opts.goods ?? ctx.defaultGoods;
+  const linked = !!(si.orderId || si.receiptId);
+  const goods = linked && (opts.goods ?? si.goodsInvoice ?? ctx.defaultGoods);
+  // odluka se pamti (prihvaćanje eRačuna, „Knjiži ponovno" i plaćenost je poštuju)
+  const stored = linked ? goods : null;
+  if (stored !== si.goodsInvoice) await tx.supplierInvoice.update({ where: { id: si.id }, data: { goodsInvoice: stored } });
   const mode = invoiceExpenseMode({ book, rejected: si.status === 'REJECTED', pending: si.status === 'RECEIVED', receiptExpenses: ctx.receiptExpenses, goods });
   if (mode === 'own') {
     const expense = {
@@ -193,7 +200,7 @@ async function mirrorReceiptPaid(tx: Tx, companyId: string, receipts: string[], 
 
 /**
  * Plaćen račun za robu povezan s narudžbenicom/primkom (neodbijen, bez vlastitog
- * troška) — trošak nove primke tada odmah nosi njegov datum plaćanja.
+ * troška, `goodsInvoice`) — trošak nove primke tada odmah nosi njegov datum plaćanja.
  */
 export async function paidGoodsInvoiceDate(tx: Tx, companyId: string, a: { orderId: string | null; receiptId: string }) {
   const si = await tx.supplierInvoice.findFirst({
@@ -201,6 +208,7 @@ export async function paidGoodsInvoiceDate(tx: Tx, companyId: string, a: { order
       companyId,
       status: { not: 'REJECTED' },
       paidDate: { not: null },
+      goodsInvoice: true,
       expense: { is: null },
       OR: [{ receiptId: a.receiptId }, ...(a.orderId ? [{ orderId: a.orderId }] : [])],
     },
@@ -286,6 +294,10 @@ export async function saveSupplierInvoice(tx: Tx, actor: Actor, id: string | nul
   const net = r2(input.netAmount);
   const vat = r2(input.vatAmount);
   const total = input.total ? r2(input.total) : r2(net + vat);
+  // odluka „račun za robu": izričita s obrasca; bez nje ostaje spremljena dok se veza ne promijeni,
+  // a za novu vezu / novi račun odlučuje pravilo iznosa po STVARNO upisanoj osnovici
+  const sameLinks = !!old && old.orderId === links.orderId && old.receiptId === links.receiptId;
+  const goodsInvoice = typeof input.goods === 'boolean' ? input.goods : sameLinks ? undefined : null;
   const currency = (input.currency ?? 'EUR').trim().toUpperCase() || 'EUR';
   assert(/^[A-Z]{3}$/.test(currency), 'Valuta mora biti troslovna oznaka (npr. EUR).');
   assert(input.vatPct === undefined || input.vatPct === null || (input.vatPct >= 0 && input.vatPct <= 100), 'Stopa PDV-a mora biti između 0 i 100 %.');
@@ -307,6 +319,7 @@ export async function saveSupplierInvoice(tx: Tx, actor: Actor, id: string | nul
     paidDate: input.paidDate ? fromISO(input.paidDate) : null,
     orderId: links.orderId,
     receiptId: links.receiptId,
+    ...(goodsInvoice !== undefined ? { goodsInvoice } : {}),
   };
 
   let si: { id: string; internalNo: string };
@@ -318,7 +331,7 @@ export async function saveSupplierInvoice(tx: Tx, actor: Actor, id: string | nul
     si = await tx.supplierInvoice.create({ data: { companyId: actor.companyId, internalNo, ...data }, select: { id: true, internalNo: true } });
   }
 
-  const mode = await applyInvoiceExpense(tx, actor, si.id, input.book, { goods: input.goods, prevPaid: old?.paidDate ?? null });
+  const mode = await applyInvoiceExpense(tx, actor, si.id, input.book, { prevPaid: old?.paidDate ?? null });
 
   await audit(tx, actor, {
     entity: 'supplierInvoice',
@@ -337,7 +350,7 @@ export async function saveSupplierInvoice(tx: Tx, actor: Actor, id: string | nul
 export async function setSupplierInvoicesPaid(tx: Tx, actor: Actor, ids: string[], paidDate: string | null) {
   const found = await tx.supplierInvoice.findMany({
     where: { id: { in: ids }, companyId: actor.companyId },
-    select: { id: true, status: true, source: true, internalNo: true, orderId: true, receiptId: true, paidDate: true, expense: { select: { id: true } } },
+    select: { id: true, status: true, source: true, internalNo: true, orderId: true, receiptId: true, paidDate: true, goodsInvoice: true, expense: { select: { id: true } } },
   });
   assert(found.length === ids.length, 'Neki računi ne postoje.');
   const rejected = found.filter((f) => f.status === 'REJECTED');
@@ -349,7 +362,7 @@ export async function setSupplierInvoicesPaid(tx: Tx, actor: Actor, ids: string[
   await tx.expense.updateMany({ where: { supplierInvoiceId: { in: ids }, companyId: actor.companyId }, data: { paid: !!d, paidDate: d } });
   // račun za robu (bez vlastitog troška): plaćenost prelazi na trošak nabave s povezanih primki — i poništavanje
   for (const f of found) {
-    if (f.expense || f.status === 'REJECTED') continue;
+    if (f.expense || !f.goodsInvoice || f.status === 'REJECTED') continue;
     await mirrorReceiptPaid(tx, actor.companyId, await linkedReceiptIds(tx, actor.companyId, f), f.paidDate, d);
   }
   await audit(tx, actor, {
@@ -529,7 +542,12 @@ export async function bookReceiptExpense(tx: Tx, actor: Actor, receiptId: string
   assert(num(r.total) > 0, 'Primka nema vrijednost — nema troška za knjižiti.');
   await lockPurchaseDocs(tx, actor.companyId, { orderId: r.orderId, receiptIds: [r.id] });
   const own = await tx.expense.findFirst({
-    where: { companyId: actor.companyId, source: 'SUPPLIER_INVOICE', supplierInvoice: { OR: [{ receiptId: r.id }, ...(r.orderId ? [{ orderId: r.orderId }] : [])] } },
+    where: {
+      companyId: actor.companyId,
+      source: 'SUPPLIER_INVOICE',
+      // samo račun za robu — prijevoz i drugi računi iste narudžbenice ne knjiže robu
+      supplierInvoice: { goodsInvoice: true, OR: [{ receiptId: r.id }, ...(r.orderId ? [{ orderId: r.orderId }] : [])] },
+    },
     select: { supplierInvoice: { select: { internalNo: true } } },
   });
   if (own) throw new DomainError(`Roba je već knjižena kao trošak ulaznog računa ${own.supplierInvoice?.internalNo ?? ''} — trošak se ne knjiži dvaput.`);

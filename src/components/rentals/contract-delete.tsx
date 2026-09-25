@@ -7,6 +7,7 @@ import { Dialog } from '@/components/ui/dialog';
 import { Field, Select } from '@/components/ui/field';
 import { FormError, useAction } from '@/components/ui/action';
 import { deleteContractAction } from '@/app/(app)/najam/ugovori/actions';
+import { eur } from '@/lib/format';
 
 /**
  * Brisanje ugovora (samo bez računa). Uređaji u najmu: ugovor otvoren greškom →
@@ -16,12 +17,17 @@ export function ContractDeleteButton({
   id,
   number,
   rented,
+  pending = 0,
+  pendingAmount = 0,
   warehouses,
 }: {
   id: string;
   number: string;
   /** Broj uređaja u najmu na ugovoru. */
   rented: number;
+  /** Neizdane rate ugovora (brisanjem nestaju bez računa). */
+  pending?: number;
+  pendingAmount?: number;
   warehouses: { value: string; label: string }[];
 }) {
   const [open, setOpen] = useState(false);
@@ -54,6 +60,12 @@ export function ContractDeleteButton({
       >
         <div className="space-y-3 text-base text-fg-2">
           <p>Ugovor se briše zajedno s rasporedom naplate, preskočenim i pauziranim ratama i priloženim PDF-om. Ugovor s računima se ne može obrisati — njega otkažite.</p>
+          {pending > 0 && (
+            <p className="rounded-md bg-warn-soft px-3 py-2 text-sm text-fg">
+              Ugovor ima <b>{pending}</b> neizdanih rata ({eur(pendingAmount)} neto) — brisanjem se više neće tražiti ni izdati. Ako ih treba naplatiti, prvo ih izdajte
+              ili ugovor otkažite umjesto brisanja.
+            </p>
+          )}
           {rented > 0 ? (
             <>
               <p className="text-sm">Na ugovoru je {rented} uređaja u najmu:</p>

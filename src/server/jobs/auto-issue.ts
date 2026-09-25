@@ -1,10 +1,11 @@
 import 'server-only';
 import { db } from '../db';
 import { audit } from '../audit';
+import { DomainError } from '../errors';
 import { afterIssue } from '../fiscal';
 import { issuePending, pendingForCompany, tryLockInstallment } from '../services/rentals';
 import type { Actor } from '../services/items';
-import { fromISO, toISO, today } from '@/domain/dates';
+import { fromISO, periodLabel, toISO, today } from '@/domain/dates';
 
 /**
  * Automatsko izdavanje rata najma na dan dospijeća (Company.autoIssueRent).
@@ -63,7 +64,9 @@ async function claimDay(companyId: string, actor: Actor, day: string, force: boo
  */
 export async function autoIssueCompany(companyId: string, opts: { day?: string; force?: boolean; fiscalize?: boolean } = {}): Promise<AutoIssueResult> {
   const day = opts.day ?? today();
-  const company = await db.company.findUniqueOrThrow({ where: { id: companyId }, select: { name: true, autoIssueSince: true } });
+  const company = await db.company.findUniqueOrThrow({ where: { id: companyId }, select: { name: true, autoIssueRent: true, autoIssueSince: true } });
+  // „Pokreni sada" bez uključene opcije ne izdaje ništa i ne upisuje datum uključivanja
+  if (!company.autoIssueRent) throw new DomainError('Automatsko izdavanje rata najma nije uključeno — uključite ga i spremite postavke.');
   // bez datuma uključivanja (stariji zapis) posao kreće od danas i to upisuje
   let since = company.autoIssueSince ? toISO(company.autoIssueSince) : null;
   if (!since) {
@@ -85,7 +88,8 @@ export async function autoIssueCompany(companyId: string, opts: { day?: string; 
       const r = await db.$transaction(
         async (tx) => {
           if (!(await tryLockInstallment(tx, companyId, p.contractId, p.period))) return null;
-          return issuePending(tx, actor, [{ contractId: p.contractId, period: p.period }]);
+          // datum računa = dan posla (ne kasniji od danas)
+          return issuePending(tx, actor, [{ contractId: p.contractId, period: p.period }], { date: day < today() ? day : today() });
         },
         { maxWait: 10_000, timeout: 60_000 },
       );
@@ -98,7 +102,7 @@ export async function autoIssueCompany(companyId: string, opts: { day?: string; 
       // rata je u međuvremenu izdana (ručno ili drugi proces) — nije greška
       const msg = e instanceof Error ? e.message : String(e);
       if (/nema rate za izdati/i.test(msg)) out.skipped++;
-      else out.errors.push(`${p.contractNumber} (${p.period}): ${msg}`);
+      else out.errors.push(`${p.contractNumber} (${periodLabel(p.period)}): ${msg}`);
     }
   }
   // fiskalizacija / eRačun nakon izdavanja (mrežni pozivi izvan transakcije)

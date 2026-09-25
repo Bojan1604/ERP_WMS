@@ -29,10 +29,9 @@ export function TaxFields({
     taxExemptReason?: string;
     discountPct: number;
     discountAmount: number;
-    advanceAmount?: number;
     charges?: EditorCharge[];
   };
-  set: (patch: Partial<{ vatRate: number; taxCategory: string; taxExemptReason: string; discountPct: number; discountAmount: number; advanceAmount: number; charges: EditorCharge[] }>) => void;
+  set: (patch: Partial<{ vatRate: number; taxCategory: string; taxExemptReason: string; discountPct: number; discountAmount: number; charges: EditorCharge[] }>) => void;
   showCharges?: boolean;
 }) {
   const charges = v.charges ?? [];
@@ -49,11 +48,6 @@ export function TaxFields({
         <Field label="Stopa PDV-a %">
           <NumberInput value={v.vatRate} onValue={(x) => set({ vatRate: x ?? 0 })} />
         </Field>
-        {v.advanceAmount !== undefined && (
-          <Field label="Uračunati predujam €">
-            <NumberInput value={v.advanceAmount} onValue={(x) => set({ advanceAmount: x ?? 0 })} />
-          </Field>
-        )}
       </div>
       {v.taxCategory !== undefined && (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-[14rem_1fr]">

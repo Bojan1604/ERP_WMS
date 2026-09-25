@@ -31,8 +31,24 @@ export function sum<T>(rows: readonly T[], pick: (row: T) => number): number {
  * „1.500.000" → 1500000, „12,5" → 12.5.
  */
 export function parseNumber(input: string): number {
-  let s = String(input).trim().replace(/\s|€|eur/gi, '');
-  if (!s) return 0;
+  const n = Number.parseFloat(normalizeNumber(input));
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Stroga inačica `parseNumber` za obrasce: cijeli upis mora biti broj
+ * („1.234,56", „12,5", „-3", „1 500 €"); „abc", „12x" ili prazno daju NaN — iznos se
+ * tada odbija („Neispravan iznos"), umjesto da se tiho spremi 0.
+ */
+export function parseAmount(input: string): number {
+  const s = normalizeNumber(input);
+  return /^[+-]?(\d+(\.\d*)?|\.\d+)$/.test(s) ? Number(s) : Number.NaN;
+}
+
+/** Hrvatski/engleski zapis broja → „1234.56" (bez razmaka, valute i tisućica). */
+function normalizeNumber(input: string): string {
+  let s = String(input).trim().replace(/\s|€|eur|%/gi, '');
+  if (!s) return '';
   const comma = s.lastIndexOf(',');
   const dot = s.lastIndexOf('.');
   if (comma >= 0 && dot >= 0) {
@@ -43,6 +59,5 @@ export function parseNumber(input: string): number {
   } else if ((s.match(/\./g) ?? []).length > 1) {
     s = s.replace(/\./g, '');
   }
-  const n = Number.parseFloat(s);
-  return Number.isFinite(n) ? n : 0;
+  return s;
 }

@@ -10,8 +10,8 @@ import { deviceWarrantyEnd } from './service';
 export const SHEET_VIEWS = ['najam', 'prodano', 'sve'] as const;
 export type SheetView = (typeof SHEET_VIEWS)[number];
 
-/** Najviše redaka na stranici (dokument za ispis nema straničenja); izvoz nema ograničenja. */
-export const SHEET_MAX = 5000;
+/** Redaka po stranici dokumenta na ekranu (ispis je po stranicama); izvoz nema ograničenja. */
+export const SHEET_MAX = 500;
 
 type Params = Record<string, string | string[] | undefined>;
 
@@ -24,12 +24,13 @@ export function readSheetParams(params: Params | URLSearchParams) {
  * Popis uređaja klijenta („ClientSheet"): po partneru (uređaji kod njega) ili
  * po ugovoru (uređaji na ugovoru). Mjesečni najam s ugovora, prodajna cijena
  * za kupljene; nabavne cijene se ne čitaju. Uvjeti ugovora za podnožje.
- * Zbrojevi se računaju u bazi (ne iz prikazanih redaka); `limit: null` = svi retci (izvoz).
+ * Zbrojevi se računaju u bazi (ne iz prikazanih redaka); `limit: null` = svi retci (izvoz),
+ * inače stranica od `skip`. Uvjeti ugovora obuhvaćaju sve ugovore pogleda, ne samo stranice.
  */
 export async function clientSheet(
   companyId: string,
   partnerId: string,
-  opts: { view: SheetView; contractId?: string | null; limit?: number | null },
+  opts: { view: SheetView; contractId?: string | null; limit?: number | null; skip?: number },
 ) {
   const limit = opts.limit === undefined ? SHEET_MAX : opts.limit;
   const [partner, contract] = await Promise.all([
@@ -37,22 +38,23 @@ export async function clientSheet(
     opts.contractId ? db.contract.findFirst({ where: { id: opts.contractId, companyId, partnerId }, select: { id: true, number: true } }) : null,
   ]);
   if (!partner || (opts.contractId && !contract)) return null;
-  const base: Prisma.ItemWhereInput = contract ? { companyId, contractItem: { is: { contractId: contract.id } } } : { companyId, partnerId };
+  const base: Prisma.ItemWhereInput = contract ? { companyId, contractItem: { is: { contractId: contract.id } } } : { companyId, partnerId, state: { not: 'WRITTEN_OFF' } }; // otpisani nisu „kod klijenta"
   // prodano = kupljeni uređaji (status prodan), ne svaki uređaj kod klijenta bez ugovora (servis, rezervacija…)
   const viewWhere = (v: SheetView): Prisma.ItemWhereInput =>
     contract || v === 'sve' ? base : v === 'najam' ? { ...base, contractItem: { isNot: null } } : { ...base, state: 'SOLD', contractItem: { is: null } };
   // popis ugovora ima samo uređaje u najmu
   const where = viewWhere(contract ? 'najam' : opts.view);
-  const [rent, sold, all, monthlySum, salesSum, items] = await Promise.all([
+  const [rent, sold, all, monthlySum, salesSum, contractRefs, items] = await Promise.all([
     db.item.count({ where: viewWhere('najam') }),
     contract ? Promise.resolve(0) : db.item.count({ where: viewWhere('prodano') }),
     db.item.count({ where: base }),
     db.contractItem.aggregate({ where: { item: where }, _sum: { monthly: true } }),
     db.item.aggregate({ where: { AND: [where, { contractItem: { is: null } }] }, _sum: { salePrice: true } }),
+    db.contractItem.findMany({ where: { item: where }, distinct: ['contractId'], select: { contractId: true } }),
     db.item.findMany({
       where,
-      orderBy: [{ model: { name: 'asc' } }, { serial: 'asc' }],
-      ...(limit ? { take: limit } : {}),
+      orderBy: [{ model: { name: 'asc' } }, { serial: 'asc' }, { id: 'asc' }],
+      ...(limit ? { take: limit, skip: opts.skip ?? 0 } : {}),
       select: {
         id: true, serial: true, issueDate: true, warrantyStart: true, warrantyMonths: true, salePrice: true,
         status: { select: { name: true, color: true } },
@@ -62,7 +64,8 @@ export async function clientSheet(
       },
     }),
   ]);
-  const contractIds = [...new Set(items.flatMap((i) => (i.contractItem ? [i.contractItem.contractId] : [])))];
+  const contractIds = contractRefs.map((c) => c.contractId);
+  const total = contract || opts.view === 'najam' ? rent : opts.view === 'prodano' ? sold : all;
   const [terms, sums] = contractIds.length
     ? await Promise.all([
         db.contract.findMany({
@@ -92,8 +95,11 @@ export async function clientSheet(
     partner,
     contract,
     counts: { najam: rent, prodano: sold, sve: all },
+    /** Broj uređaja u prikazanom pogledu (svih stranica). */
+    total,
     rows,
-    truncated: !!limit && rows.length >= limit,
+    /** Ima još redaka iza prikazanih (stranica). */
+    truncated: !!limit && total > (opts.skip ?? 0) + rows.length,
     monthly: r2(num(monthlySum._sum.monthly)),
     sales: r2(num(salesSum._sum.salePrice)),
     contracts: terms.map((c) => ({ ...c, startDate: toISO(c.startDate), endDate: c.endDate ? toISO(c.endDate) : null, ...(sumBy.get(c.id) ?? { monthly: 0, devices: 0 }) })),

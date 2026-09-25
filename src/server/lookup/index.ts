@@ -34,8 +34,14 @@ async function fetchJson(url: string, init: RequestInit = {}): Promise<{ status:
   }
 }
 
+/** Poruka za korisnika je ljudska; tehnički detalj (HTTP status, greška mreže) ide samo u zapisnik poslužitelja. */
+function unavailable(who: string, detail: unknown) {
+  console.warn(`[lookup] ${who}:`, detail);
+  return `${who} trenutno nije dostupan — pokušajte kasnije.`;
+}
+
 const netError = (who: string, e: unknown) =>
-  e instanceof Error && e.name === 'AbortError' ? `${who} ne odgovara (${TIMEOUT_MS / 1000} s).` : `${who} nije dostupan: ${e instanceof Error ? e.message : e}`;
+  e instanceof Error && e.name === 'AbortError' ? `${who} ne odgovara (${TIMEOUT_MS / 1000} s).` : unavailable(who, e instanceof Error ? e.message : e);
 
 // ---------------------------------------------------------------- Sudski registar
 
@@ -54,7 +60,10 @@ async function sudregToken(): Promise<string> {
     body: 'grant_type=client_credentials',
   });
   const d = r.data as { access_token?: string; expires_in?: number } | null;
-  if (r.status !== 200 || !d?.access_token) throw new Error(`Sudski registar nije izdao pristup (HTTP ${r.status}) — provjerite SUDREG_CLIENT_ID i SUDREG_CLIENT_SECRET.`);
+  if (r.status !== 200 || !d?.access_token) {
+    console.warn(`[lookup] Sudski registar nije izdao token (HTTP ${r.status}) — provjerite SUDREG_CLIENT_ID i SUDREG_CLIENT_SECRET.`);
+    throw new Error('Sudski registar trenutno ne odobrava pristup — pokušajte kasnije ili obavijestite administratora.');
+  }
   token = { value: d.access_token, until: Date.now() + Math.max(60, (d.expires_in ?? 3600) - 60) * 1000 };
   return token.value;
 }
@@ -66,7 +75,7 @@ export async function lookupSudreg(oib: string): Promise<CompanyInfo & { error?:
   const err = sudregError(r.data);
   if (r.status === 404 || err?.code === 505) return { ...parseSudreg(null), error: 'OIB nije u Sudskom registru (obrti i udruge se ne vode u njemu).' };
   if (err) return { ...parseSudreg(null), error: `Sudski registar: ${err.message || 'greška'} (${err.code})` };
-  if (r.status !== 200) return { ...parseSudreg(null), error: `Sudski registar: HTTP ${r.status}` };
+  if (r.status !== 200) return { ...parseSudreg(null), error: unavailable('Sudski registar', `HTTP ${r.status}`) };
   return parseSudreg(r.data);
 }
 
@@ -77,7 +86,7 @@ export async function lookupVies(country: string, number: string): Promise<Compa
   const url = (process.env.VIES_URL || 'https://ec.europa.eu/taxation_customs/vies/rest-api/ms/{cc}/vat/{num}').replace('{cc}', cc).replace('{num}', encodeURIComponent(number));
   const r = await fetchJson(url);
   const d = r.data as { userError?: string } | null;
-  if (r.status !== 200) return { ...parseVies(null, cc, number), error: `VIES: HTTP ${r.status}` };
+  if (r.status !== 200) return { ...parseVies(null, cc, number), error: unavailable('Registar PDV obveznika (VIES)', `HTTP ${r.status}`) };
   if (d?.userError && !/^VALID$/i.test(d.userError) && !/INVALID/i.test(d.userError)) {
     return { ...parseVies(null, cc, number), error: `VIES trenutno ne odgovara za ${cc} (${d.userError}).` };
   }
@@ -131,7 +140,7 @@ export async function lookupPartner(companyId: string, input: { oib: string | nu
             reg = { ...parseSudreg(null), error: e instanceof Error && /Sudski registar/.test(e.message) ? e.message : netError('Sudski registar', e) };
           }
           if (reg.found) return reg;
-        } else notes.push('Sudski registar nije podešen (SUDREG_CLIENT_ID / SUDREG_CLIENT_SECRET) — podaci su iz VIES-a.');
+        } else notes.push('Sudski registar nije povezan — podaci su iz EU registra PDV obveznika (VIES).');
         // obrti, udruge i firme kad registar ne odgovara: VIES (samo obveznici PDV-a)
         try {
           const v = await lookupVies('HR', hrOib);

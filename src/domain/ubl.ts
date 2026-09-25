@@ -71,8 +71,10 @@ export interface UblInput {
   issueTime?: string;
   dueDate?: string | null;
   deliveryDate?: string | null;
-  /** Razdoblje najma YYYY-MM. */
+  /** Razdoblje najma YYYY-MM (prvi mjesec rate). */
   period?: string | null;
+  /** Broj mjeseci koje rata pokriva (kvartalno 3…) — InvoicePeriod od–do; zadano 1. */
+  periodMonths?: number | null;
   currency?: string;
   notes?: Array<string | null | undefined>;
   seller: UblParty & { iban?: string | null; vatRegistered?: boolean };
@@ -93,6 +95,8 @@ export interface UblInput {
   paymentMeansCode?: string;
   /** Storno i odobrenje: izvorni račun (kind = vrsta izvornog). */
   billingReference?: { number: string; date?: string | null; kind?: UblKind } | null;
+  /** Konačni račun: uračunati računi za predujam (BillingReference na svaki, profil P11). */
+  advanceReferences?: Array<{ number: string; date?: string | null }>;
   lines: UblLine[];
 }
 
@@ -203,11 +207,13 @@ function fmtPct(n: number) {
 }
 const digits = (s: string | null | undefined) => String(s ?? '').replace(/\s+/g, '');
 
-function periodBounds(period: string | null | undefined) {
+/** Razdoblje rate: od prvog dana mjeseca `period` do zadnjeg dana mjeseca `months − 1` kasnije. */
+function periodBounds(period: string | null | undefined, months = 1) {
   const m = String(period ?? '').match(/^(\d{4})-(\d{2})$/);
   if (!m) return null;
-  const last = new Date(Date.UTC(Number(m[1]), Number(m[2]), 0)).getUTCDate();
-  return { from: `${m[1]}-${m[2]}-01`, to: `${m[1]}-${m[2]}-${String(last).padStart(2, '0')}` };
+  const endMonth = Number(m[2]) - 1 + Math.max(1, months);
+  const end = new Date(Date.UTC(Number(m[1]), endMonth, 0));
+  return { from: `${m[1]}-${m[2]}-01`, to: end.toISOString().slice(0, 10) };
 }
 
 function partyXml(p: {
@@ -374,10 +380,16 @@ export function buildUbl(input: UblInput): { xml: string; root: 'Invoice' | 'Cre
   <cbc:DueDate>${esc(input.dueDate || input.issueDate)}</cbc:DueDate>
   <cbc:InvoiceTypeCode>${advance ? 386 : storno ? 384 : 380}</cbc:InvoiceTypeCode>`;
   const notes = [...(input.notes ?? []), input.vatOnPayment ? VAT_ON_PAYMENT_NOTE : null].filter((n): n is string => !!n && !!n.trim());
-  const period = input.type === 'RENT' && !advance && !storno ? periodBounds(input.period) : null;
-  const ref = input.billingReference && (credit || storno)
-    ? `\n  <cac:BillingReference><cac:InvoiceDocumentReference><cbc:ID>${esc(input.billingReference.number)}</cbc:ID>${input.billingReference.date ? `<cbc:IssueDate>${esc(input.billingReference.date)}</cbc:IssueDate>` : ''}</cac:InvoiceDocumentReference></cac:BillingReference>`
-    : '';
+  const period = input.type === 'RENT' && !advance && !storno ? periodBounds(input.period, input.periodMonths ?? 1) : null;
+  const refXml = (r: { number: string; date?: string | null }) =>
+    `\n  <cac:BillingReference><cac:InvoiceDocumentReference><cbc:ID>${esc(r.number)}</cbc:ID>${r.date ? `<cbc:IssueDate>${esc(r.date)}</cbc:IssueDate>` : ''}</cac:InvoiceDocumentReference></cac:BillingReference>`;
+  // storno/odobrenje → izvorni račun; konačni račun → svaki uračunati predujam
+  const ref =
+    input.billingReference && (credit || storno)
+      ? refXml(input.billingReference)
+      : input.kind === 'INVOICE'
+        ? (input.advanceReferences ?? []).map(refXml).join('')
+        : '';
   const paymentId = [input.paymentModel || 'HR00', input.paymentReference].filter(Boolean).join(' ');
   const delivery = advance || refAdvance ? '' : `\n  <cac:Delivery><cbc:ActualDeliveryDate>${esc(input.deliveryDate || input.issueDate)}</cbc:ActualDeliveryDate></cac:Delivery>`;
 

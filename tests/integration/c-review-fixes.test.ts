@@ -9,7 +9,7 @@ import { db, transaction } from '../../src/server/db';
 import { bootstrapCompany } from '../../src/server/services/company';
 import { changeItemStatus, statusFor, type Actor } from '../../src/server/services/items';
 import {
-  attachItems, createContract, draftInstallment, issuePending, pendingForCompany, removeFromContract, updateContractItems,
+  attachItems, createContract, issuePending, pendingForCompany, removeFromContract, updateContractItems,
 } from '../../src/server/services/rentals';
 import { deleteContract } from '../../src/server/services/contract-admin';
 import { changeServiceStatus, createServiceOrder, deleteServiceOrder } from '../../src/server/services/service';
@@ -112,7 +112,7 @@ test('istodobno izdavanje iste rate (dvije transakcije) izdaje jedan račun', as
   assert.equal(await db.invoice.count({ where: { contractId: c.id, period: row.period, status: 'ISSUED' } }), 1);
 });
 
-test('servisni nalog: otpisan ili s računom ne briše se', async () => {
+test('servisni nalog: otpisan se ne briše; izvorni račun uređaja ne priječi brisanje', async () => {
   const s = await setup(2);
   const mk = (itemId: string) =>
     transaction((tx) => createServiceOrder(tx, s.actor, { itemId, issue: 'Ne pali', reportedAt: today(), status: 'RECEIVED', underWarranty: false, setServiceStatus: false }));
@@ -120,17 +120,17 @@ test('servisni nalog: otpisan ili s računom ne briše se', async () => {
   await transaction((tx) => changeServiceStatus(tx, s.actor, a.id, 'WRITTEN_OFF'));
   await assert.rejects(transaction((tx) => deleteServiceOrder(tx, s.actor, a.id)), /otpisom/);
 
+  // invoiceId naloga je račun uređaja (rata najma), ne račun izdan iz naloga — brisanje prolazi, račun ostaje
   const start = monthStart(-1);
   const c = await transaction((tx) => createContract(tx, s.actor, { ...terms(start), partnerId: s.partner.id }));
   await transaction((tx) => attachItems(tx, s.actor, c.id, [{ itemId: s.items[1].id, monthly: 10 }], { issueDate: start }));
-  const [row] = await transaction((tx) => pendingForCompany(tx, s.companyId, { contractId: c.id }));
-  const inv = await transaction((tx) => draftInstallment(tx, s.actor, c.id, row.period));
+  await transaction(async (tx) => issuePending(tx, s.actor, [{ contractId: c.id, period: (await pendingForCompany(tx, s.companyId, { contractId: c.id }))[0].period }]));
   const b = await mk(s.items[1].id);
-  await db.serviceOrder.update({ where: { id: b.id }, data: { invoiceId: inv.id } });
-  await assert.rejects(transaction((tx) => deleteServiceOrder(tx, s.actor, b.id)), /nacrt računa/);
-  await transaction((tx) => issuePending(tx, s.actor, [{ contractId: c.id, period: row.period }]));
-  await assert.rejects(transaction((tx) => deleteServiceOrder(tx, s.actor, b.id)), /izdan je račun/);
-  assert.equal(await db.serviceOrder.count({ where: { id: { in: [a.id, b.id] } } }), 2);
+  const bo = await db.serviceOrder.findUniqueOrThrow({ where: { id: b.id } });
+  assert.ok(bo.invoiceId, 'nalog pamti izvorni račun uređaja');
+  await transaction((tx) => deleteServiceOrder(tx, s.actor, b.id));
+  assert.equal(await db.serviceOrder.count({ where: { id: { in: [a.id, b.id] } } }), 1);
+  assert.equal(await db.invoice.count({ where: { id: bo.invoiceId! } }), 1);
 });
 
 test('brisanje ugovora: uređaji u povratu idu na skladište, ručni iznosi najma se brišu', async () => {

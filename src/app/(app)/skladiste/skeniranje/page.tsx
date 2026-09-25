@@ -3,7 +3,7 @@ import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import { getLookups, modelLabel } from '@/server/queries/lookups';
 import { myPendingCount, unseenRejections } from '@/server/queries/approvals';
-import { can } from '@/domain/permissions';
+import { can, needsStatusApproval } from '@/domain/permissions';
 import { Notice, PageHeader } from '@/components/ui/misc';
 import { ScanStation } from '@/components/warehouse/scan-station';
 import { AckButton } from '@/components/warehouse/approval-buttons';
@@ -20,7 +20,7 @@ export default async function ScanPage() {
     canEdit ? [] : unseenRejections(user.companyId, me),
     canEdit ? 0 : myPendingCount(user.companyId, me),
   ]);
-  const perms = { canEdit, canOps: can(user.perms, 'warehouse', 'ops'), needsApproval: company.statusChangeNeedsApproval };
+  const perms = { canEdit, canOps: can(user.perms, 'warehouse', 'ops'), needsApproval: needsStatusApproval(user, company.statusChangeNeedsApproval) };
   const options = {
     statuses: lookups.statuses.map((s) => ({ id: s.id, name: s.name, kind: s.kind, color: s.color })),
     warehouses: lookups.warehouses.map((w) => ({ value: w.id, label: w.name })),

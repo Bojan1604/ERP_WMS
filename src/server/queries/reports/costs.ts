@@ -1,8 +1,10 @@
 import 'server-only';
 import { Prisma } from '@prisma/client';
 import { db } from '../../db';
+import { reportSql } from './sql';
 import { expandExpense, type FrequencyCode } from '@/domain/expenses';
 import { toISO } from '@/domain/dates';
+import { PURCHASE_CATEGORY } from '../../services/purchasing';
 import { n, monthChart, monthRows, opt, periodSql, revenueSql, type ReportDef, type ReportFilters, type Row } from './types';
 
 /**
@@ -14,10 +16,17 @@ import { n, monthChart, monthRows, opt, periodSql, revenueSql, type ReportDef, t
 export async function expensesByMonth(companyId: string, year: number, opts: { excludePurchases?: boolean; categoryId?: string | null } = {}) {
   const from = `${year}-01-01`;
   const to = `${year}-12-31`;
-  const noPurchase = opt(!!opts.excludePurchases, Prisma.sql`AND e."source" <> 'RECEIPT'`);
+  // nabava robe: trošak primke i trošak ulaznog računa za robu (račun stigao prije robe ili stariji
+  // nepovezani račun kategorije „Nabava robe") — ta roba ulazi kroz nabavnu vrijednost prodanog
+  const noPurchase = opt(
+    !!opts.excludePurchases,
+    Prisma.sql`AND e."source" <> 'RECEIPT' AND NOT (e."source" = 'SUPPLIER_INVOICE' AND EXISTS (
+      SELECT 1 FROM "SupplierInvoice" s LEFT JOIN "ExpenseCategory" c ON c."id" = e."categoryId"
+      WHERE s."id" = e."supplierInvoiceId" AND (s."goodsInvoice" = true OR (s."goodsInvoice" IS NULL AND c."name" = ${PURCHASE_CATEGORY}))))`,
+  );
   const cat = opt(!!opts.categoryId, Prisma.sql`AND e."categoryId" = ${opts.categoryId}`);
   const [single, recurring] = await Promise.all([
-    db.$queryRaw<Array<{ m: number; categoryId: string | null; net: Prisma.Decimal }>>`
+    reportSql<Array<{ m: number; categoryId: string | null; net: Prisma.Decimal }>>`
       SELECT EXTRACT(MONTH FROM e."date")::int AS m, e."categoryId", SUM(e."netAmount") AS net
       FROM "Expense" e LEFT JOIN "Partner" p ON p.id = e."partnerId"
       WHERE e."companyId" = ${companyId} AND e."frequency" IS NULL
@@ -67,7 +76,7 @@ export async function expensesByMonth(companyId: string, year: number, opts: { e
 
 /** Neto prihod po mjesecima (računi, storna, odobrenja) i nabavna vrijednost prodanog. */
 export async function revenueByMonth(companyId: string, f: Pick<ReportFilters, 'year' | 'from' | 'to'>) {
-  const rows = await db.$queryRaw<Array<{ m: number; net: Prisma.Decimal; cost: Prisma.Decimal }>>`
+  const rows = await reportSql<Array<{ m: number; net: Prisma.Decimal; cost: Prisma.Decimal }>>`
     SELECT EXTRACT(MONTH FROM i."date")::int AS m, SUM(i."netTotal") AS net,
            SUM(CASE WHEN i."type" = 'SALE' THEN i."costTotal" ELSE 0 END) AS cost
     FROM "Invoice" i JOIN "Partner" p ON p.id = i."partnerId"
@@ -90,9 +99,10 @@ export const costReports: ReportDef[] = [
     description: 'Neto troškovi po kategoriji i mjesecu; ponavljajući troškovi knjiže se do tekućeg mjeseca.',
     filters: ['year'],
     singleYear: true,
-    run: async (companyId, f) => {
+    run: async (companyId, f, ctx) => {
+      // nabava robe (primke, računi za robu) su nabavne cijene — bez prava „costs" ne ulazi u izvještaj
       const [{ byCategory, total }, cats] = await Promise.all([
-        expensesByMonth(companyId, f.displayYear),
+        expensesByMonth(companyId, f.displayYear, { excludePurchases: !ctx.canSeeCost }),
         db.expenseCategory.findMany({ where: { companyId }, select: { id: true, name: true } }),
       ]);
       const name = new Map(cats.map((c) => [c.id as string | null, c.name]));
@@ -121,6 +131,7 @@ export const costReports: ReportDef[] = [
         rows,
         totals: { category: 'Ukupno', ...Object.fromEntries(total.map((v, i) => [`m${i + 1}`, v ? Math.round(v * 100) / 100 : null])), total: Math.round(total.reduce((a, b) => a + b, 0) * 100) / 100 },
         chart: monthChart(f.year, chartRows, series, { stacked: true }),
+        ...(ctx.canSeeCost ? {} : { note: 'Bez nabave robe (primke i računi za robu) — nabavne cijene vidi samo korisnik s tim pravom.' }),
       };
     },
   },
@@ -131,6 +142,8 @@ export const costReports: ReportDef[] = [
     description: 'Neto prihod umanjen za sve troškove (uključujući nabavu robe) po mjesecima, s kumulativom.',
     filters: ['year'],
     singleYear: true,
+    // rezultat uključuje nabavu robe (nabavne cijene)
+    requiresCost: true,
     run: async (companyId, f) => {
       const [rev, exp] = await Promise.all([revenueByMonth(companyId, f), expensesByMonth(companyId, f.displayYear)]);
       let cum = 0;

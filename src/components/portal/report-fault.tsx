@@ -52,7 +52,9 @@ function ReportFaultDialog({ device, defaultContact, onClose }: { device: Device
   useEffect(() => () => urls.current.forEach((u) => URL.revokeObjectURL(u)), []);
 
   const addFiles = async (list: FileList | null) => {
-    const files = [...(list ?? [])].slice(0, PORTAL_MAX_PHOTOS - photos.length);
+    const all = [...(list ?? [])];
+    const files = all.slice(0, PORTAL_MAX_PHOTOS - photos.length);
+    if (all.length > files.length) toast('bad', `Najviše ${PORTAL_MAX_PHOTOS} fotografije po prijavi — višak nije dodan.`);
     const next: Array<{ file: File; url: string }> = [];
     for (const f of files) {
       try {
@@ -86,6 +88,8 @@ function ReportFaultDialog({ device, defaultContact, onClose }: { device: Device
       toast('ok', 'Kvar je prijavljen — javit ćemo se s uputama za dostavu ili servis.');
       onClose();
       router.push(`/portal/prijave/${out.data.id}`);
+      // okvir portala (značka „Moje prijave") se ne renderira ponovno sam
+      router.refresh();
     } catch {
       setError('Nema veze s poslužiteljem — pokušajte ponovno.');
     } finally {

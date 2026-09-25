@@ -54,6 +54,7 @@ export async function saveCompany(tx: Tx, actor: Actor, input: CompanyInput) {
   }
   assert(input.vatRate >= 0 && input.vatRate <= 100, 'Stopa PDV-a mora biti između 0 i 100.');
   assert(input.defaultMarginPct >= 0 && input.defaultMarginPct < 100, 'Bruto marža mora biti između 0 i 100 %.');
+  assert(input.rentFallbackPct >= 0 && input.rentFallbackPct <= 100, 'Najam (% nabavne) mora biti između 0 i 100 %.');
   assert(input.invoicePremises.trim() && input.invoiceDevice.trim(), 'Oznaka poslovnog prostora i naplatnog uređaja su obavezne.');
   assert(!/\s/.test(input.invoicePremises + input.invoiceDevice + input.invoiceSeparator), 'Oznake u broju računa ne smiju imati razmake.');
   const currency = input.currency.trim().toUpperCase();

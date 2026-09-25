@@ -88,7 +88,7 @@ export function ConfigApps({
                     <td className="font-mono text-sm">{lib?.packageName ?? a.appId}</td>
                     <td>
                       <Select
-                        className="w-44"
+                        className="w-full sm:w-44"
                         disabled={readOnly || !lib}
                         value={a.versionId ?? ''}
                         onChange={(e) => patch(a.appId, { versionId: e.target.value || null })}
@@ -98,7 +98,7 @@ export function ConfigApps({
                         ]}
                       />
                     </td>
-                    <td className="space-y-1 whitespace-nowrap">
+                    <td className="space-y-1 whitespace-nowrap max-sm:col-span-2">
                       <Checkbox label="skrivena u pokretaču" checked={a.hidden} disabled={readOnly || a.remove} onChange={(e) => patch(a.appId, { hidden: e.target.checked })} />
                       <br />
                       <Checkbox

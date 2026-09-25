@@ -10,10 +10,12 @@ import { Undo2 } from 'lucide-react';
 import { unskipAction } from '../actions';
 import { r2 } from '@/domain/money';
 import { toTerms } from '@/server/services/rentals';
+import { coveredPeriods } from '@/server/services/invoices';
+import { db } from '@/server/db';
 import type { PendingRow } from '@/server/queries/rentals';
 import { date, dateTime, eur, integer } from '@/lib/format';
 
-export function OverviewTab({
+export async function OverviewTab({
   contract: c,
   devices,
   returnedSkipped = [],
@@ -33,7 +35,9 @@ export function OverviewTab({
 }) {
   const terms = toTerms(c);
   const now = today();
-  const next = nextBillingDate(terms, devices, now);
+  // sljedeća NEIZDANA rata (izdana rata za tekuće razdoblje se preskače)
+  const covered = (await coveredPeriods(db, [c.id])).get(c.id);
+  const next = nextBillingDate(terms, devices, now, covered);
   const year = Number(now.slice(0, 4));
   const accrualYear = r2(contractAccrual(terms, devices, year).reduce((a, b) => a + b, 0));
   const pendingTotal = r2(pending.reduce((a, p) => a + p.amount, 0));

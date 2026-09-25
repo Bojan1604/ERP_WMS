@@ -152,3 +152,46 @@ export function needsStatusApproval(
   if (u.requireApproval === false) return false;
   return !can(u.perms, 'warehouse', 'edit') && companyRequiresApproval;
 }
+
+/**
+ * Ključevi zapisa (npr. u razlici dnevnika promjena) koji otkrivaju nabavnu cijenu,
+ * maržu ili profit. Bez prava `costs` se ne prikazuju ni izvoze. Jedini popis — koristiti
+ * `isCostKey` umjesto ponavljanja.
+ */
+export const COST_KEYS: readonly string[] = [
+  'cost', 'unitCost', 'costTotal', 'totalCost', 'avgCost', 'purchasePrice', 'costPrice', 'landedCost', 'lastCost',
+  'marginPct', 'margin', 'profit', 'grossProfit', 'nabavna', 'nabavnaCijena', 'marza', 'marža',
+];
+const COST_KEY_RE = /cost|margin|profit|nabav|marz|marž/i;
+/** Vrste zapisa (entity) čiji su iznosi nabavni — njihovi iznosi su također osjetljivi. */
+export const COST_ENTITIES: readonly string[] = ['receipt', 'purchaseOrder', 'order', 'supplierInvoice'];
+/** Radnje čiji opis sadrži nabavni iznos ili maržu. */
+const COST_ACTIONS: readonly string[] = ['book', 'margin', 'writeOff'];
+const AMOUNT_KEY_RE = /total|amount|price|net|vat|sum|iznos/i;
+
+/** Otkriva li ključ nabavnu cijenu/maržu (`costs` je naziv prava, ne iznos). */
+export const isCostKey = (k: string) => k !== 'costs' && (COST_KEYS.includes(k) || COST_KEY_RE.test(k));
+
+/** Razlika zapisa bez ključeva s nabavnim cijenama (rekurzivno). Za nabavne vrste skriva i iznose. */
+export function redactCostDiff(value: unknown, entity?: string): unknown {
+  const costEntity = !!entity && COST_ENTITIES.includes(entity);
+  const walk = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(walk);
+    if (v && typeof v === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+        if (isCostKey(k) || (costEntity && AMOUNT_KEY_RE.test(k))) continue;
+        out[k] = walk(x);
+      }
+      return out;
+    }
+    return v;
+  };
+  return walk(value);
+}
+
+/** Opis zapisa dnevnika bez nabavnih iznosa i marži (iznosi i postoci → „•••"). */
+export function redactCostSummary(summary: string, entity: string, action: string): string {
+  if (!COST_ENTITIES.includes(entity) && !COST_ACTIONS.includes(action)) return summary;
+  return summary.replace(/-?\d[\d.,]*\s*(€|%|EUR)?/g, (m, unit: string | undefined) => (unit || /[.,]\d{2}$/.test(m.trim()) ? '•••' : m));
+}

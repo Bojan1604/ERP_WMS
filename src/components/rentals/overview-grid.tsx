@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import Link from 'next/link';
 import { Badge, COLOR_TONE } from '@/components/ui/misc';
 import { useAction } from '@/components/ui/action';
+import { useToast } from '@/components/ui/toast';
 import { MONTHS_SHORT } from '@/domain/dates';
 import { parseNumber } from '@/domain/money';
 import { amount, date, eur, integer } from '@/lib/format';
@@ -14,6 +15,16 @@ import type { OverviewRow, OverviewTotals } from '@/app/(app)/najam/pregled/data
 import { rentOverrideAction, rentOverridesBulkAction } from '@/app/(app)/najam/pregled/actions';
 
 const key = (itemId: string, m: number) => `${itemId}:${m}`;
+
+/** Iznos iz polja: prazno = null (automatski izračun), inače nenegativan broj — ili poruka greške. */
+function readAmount(raw: string): { value: number | null } | { error: string } {
+  const v = raw.trim();
+  if (!v) return { value: null };
+  if (!/^\d[\d.,\s]*(€|eur)?$/i.test(v.replace(/^\s*€\s*/, ''))) {
+    return { error: v.startsWith('-') ? 'Iznos ne može biti negativan.' : `„${v}" nije ispravan iznos.` };
+  }
+  return { value: parseNumber(v) };
+}
 
 /**
  * Mreža najma kao u Excelu: dvoklik na ćeliju upisuje ručni iznos (Enter
@@ -34,6 +45,7 @@ export function OverviewGrid({
   currentMonth: number;
   canEdit: boolean;
 }) {
+  const toast = useToast();
   const [edit, setEdit] = useState<{ itemId: string; m: number; value: string } | null>(null);
   const save = useAction(rentOverrideAction, { onSuccess: () => setEdit(null) });
   const [sel, setSel] = useState<Set<string>>(new Set());
@@ -77,22 +89,27 @@ export function OverviewGrid({
       return { itemId, month: Number(m) + 1 };
     });
     if (!cells.length) return;
-    if (!clear && !bulkValue.trim()) return;
-    bulk.run({ year, cells, amount: clear ? null : parseNumber(bulkValue) });
+    if (clear) return void bulk.run({ year, cells, amount: null });
+    const r = readAmount(bulkValue);
+    if ('error' in r) return toast('bad', r.error);
+    if (r.value === null) return;
+    bulk.run({ year, cells, amount: r.value });
   };
   const hl = (m: number) => m === currentMonth && 'bg-info-soft';
   const future = (m: number) => currentMonth >= 0 && m > currentMonth;
 
   const commit = () => {
     if (!edit) return;
-    const v = edit.value.trim();
-    save.run({ itemId: edit.itemId, year, month: edit.m + 1, amount: v === '' ? null : parseNumber(v) });
+    const r = readAmount(edit.value);
+    if ('error' in r) return toast('bad', r.error);
+    save.run({ itemId: edit.itemId, year, month: edit.m + 1, amount: r.value });
   };
 
   return (
     <>
       {canEdit && sel.size > 0 && (
-        <div className="sticky top-0 z-10 mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-brand-soft px-3 py-2 text-sm">
+        // plutajuća traka — ne pomiče mrežu dok se povlači odabir
+        <div className="fixed bottom-4 left-1/2 z-30 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-wrap items-center gap-2 rounded-lg bg-brand-soft px-3 py-2 text-sm shadow-[var(--shadow-pop)]">
           <span className="font-medium">Označeno polja: {integer(sel.size)}</span>
           <input
             aria-label="Iznos za označena polja"

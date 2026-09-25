@@ -33,23 +33,23 @@ export default async function Dashboard() {
       />
     ),
     kpi.receivables && (
-      <KpiTile key="rec" label="Otvorena potraživanja" value={eur(kpi.receivables.amount)} hint={`${integer(kpi.receivables.count)} računa`} href={rep('nenaplaceni-racuni', '/prodaja/racuni')} />
+      <KpiTile key="rec" label="Otvorena potraživanja" value={eur(kpi.receivables.amount)} hint={`${integer(kpi.receivables.count)} ${pl(kpi.receivables.count, 'račun', 'računa', 'računa')}`} href={rep('nenaplaceni-racuni', '/prodaja/racuni')} />
     ),
     kpi.overdue && (
       <KpiTile
         key="ovd"
         label="Dospjelo, nenaplaćeno"
         value={eur(kpi.overdue.amount)}
-        hint={`${integer(kpi.overdue.count)} računa kasni`}
+        hint={`${integer(kpi.overdue.count)} ${pl(kpi.overdue.count, 'račun kasni', 'računa kasne', 'računa kasni')}`}
         tone={kpi.overdue.amount > 0 ? 'bad' : undefined}
         href={rep('starost-potrazivanja', '/prodaja/racuni')}
       />
     ),
     kpi.stock &&
       (kpi.stock.value !== null ? (
-        <KpiTile key="stk" label="Vrijednost zalihe" value={eur(kpi.stock.value)} hint={`${integer(kpi.stock.count)} uređaja na skladištu`} href="/skladiste" />
+        <KpiTile key="stk" label="Vrijednost zalihe" value={eur(kpi.stock.value)} hint={`${integer(kpi.stock.count)} ${pl(kpi.stock.count, 'uređaj', 'uređaja', 'uređaja')} na skladištu`} href="/skladiste?state=IN_STOCK" />
       ) : (
-        <KpiTile key="stk" label="Na skladištu" value={integer(kpi.stock.count)} hint="uređaja" href="/skladiste" />
+        <KpiTile key="stk" label="Na skladištu" value={integer(kpi.stock.count)} hint="uređaja" href="/skladiste?state=IN_STOCK" />
       )),
     kpi.rent && <KpiTile key="rent" label="Mjesečni najam" value={eur(kpi.rent.monthly)} hint={`${integer(kpi.rent.contracts)} aktivnih ugovora`} href="/najam/ugovori" />,
     kpi.expenses && (
@@ -73,7 +73,7 @@ export default async function Dashboard() {
         key="portal"
         tone="bad"
         tag="Portal"
-        title={d.portal.count === 1 ? 'Nova prijava kvara s portala' : `${d.portal.count} nove prijave kvara s portala`}
+        title={portalTitle(d.portal.count)}
         detail={`${d.portal.rows.map((r) => [r.partner, r.serial].filter(Boolean).join(' · ')).join(', ')}${d.portal.count > 3 ? '…' : ''}`}
         href="/servis?status=REPORTED"
         linkLabel="Servis"
@@ -84,7 +84,7 @@ export default async function Dashboard() {
         key="returns"
         tone="info"
         tag="Povrat"
-        title={`${integer(d.returns.count)} uređaja treba vratiti s terena`}
+        title={`${integer(d.returns.count)} ${pl(d.returns.count, 'uređaj', 'uređaja', 'uređaja')} treba vratiti s terena`}
         detail={`${d.returns.reasons} · ugovor ${d.returns.contracts.slice(0, 3).join(', ')}${d.returns.contracts.length > 3 ? '…' : ''}`}
         href="/skladiste/izlaz?tab=povrat"
         linkLabel="Povrat opreme"
@@ -229,11 +229,11 @@ export default async function Dashboard() {
     <>
       <PageHeader title="Nadzorna ploča" subtitle={`${user.companyName} · ${d.year}.`} />
 
-      {notices.length > 0 && <div className="mb-4 grid gap-2">{notices}</div>}
+      {notices.length > 0 && <div className="mb-4 grid min-w-0 grid-cols-1 gap-2">{notices}</div>}
 
       {tiles.length > 0 && <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 2xl:grid-cols-6">{tiles}</div>}
 
-      <div className="grid gap-4 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         {chartData && (
           <Card
             className="xl:col-span-2"
@@ -252,14 +252,14 @@ export default async function Dashboard() {
           </Card>
         )}
         {panels.length > 0 && (
-          <div className={chartData ? 'grid content-start gap-3 sm:grid-cols-2 xl:grid-cols-1' : 'grid content-start gap-3 sm:grid-cols-2 xl:col-span-3 xl:grid-cols-3'}>
+          <div className={chartData ? 'grid min-w-0 grid-cols-1 content-start gap-3 sm:grid-cols-2 xl:grid-cols-1' : 'grid min-w-0 grid-cols-1 content-start gap-3 sm:grid-cols-2 xl:col-span-3 xl:grid-cols-3'}>
             {panels.slice(0, chartData ? 2 : panels.length)}
           </div>
         )}
       </div>
-      {chartData && panels.length > 2 && <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{panels.slice(2)}</div>}
+      {chartData && panels.length > 2 && <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">{panels.slice(2)}</div>}
       {d.byStatus && d.byStatus.length > 0 && (
-        <div className="mt-4 grid gap-4 xl:grid-cols-3">
+        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
           <Card title="Uređaji po statusu">
             <DonutChart data={d.byStatus.map((x) => ({ label: x.name, value: x.cnt, href: `/skladiste?status=${x.id}` }))} />
           </Card>
@@ -268,4 +268,19 @@ export default async function Dashboard() {
       {!tiles.length && !panels.length && !notices.length && <p className="text-fg-3">Za vašu ulogu nema pokazatelja na nadzornoj ploči.</p>}
     </>
   );
+}
+
+/** Oblik riječi uz broj: 1 (21, 31…) → one, 2–4 (22–24…) → few, ostalo (5–20, 11–14…) → many. */
+function pl(n: number, one: string, few: string, many: string) {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+}
+
+/** „Nova prijava", „3 nove prijave", „5 novih prijava" kvara s portala. */
+function portalTitle(n: number) {
+  if (n === 1) return 'Nova prijava kvara s portala';
+  return `${integer(n)} ${pl(n, 'nova prijava', 'nove prijave', 'novih prijava')} kvara s portala`;
 }

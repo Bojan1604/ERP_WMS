@@ -178,6 +178,10 @@ export async function sendEInvoice(invoiceId: string, actor: Actor, opts: { rese
     return { ok: false, skipped: true, message: 'Ishod zadnjeg slanja eRačuna nije poznat — provjerite kod posrednika i pošaljite ručno.' };
   }
 
+  // lokalna provjera prije slanja: posrednik bi odbio stavke bez KPD 2025 šifre (HR-BR-25)
+  const check = await invoiceUbl(actor.companyId, inv.id);
+  if (check?.issues.length) return { ok: false, message: `eRačun nije poslan — ${check.issues.join(' ')} Upišite KPD na modelu / usluzi ili u postavkama firme pa pošaljite ponovno (izdani račun se ne mijenja — inače storno i novi račun sa šifrom).` };
+
   const claim = await claimSend(inv.id, actor.companyId, 'einvoice');
   if (!claim) {
     const now = await db.invoice.findUnique({ where: { id: inv.id }, select: { fiscalStatus: true, eInvoice: true } });

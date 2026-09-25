@@ -7,7 +7,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { Checkbox, Field, FormGrid, Input, Select, type Option } from '@/components/ui/field';
 import { Badge, Card, Notice } from '@/components/ui/misc';
 import { FormError, useAction } from '@/components/ui/action';
-import { parseNumber, r2 } from '@/domain/money';
+import { parseAmount, parseNumber, r2 } from '@/domain/money';
 import { today } from '@/domain/dates';
 import { cn } from '@/lib/cn';
 import { eur, integer } from '@/lib/format';
@@ -82,8 +82,10 @@ export function ReceiveReview({
   const back = returning.filter((r) => !skipBack.has(r.id));
   const missing = active.filter((d) => !d.modelId || !d.serial.trim());
   const unit = parseNumber(cost);
+  // neispravan iznos („abc") poslužitelj odbija — javlja se odmah uz polje
+  const costError = cost.trim() && Number.isNaN(parseAmount(cost)) ? 'Neispravan iznos' : null;
   const total = r2(unit * active.length);
-  const ready = (active.length > 0 || back.length > 0) && !missing.length && !!warehouseId;
+  const ready = (active.length > 0 || back.length > 0) && !missing.length && !!warehouseId && !(canSeeCost && costError);
 
   const submit = () =>
     run({
@@ -121,7 +123,7 @@ export function ReceiveReview({
             </div>
           </Field>
           {canSeeCost && (
-            <Field label="Nabavna cijena po komadu (€)">
+            <Field label="Nabavna cijena po komadu (€)" error={costError}>
               <Input inputMode="decimal" value={cost} onChange={(e) => setCost(e.target.value)} placeholder="0,00" className="text-right" />
             </Field>
           )}

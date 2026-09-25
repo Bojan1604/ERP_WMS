@@ -38,7 +38,8 @@ export function QuoteDocument({
   title?: string;
 }) {
   const proforma = q.kind === 'PROFORMA';
-  const rows = q.hideSerials ? groupLines(q.lines) : q.lines.map((l) => ({ ...l, serials: l.serial ? [l.serial] : [] }));
+  // isti uređaji (model, cijena) uvijek jedna stavka sa serijskima ispod (kao račun); „bez serijskih" spaja i ostale iste stavke
+  const rows = groupLines(q.lines, q.hideSerials);
   const t = documentTotals({ lines: q.lines, vatRate: q.vatRate, discountPct: q.discountPct, discountAmount: q.discountAmount });
   const hasCode = rows.some((l) => l.code);
   const hasDisc = rows.some((l) => l.discountPct);
@@ -116,14 +117,14 @@ export function QuoteDocument({
   );
 }
 
-function groupLines(lines: QuoteDocData['lines']) {
+function groupLines(lines: QuoteDocData['lines'], all: boolean) {
   const out: Array<QuoteDocData['lines'][number] & { serials: string[] }> = [];
   const idx = new Map<string, number>();
   for (const l of lines) {
-    const key = [l.code ?? '', l.description, l.unitPrice, l.discountPct, l.unit, l.rent ? 'R' : ''].join('|');
-    const i = idx.get(key);
+    const key = all || l.serial ? [l.code ?? '', l.description, l.unitPrice, l.discountPct, l.unit, l.rent ? 'R' : ''].join('|') : null;
+    const i = key === null ? undefined : idx.get(key);
     if (i === undefined) {
-      idx.set(key, out.length);
+      if (key !== null) idx.set(key, out.length);
       out.push({ ...l, serials: l.serial ? [l.serial] : [] });
     } else {
       out[i].qty += l.qty;

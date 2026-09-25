@@ -5,14 +5,17 @@ import { DomainError, assert } from '../errors';
 import { nextSeq } from '../numbering';
 import { audit } from '../audit';
 import { changeItemStatus, itemEvents, type Actor } from './items';
-import { documentTotals, formatInvoiceNumber, lineShareOfNet, openAmount, paymentReference, INVOICE_KIND_LABEL, type ChargeInput } from '@/domain/invoice';
+import { documentTotals, formatInvoiceNumber, lineShareOfNet, openAmount, overpaidAmount, paymentReference, INVOICE_KIND_LABEL, type ChargeInput } from '@/domain/invoice';
 import { addDays, formatDate, fromISO, toISO, today } from '@/domain/dates';
 import type { BillingCode, PlanPeriodInput } from '@/domain/billing';
 import { coveredPeriods, rentPeriodFor } from './contract-items';
 import { num, r2 } from '@/domain/money';
 import { fiscalAtIssue } from '../fiscal/issue';
-import { billingFromMonths, defaultKpd, effectiveLineType, hasRentLines, invoiceRentPlan } from '@/domain/sales-lines';
+import { billingFromMonths, defaultKpd, effectiveLineType, hasRentLines, invoiceRentPlan, kpdIssues, kpdValid } from '@/domain/sales-lines';
+import { fiscalRoute } from '@/domain/fiscal';
 import { alignInvoiceVat, mixedSupplyError, supplyKindOf } from '@/domain/tax';
+import { eur } from '@/lib/format';
+import { assertAdvanceNotUsed, checkAdvancesAtIssue, setAdvanceUses, type AdvanceUseInput } from './invoice-advances';
 
 // ---------------------------------------------------------------- ulazni oblici
 
@@ -49,7 +52,8 @@ export interface InvoiceInput {
   discountPct?: number;
   discountAmount?: number;
   charges?: ChargeInput[];
-  advanceAmount?: number;
+  /** Uračunati predujmovi (računi za predujam kupca i iznos s PDV-om) — samo konačni račun. */
+  advances?: AdvanceUseInput[];
   contractId?: string | null;
   period?: string | null;
   description?: string | null;
@@ -138,6 +142,7 @@ async function writeLines(tx: Tx, actor: Actor, invoiceId: string, type: Invoice
     data: lines.map((l, sort) => {
       assert(l.description?.trim(), `Stavka ${sort + 1}: opis je obavezan.`);
       assert(l.qty !== 0, `Stavka ${sort + 1}: količina ne može biti 0.`);
+      assert(!l.kpd?.trim() || kpdValid(l.kpd), `Stavka ${sort + 1}: KPD „${l.kpd?.trim()}" nije oblika NN.NN.NN (npr. 26.20.16).`);
       const item = l.itemId ? byId.get(l.itemId) : undefined;
       const months = l.months ?? null;
       const unitPrice = r2(l.unitPrice);
@@ -168,7 +173,8 @@ async function writeLines(tx: Tx, actor: Actor, invoiceId: string, type: Invoice
         modelId,
         serviceId: l.kind === 'SERVICE' ? (l.serviceId ?? null) : null,
         description: l.description.trim(),
-        unit: l.unit || (monthly !== null ? 'mj' : 'kom'),
+        // najam: količina je broj uređaja, pa je zadana jedinica „kom" (i za mjesečnu naplatu)
+        unit: l.unit || 'kom',
         kpd: kpd || null,
         qty: l.qty,
         monthly,
@@ -201,7 +207,6 @@ function headerData(input: InvoiceInput) {
     discountPct: input.discountPct ?? 0,
     discountAmount: input.discountAmount ?? 0,
     charges: (input.charges ?? []) as unknown as Prisma.InputJsonValue,
-    advanceAmount: input.advanceAmount ?? 0,
     contractId: input.contractId ?? null,
     period: input.period ?? null,
     description: input.description ?? null,
@@ -232,7 +237,12 @@ async function vatForDraft(tx: Tx, actor: Actor, partner: { country: string | nu
   return { ...input, taxCategory: t.taxCategory, taxExemptReason: t.taxExemptReason, vatRate: t.taxCategory === 'S' ? input.vatRate : 0 };
 }
 
+function checkDraftDates(input: InvoiceInput) {
+  if (input.dueDate) assert(input.dueDate >= input.date, `Dospijeće (${formatDate(input.dueDate)}) ne može biti prije datuma računa (${formatDate(input.date)}).`);
+}
+
 export async function createDraft(tx: Tx, actor: Actor, input: InvoiceInput) {
+  checkDraftDates(input);
   const partner = await tx.partner.findFirst({ where: { id: input.partnerId, companyId: actor.companyId } });
   assert(partner, 'Kupac ne postoji.');
   input = await vatForDraft(tx, actor, partner, input);
@@ -240,6 +250,7 @@ export async function createDraft(tx: Tx, actor: Actor, input: InvoiceInput) {
     data: { companyId: actor.companyId, ...headerData(input), createdBy: actor.name },
   });
   await writeLines(tx, actor, inv.id, input.type, input.lines);
+  await setAdvanceUses(tx, actor, { id: inv.id, partnerId: input.partnerId, kind: input.kind ?? 'INVOICE' }, input.advances ?? []);
   await recalcInvoice(tx, inv.id);
   await audit(tx, actor, { entity: 'invoice', entityId: inv.id, action: 'create', summary: `Nacrt računa za ${partner.name}` });
   return inv;
@@ -249,11 +260,13 @@ export async function updateDraft(tx: Tx, actor: Actor, id: string, input: Invoi
   const inv = await tx.invoice.findFirst({ where: { id, companyId: actor.companyId } });
   assert(inv, 'Račun ne postoji.');
   assert(inv.status === 'DRAFT', 'Izdani račun se ne može mijenjati — ispravak ide stornom ili odobrenjem.');
+  checkDraftDates(input);
   const partner = await tx.partner.findFirst({ where: { id: input.partnerId, companyId: actor.companyId }, select: { id: true, country: true, vatCategoryOverride: true } });
   assert(partner, 'Kupac ne postoji.');
   input = await vatForDraft(tx, actor, partner, input);
   await tx.invoice.update({ where: { id }, data: headerData(input) });
   await writeLines(tx, actor, id, input.type, input.lines);
+  await setAdvanceUses(tx, actor, { id, partnerId: input.partnerId, kind: input.kind ?? 'INVOICE' }, input.advances ?? []);
   await recalcInvoice(tx, id);
   await audit(tx, actor, { entity: 'invoice', entityId: id, action: 'update', summary: 'Nacrt računa izmijenjen' });
 }
@@ -285,6 +298,14 @@ export async function dropEmptyInvoiceContract(tx: Tx, actor: Actor, contractId:
 
 // ---------------------------------------------------------------- izdavanje
 
+/** Izdani dokument (račun, predujam, storno, odobrenje) ne smije imati datum u budućnosti. */
+export function assertIssueDate(date: string, now = today()) {
+  assert(
+    date <= now,
+    `Datum ${formatDate(date)} je u budućnosti — račun se izdaje najkasnije s današnjim datumom (${formatDate(now)}). Nacrt može imati budući datum, a izdaje se na dan isporuke.`,
+  );
+}
+
 /**
  * Izdavanje: dodjela rednog broja u transakciji, provjera da redni broj prati
  * datum, i učinak na uređaje (prodaja skida sa stanja, najam veže uz ugovor).
@@ -306,15 +327,18 @@ export async function issueInvoice(tx: Tx, actor: Actor, id: string) {
   }
 
   const date = toISO(inv.date);
+  // račun se izdaje na dan isporuke — datum u budućnosti bi zaključao numeraciju do tog dana
+  assertIssueDate(date);
+  if (inv.dueDate) assert(toISO(inv.dueDate) >= date, `Dospijeće (${formatDate(inv.dueDate)}) ne može biti prije datuma računa (${formatDate(inv.date)}).`);
   const year = inv.date.getUTCFullYear();
   const later = await tx.invoice.findFirst({
     where: { companyId: actor.companyId, status: 'ISSUED', year, date: { gt: inv.date } },
-    orderBy: { date: 'desc' },
-    select: { number: true, date: true },
+    orderBy: [{ date: 'desc' }, { seq: 'desc' }],
+    select: { number: true, date: true, kind: true },
   });
   if (later) {
     throw new DomainError(
-      `Račun ${later.number} izdan je ${formatDate(later.date)} — novi račun ne može imati raniji datum jer redni broj mora pratiti datum izdavanja.`,
+      `Zadnji izdani dokument (${INVOICE_KIND_LABEL[later.kind].toLowerCase()} ${later.number}) ima datum ${formatDate(later.date)} — novi račun ne može imati raniji datum jer redni broj mora pratiti datum izdavanja.`,
     );
   }
 
@@ -328,6 +352,14 @@ export async function issueInvoice(tx: Tx, actor: Actor, id: string) {
   if (inv.kind === 'INVOICE' || inv.kind === 'ADVANCE') {
     assert(inv.lines.every((l) => l.kind !== 'MODEL'), 'Stavke bez serijskog broja treba zamijeniti konkretnim uređajima prije izdavanja.');
   }
+  // eRačun (B2B, HR CIUS-2025, HR-BR-25): svaka stavka računa nosi KPD 2025 — bez njega posrednik odbija dokument
+  if (inv.kind === 'INVOICE' && fiscalRoute({ paymentMethod: inv.paymentMethod, company: inv.company, partner: inv.partner }) === 'EINVOICE') {
+    const issues = kpdIssues(inv.lines);
+    if (issues.length) throw new DomainError(`Račun ide kao eRačun, a KPD 2025 nije potpun: ${issues.join(' ')} Upišite šifru na stavci (ili na modelu / usluzi / u postavkama firme).`);
+  }
+
+  // uračunati predujmovi: ostatak se provjerava ponovno pod zaključavanjem (istodobni računi)
+  if (inv.kind === 'INVOICE') await checkAdvancesAtIssue(tx, actor, inv);
 
   const seq = await nextSeq(tx, actor.companyId, 'INVOICE', year);
   const number = formatInvoiceNumber(seq, inv.company.invoicePremises, inv.company.invoiceDevice, inv.company.invoiceSeparator);
@@ -344,6 +376,9 @@ export async function issueInvoice(tx: Tx, actor: Actor, id: string) {
       dueDate: inv.dueDate ?? (inv.kind === 'INVOICE' || inv.kind === 'ADVANCE' ? fromISO(addDays(date, termDays)) : null),
       issuedAt,
       issuedBy: actor.name,
+      // preslika postavki firme: ispis i eRačun izdanog računa ne mijenjaju se s kasnijim postavkama
+      sellerVatRegistered: inv.company.vatRegistered,
+      vatOnPayment: inv.company.vatOnPayment,
     },
   });
   const totals = await recalcInvoice(tx, id);
@@ -487,6 +522,7 @@ async function applyRent(tx: Tx, actor: Actor, inv: IssuingInvoice, rentLines: I
  */
 async function correctionDate(tx: Tx, companyId: string, requested?: string) {
   const t = requested || today();
+  assertIssueDate(t);
   const last = await tx.invoice.findFirst({
     where: { companyId, status: 'ISSUED', year: Number(t.slice(0, 4)) },
     orderBy: { date: 'desc' },
@@ -506,6 +542,7 @@ export async function stornoInvoice(tx: Tx, actor: Actor, id: string, opts: { da
   assert(inv.status === 'ISSUED', 'Nacrt se ne stornira — obrišite ga.');
   assert(inv.kind === 'INVOICE' || inv.kind === 'ADVANCE', 'Storno i odobrenje se ne storniraju.');
   assert(!inv.stornoed, 'Račun je već storniran.');
+  if (inv.kind === 'ADVANCE') await assertAdvanceNotUsed(tx, inv.id);
   // gotovina/kartica su naplaćene pri izdavanju — storno je ujedno povrat novca kupcu
   const paidOnIssue = inv.paymentMethod === 'CASH' || inv.paymentMethod === 'CARD';
   assert(paidOnIssue || num(inv.paidTotal) === 0, 'Račun ima uplate — prvo ih uklonite ili izdajte odobrenje.');
@@ -588,9 +625,12 @@ export async function creditNote(
 ) {
   // zaključavanje izvornog računa: istovremena odobrenja ne smiju zajedno premašiti iznos računa
   await tx.$queryRaw`SELECT id FROM "Invoice" WHERE id = ${id} FOR UPDATE`;
-  const inv = await tx.invoice.findFirst({ where: { id, companyId: actor.companyId } });
+  const inv = await tx.invoice.findFirst({ where: { id, companyId: actor.companyId }, include: { lines: { select: { kpd: true } } } });
   assert(inv, 'Račun ne postoji.');
   assert(inv.status === 'ISSUED' && inv.kind === 'INVOICE' && !inv.stornoed, 'Odobrenje se izdaje samo na važeći izdani račun.');
+  // KPD izvornih stavki: kad su sve iste, stavka odobrenja nosi istu šifru (u UBL-u odobrenje ide bez KPD-a — P9)
+  const kpds = [...new Set(inv.lines.map((l) => l.kpd ?? ''))];
+  const kpd = kpds.length === 1 && kpds[0] ? kpds[0] : null;
   assert(input.netAmount > 0, 'Iznos odobrenja mora biti veći od 0.');
   const maxNet = r2(num(inv.netTotal) - num(inv.creditedTotal) / (1 + num(inv.vatRate) / 100));
   assert(input.netAmount <= maxNet + 0.005, 'Odobrenje ne može biti veće od iznosa računa.');
@@ -610,7 +650,7 @@ export async function creditNote(
       paymentMethod: inv.paymentMethod,
       description: `Odobrenje po računu ${inv.number}`,
       createdBy: actor.name,
-      lines: { create: [{ sort: 0, kind: 'MANUAL', description: input.description, qty: -1, unitPrice: input.netAmount }] },
+      lines: { create: [{ sort: 0, kind: 'MANUAL', description: input.description, kpd, qty: -1, unitPrice: input.netAmount }] },
     },
   });
   await issueInvoice(tx, actor, note.id);
@@ -627,12 +667,32 @@ export async function addPayment(tx: Tx, actor: Actor, invoiceId: string, p: { d
   assert(inv.kind === 'INVOICE' || inv.kind === 'ADVANCE', 'Storno i odobrenje nemaju uplata.');
   assert(!inv.stornoed, 'Račun je storniran.');
   assert(p.amount > 0, 'Iznos uplate mora biti veći od 0.');
-  assert(p.amount <= num(inv.openAmount) + 0.005, `Uplata je veća od otvorenog iznosa (${num(inv.openAmount).toFixed(2)}).`);
+  assert(p.amount <= num(inv.openAmount) + 0.005, `Uplata je veća od otvorenog iznosa (${eur(num(inv.openAmount))}).`);
   await tx.payment.create({
     data: { invoiceId, date: fromISO(p.date), amount: r2(p.amount), method: p.method ?? null, note: p.note ?? null, createdBy: actor.name },
   });
   await recalcInvoice(tx, invoiceId);
   await audit(tx, actor, { entity: 'invoice', entityId: invoiceId, action: 'payment', summary: `Uplata ${r2(p.amount).toFixed(2)} na račun ${inv.number}` });
+}
+
+/**
+ * Povrat kupcu (preplata, npr. odobrenje na plaćeni račun): isplata se upisuje kao
+ * negativna uplata, najviše do iznosa preplate.
+ */
+export async function refundPayment(tx: Tx, actor: Actor, invoiceId: string, p: { date: string; amount: number; method?: string | null; note?: string | null }) {
+  await tx.$queryRaw`SELECT id FROM "Invoice" WHERE id = ${invoiceId} FOR UPDATE`;
+  const inv = await tx.invoice.findFirst({ where: { id: invoiceId, companyId: actor.companyId } });
+  assert(inv, 'Račun ne postoji.');
+  assert(inv.status === 'ISSUED' && (inv.kind === 'INVOICE' || inv.kind === 'ADVANCE'), 'Povrat se evidentira samo na izdanom računu.');
+  const over = overpaidAmount({ kind: inv.kind, stornoed: inv.stornoed, total: num(inv.grandTotal), advance: num(inv.advanceAmount), paid: num(inv.paidTotal), credited: num(inv.creditedTotal) });
+  assert(over > 0.005, 'Račun nema preplate — nema iznosa za povrat kupcu.');
+  assert(p.amount > 0, 'Iznos povrata mora biti veći od 0.');
+  assert(p.amount <= over + 0.005, `Povrat je veći od preplate (${eur(over)}).`);
+  await tx.payment.create({
+    data: { invoiceId, date: fromISO(p.date), amount: -r2(p.amount), method: p.method ?? null, note: p.note || 'Povrat kupcu', createdBy: actor.name },
+  });
+  await recalcInvoice(tx, invoiceId);
+  await audit(tx, actor, { entity: 'invoice', entityId: invoiceId, action: 'refund', summary: `Povrat kupcu ${eur(r2(p.amount))} po računu ${inv.number}` });
 }
 
 /** Plaćeno u cijelosti — upisuje uplatu otvorenog iznosa. */
