@@ -3,7 +3,8 @@ import { notFound } from 'next/navigation';
 import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import { findReport, periodLabel, readFilters, runReport } from '@/server/queries/reports';
-import { getLookups, getPartnerOptions, modelLabel } from '@/server/queries/lookups';
+import { getLookups, modelLabel } from '@/server/queries/lookups';
+import { partnerOptionsByIds } from '@/server/queries/partner-options';
 import { canSeeCost } from '@/domain/permissions';
 import { today } from '@/domain/dates';
 import { PageHeader } from '@/components/ui/misc';
@@ -35,8 +36,8 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
   const [result, lookups, partners, suppliers, first] = await Promise.all([
     runReport(def, user.companyId, f, { canSeeCost: costs, page: { skip: pg.skip, take: pg.take } }),
     needsLookups ? getLookups(user.companyId) : null,
-    def.filters.includes('partner') ? getPartnerOptions(user.companyId) : null,
-    def.filters.includes('supplier') ? getPartnerOptions(user.companyId, 'supplier') : null,
+    def.filters.includes('partner') ? partnerOptionsByIds(user.companyId, f.partnerIds) : null,
+    def.filters.includes('supplier') ? partnerOptionsByIds(user.companyId, f.supplierIds) : null,
     def.filters.includes('year') ? db.invoice.aggregate({ where: { companyId: user.companyId }, _min: { year: true } }) : null,
   ]);
   const minYear = Math.max(currentYear - 9, Math.min(first?._min.year ?? currentYear, currentYear));
@@ -84,8 +85,8 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
         currentYear={currentYear}
         allYears={!def.singleYear}
         defaultDays={def.defaultDays ?? 30}
-        partners={(partners ?? []).map((p) => ({ value: p.id, label: p.excluded ? `${p.name} (isključen)` : p.name }))}
-        suppliers={(suppliers ?? []).map((p) => ({ value: p.id, label: p.name }))}
+        partners={partners ?? []}
+        suppliers={suppliers ?? []}
         categories={(lookups?.categories ?? []).map((c) => ({ value: c.id, label: c.name }))}
         models={(lookups?.models ?? []).map((m) => ({ value: m.id, label: modelLabel(m) }))}
         statuses={(lookups?.statuses ?? []).map((x) => ({ value: x.id, label: x.name }))}

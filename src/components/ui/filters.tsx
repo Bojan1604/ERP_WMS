@@ -185,22 +185,39 @@ export function MultiSelectFilter({
   options,
   className,
   searchable,
+  onSearch,
 }: {
   name: string;
   /** Naziv filtra na gumbu (npr. „Partner"). */
   label: string;
+  /** Sve opcije — ili, uz `onSearch`, samo trenutno odabrane (razriješene na poslužitelju). */
   options: Option[];
   className?: string;
   /** Polje za pretragu opcija; zadano kad ih je više od 8. */
   searchable?: boolean;
+  /** Velik popis (partneri): opcije se traže na poslužitelju dok korisnik tipka. */
+  onSearch?: (q: string) => Promise<Option[]>;
 }) {
   const { params, set, pending } = useQueryParams();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
+  const [remote, setRemote] = useState<Option[] | null>(null);
+  const known = useRef(new Map<string, string>());
   const box = useRef<HTMLDivElement>(null);
   // zarez unutar vrijednosti (CPU „ARM Cortex-A53, 4 jezgre") je „escapean" — list-params joinMulti/splitMulti
   const selected = splitMulti(params.get(name) ?? '').map((v) => v.trim()).filter(Boolean);
   const chosen = new Set(selected);
+  for (const o of [...options, ...(remote ?? [])]) known.current.set(o.value, o.label);
+
+  useEffect(() => {
+    if (!onSearch || !open) return;
+    let live = true;
+    const t = setTimeout(() => onSearch(q).then((r) => live && setRemote(r)), 200);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [q, open, onSearch]);
 
   useEffect(() => {
     if (!open) return;
@@ -216,7 +233,7 @@ export function MultiSelectFilter({
 
   const apply = (next: Set<string>) => {
     // redoslijed kao u opcijama — isti odabir daje isti URL
-    const ordered = options.map((o) => o.value).filter((v) => next.has(v));
+    const ordered = onSearch ? [...next].sort() : options.map((o) => o.value).filter((v) => next.has(v));
     set({ [name]: ordered.length ? joinMulti(ordered) : null });
   };
   const toggle = (v: string) => {
@@ -225,14 +242,22 @@ export function MultiSelectFilter({
     else next.add(v);
     apply(next);
   };
-  const withSearch = searchable ?? options.length > 8;
+  const withSearch = onSearch ? true : (searchable ?? options.length > 8);
   const t = q.trim().toLowerCase();
-  const list = t ? options.filter((o) => o.label.toLowerCase().includes(t)) : options;
+  const list = onSearch
+    ? [
+        // odabrani prvi (i kad nisu među rezultatima pretrage), zatim rezultati
+        ...(t ? [] : selected.map((v) => ({ value: v, label: known.current.get(v) ?? v }))),
+        ...(remote ?? []).filter((o) => t || !chosen.has(o.value)),
+      ]
+    : t
+      ? options.filter((o) => o.label.toLowerCase().includes(t))
+      : options;
   const summary =
     selected.length === 0
       ? label
       : selected.length === 1
-        ? `${label}: ${options.find((o) => o.value === selected[0])?.label ?? selected[0]}`
+        ? `${label}: ${known.current.get(selected[0]) ?? selected[0]}`
         : `${label} (${selected.length})`;
 
   return (

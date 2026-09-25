@@ -10,6 +10,7 @@ import { cn } from '@/lib/cn';
 import { amount, pct } from '@/lib/format';
 import { findDevices } from '@/app/(app)/prodaja/racuni/actions';
 import { modelName, type DeviceOpt, type ModelOpt, type NamedOpt } from './types';
+import { PartnerCombobox } from '@/components/partners/partner-combobox';
 
 const SOURCE: Record<DeviceOpt['priceSource'], string> = { agreed: 'cjenik', model: 'cijena modela', margin: 'iz marže' };
 const RENT_SOURCE: Record<NonNullable<DeviceOpt['rentSource']>, string> = { agreed: 'cjenik', item: 'uređaj', model: 'model', cost: '% nabavne', contract: 's ugovora' };
@@ -30,7 +31,7 @@ export function DevicePicker({
   models,
   categories,
   warehouses,
-  suppliers = [],
+  supplierFilter = false,
   statuses = [],
   exclude = [],
   fixedModelId,
@@ -47,7 +48,8 @@ export function DevicePicker({
   models: ModelOpt[];
   categories: NamedOpt[];
   warehouses: NamedOpt[];
-  suppliers?: NamedOpt[];
+  /** Filtar po dobavljaču (pretraga dobavljača na poslužitelju). */
+  supplierFilter?: boolean;
   statuses?: Array<NamedOpt & { kind: string }>;
   exclude?: string[];
   fixedModelId?: string;
@@ -215,15 +217,8 @@ export function DevicePicker({
             ))}
           </select>
         )}
-        {suppliers.length > 0 && (
-          <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className={cn(controlClass, 'h-8 w-auto max-w-48')} aria-label="Dobavljač">
-            <option value="">Svi dobavljači</option>
-            {suppliers.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
+        {supplierFilter && (
+          <PartnerCombobox role="supplier" className="w-48" value={supplierId || null} onChange={(id) => setSupplierId(id ?? '')} placeholder="Svi dobavljači" allowEmpty />
         )}
         {statusOpts.length > 1 && (
           <select value={statusId} onChange={(e) => setStatusId(e.target.value)} className={cn(controlClass, 'h-8 w-auto max-w-44')} aria-label="Status">

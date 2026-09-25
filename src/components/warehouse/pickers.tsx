@@ -1,19 +1,12 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useState } from 'react';
 import { Combobox, type ComboOption } from '@/components/ui/combobox';
 import { useQueryParams } from '@/components/ui/filters';
 import { cn } from '@/lib/cn';
-import { searchPartners } from '@/app/(app)/skladiste/actions';
+import { usePartnerSearch } from '@/components/partners/partner-combobox';
 
 type Role = 'customer' | 'supplier' | 'any';
-
-function usePartnerSearch(role: Role) {
-  return useCallback(async (q: string): Promise<ComboOption[]> => {
-    const res = await searchPartners({ q, role });
-    return res.ok ? (res.data ?? []) : [];
-  }, [role]);
-}
 
 /** Odabir partnera s pretragom na poslužitelju. */
 export function PartnerPicker({

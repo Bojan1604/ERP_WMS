@@ -4,7 +4,7 @@ import { Trash2, UserX, UserCheck } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { getMdmScope } from '@/server/mdm/scope';
 import { getOrg, orgOptions, profileOptions } from '@/server/queries/mdm';
-import { getPartnerOptions } from '@/server/queries/lookups';
+import { partnerOptionsByIds } from '@/server/queries/partner-options';
 import { can, LEVEL_LABEL, ROLE_DEFAULTS, ROLE_LABEL, type Level } from '@/domain/permissions';
 import { Badge, Card, Detail, PageHeader } from '@/components/ui/misc';
 import { ActionButton } from '@/components/ui/action';
@@ -26,9 +26,9 @@ export default async function OrgPage({ params }: { params: Promise<{ id: string
   const all = await orgOptions(scope);
   const home = scope.homeOrgId ? all.find((o) => o.id === scope.homeOrgId) : null;
   const manageUsers = canEdit && (scope.owner || home?.type === 'DISTRIBUTOR');
-  const [profiles, partners] = await Promise.all([
+  const [profiles, [partner]] = await Promise.all([
     canEdit ? profileOptions(scope) : [],
-    scope.owner && canEdit ? getPartnerOptions(user.companyId, 'any') : [],
+    scope.owner && canEdit ? partnerOptionsByIds(user.companyId, [org.partnerId]) : [],
   ]);
   const role = org.type === 'DISTRIBUTOR' ? 'DISTRIBUTOR' : 'CLIENT';
   const defaultLevel = ROLE_DEFAULTS[role].mdm;
@@ -67,7 +67,7 @@ export default async function OrgPage({ params }: { params: Promise<{ id: string
                 label="Uredi"
                 owner={scope.owner}
                 lockActive={isHome}
-                partners={partners.map((p) => ({ value: p.id, label: p.city ? `${p.name} (${p.city})` : p.name }))}
+                partner={partner ?? null}
                 value={{
                   id: org.id,
                   type: org.type,

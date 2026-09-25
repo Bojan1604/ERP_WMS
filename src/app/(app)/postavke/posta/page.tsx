@@ -10,6 +10,7 @@ import { FilterBar, SearchFilter, SelectFilter } from '@/components/ui/filters';
 import { Pagination, readPage } from '@/components/ui/pagination';
 import { MailSettingsForm, MailTemplatesForm, MailTestCard } from '@/components/mail/mail-settings';
 import { dateTime } from '@/lib/format';
+import { escapeLike } from '@/lib/like';
 
 export const metadata = { title: 'E-pošta' };
 
@@ -40,7 +41,7 @@ export default async function MailSettingsPage({ searchParams }: { searchParams:
   const kind = str(params.vrsta);
   if (kind && kind in KIND_LABEL) where.kind = kind;
   const q = str(params.q).slice(0, 100);
-  if (q) where.OR = [{ to: { contains: q, mode: 'insensitive' } }, { subject: { contains: q, mode: 'insensitive' } }];
+  if (q) where.OR = [{ to: { contains: escapeLike(q), mode: 'insensitive' } }, { subject: { contains: escapeLike(q), mode: 'insensitive' } }];
 
   const [c, me, logs, total] = await Promise.all([
     db.company.findUniqueOrThrow({

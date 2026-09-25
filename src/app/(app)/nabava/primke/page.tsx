@@ -2,7 +2,9 @@ import Link from 'next/link';
 import { PackageCheck } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { getLookups } from '@/server/queries/lookups';
-import { listReceipts, receiptYears, supplierOptions } from '@/server/queries/purchasing';
+import { listReceipts, receiptYears } from '@/server/queries/purchasing';
+import { partnerOptionsByIds } from '@/server/queries/partner-options';
+import { PartnerFilter } from '@/components/partners/partner-combobox';
 import { num } from '@/domain/money';
 import { canSeeCost } from '@/domain/permissions';
 import { ExportButtons } from '@/components/ui/export-buttons';
@@ -19,7 +21,7 @@ export default async function ReceiptsPage({ searchParams }: { searchParams: Pro
   const sp = await searchParams;
   const pg = readPage(sp, 50);
   const c = user.companyId;
-  const [list, years, suppliers, lookups] = await Promise.all([listReceipts(c, sp, pg), receiptYears(c), supplierOptions(c), getLookups(c)]);
+  const [list, years, suppliers, lookups] = await Promise.all([listReceipts(c, sp, pg), receiptYears(c), partnerOptionsByIds(c, [typeof sp.supplier === 'string' ? sp.supplier : null]), getLookups(c)]);
   const filtered = ['q', 'status', 'supplier', 'warehouse', 'year'].some((k) => typeof sp[k] === 'string' && sp[k]);
   const costs = canSeeCost(user.perms);
   const qs = new URLSearchParams();
@@ -30,7 +32,7 @@ export default async function ReceiptsPage({ searchParams }: { searchParams: Pro
       <PageHeader title="Primke" subtitle="Zaprimljena roba po dokumentima — iz narudžbenica i skupnog zaprimanja na skladištu" actions={<ExportButtons href={`/api/nabava/primke?${qs}`} />} />
       <FilterBar>
         <SearchFilter placeholder="Broj, dobavljač, serijski broj…" />
-        <SelectFilter name="supplier" placeholder="Svi dobavljači" options={suppliers.map((s) => ({ value: s.id, label: s.name }))} />
+        <PartnerFilter name="supplier" role="supplier" placeholder="Svi dobavljači" current={suppliers[0] ?? null} />
         <SelectFilter name="warehouse" placeholder="Sva skladišta" options={lookups.warehouses.map((w) => ({ value: w.id, label: w.name }))} />
         <SelectFilter name="status" placeholder="Sve primke" options={[{ value: 'POSTED', label: 'Proknjižene' }, { value: 'CANCELLED', label: 'Stornirane' }]} />
         <SelectFilter name="year" placeholder="Sve godine" options={years.map((y) => ({ value: String(y), label: `${y}.` }))} />

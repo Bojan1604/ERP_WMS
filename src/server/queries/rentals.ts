@@ -7,6 +7,7 @@ import { nextBillingDate, pendingInstallments, type BillingCode, type ContractSt
 import { suggestedRent } from '@/domain/pricing';
 import { num, r2 } from '@/domain/money';
 import { today } from '@/domain/dates';
+import { escapeLike } from '@/lib/like';
 
 type Params = Record<string, string | string[] | undefined>;
 const str = (v: string | string[] | undefined) => (typeof v === 'string' ? v.trim() : '');
@@ -191,10 +192,10 @@ export async function deviceCandidates(
     const q = opts.q?.trim();
     if (q) {
       where.OR = [
-        { serial: { contains: q, mode: 'insensitive' } },
-        { model: { name: { contains: q, mode: 'insensitive' } } },
-        { model: { brand: { contains: q, mode: 'insensitive' } } },
-        { partner: { name: { contains: q, mode: 'insensitive' } } },
+        { serial: { contains: escapeLike(q), mode: 'insensitive' } },
+        { model: { name: { contains: escapeLike(q), mode: 'insensitive' } } },
+        { model: { brand: { contains: escapeLike(q), mode: 'insensitive' } } },
+        { partner: { name: { contains: escapeLike(q), mode: 'insensitive' } } },
       ];
     }
   }

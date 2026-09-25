@@ -11,6 +11,7 @@ import {
 import { addDays, daysBetween, fromISO, toISO, today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import { paramStr, parseMulti, parseSort, sortOrderBy } from '@/lib/list-params';
+import { escapeLike } from '@/lib/like';
 
 type Params = Record<string, string | string[] | undefined>;
 
@@ -34,7 +35,7 @@ export function contractWhere(companyId: string, params: Params): Prisma.Contrac
   const billings = parseMulti(params, 'billing', BILLINGS);
   const view = paramStr(params, 'pogled');
   const now = today();
-  if (q) and.push({ OR: [{ number: { contains: q, mode: 'insensitive' } }, { partner: { name: { contains: q, mode: 'insensitive' } } }] });
+  if (q) and.push({ OR: [{ number: { contains: escapeLike(q), mode: 'insensitive' } }, { partner: { name: { contains: escapeLike(q), mode: 'insensitive' } } }] });
   if (statuses.length) and.push({ status: { in: statuses as ContractStatus[] } });
   // zadani pogled „Aktivni" — osim kad je status izričito odabran
   else if (view === '') and.push({ status: 'ACTIVE' });

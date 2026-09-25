@@ -68,6 +68,11 @@ Demo prijave (lozinka za sve: `admin123`):
 
 Program ima vlastitu bazu (`wms`) i ne dijeli ništa s drugim programima na istom PostgreSQL-u.
 
+> **JIT PostgreSQL-a** program isključuje sam za svoje veze (`options=-c jit=off` dodaje se na `DATABASE_URL`;
+> Docker baza iz `docker-compose.yml` ga isključuje i za cijeli poslužitelj). Na zasebno instaliranom PostgreSQL-u
+> može se isključiti i za sve alate (psql, kopije): `ALTER DATABASE wms SET jit = off;` ili `jit = off` u `postgresql.conf`.
+> Nakon velikog uvoza podataka (Postavke → Uvoz iz starog programa) program sam pokreće `ANALYZE`.
+
 ### Brzi način rada (svakodnevno korištenje)
 
 `npm run dev` je **razvojni** način: svaka stranica se pri prvom otvaranju prevodi (1–2 s). Za
@@ -256,6 +261,9 @@ npm test          # domena: iznosi, PDV, marže, motor naplate, plan, serijski, 
 npm run test:db   # servisi nad testnom bazom `wms_test` (izdavanje, istovremena numeracija, storno, uplate, najam, statusi, izolacija firmi)
 npm run typecheck
 ```
+
+`npm run test:seed` stvara praznu bazu `wms_seedtest` (ili `SEED_TEST_DATABASE_URL`, naziv mora sadržavati
+„seedtest"), primjenjuje migracije, puni demo podatke, provjerava ih i briše bazu.
 
 `test:db` očekuje bazu `wms_test` (`createdb wms_test && DATABASE_URL=…/wms_test npx prisma db push`) ili
 `TEST_DATABASE_URL`. GitHub Actions (`.github/workflows/ci.yml`) pokreće sve to i produkcijski build.

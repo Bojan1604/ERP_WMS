@@ -1,12 +1,14 @@
 import 'server-only';
 import type { InvoiceKind, InvoiceType, Prisma, QuoteKind, QuoteStatus } from '@prisma/client';
 import { db } from '../db';
-import { getCompany, getLookups, getPartnerOptions, modelLabel } from './lookups';
+import { getCompany, getLookups, modelLabel } from './lookups';
+import { partnerOptionsByIds } from './partner-options';
 import { addDays, fromISO, today } from '@/domain/dates';
 import { num } from '@/domain/money';
 import { grossMargin, suggestedRent, suggestedSalePrice } from '@/domain/pricing';
 import { parseDateRange, parseMulti } from '@/lib/list-params';
 import { EINVOICE_FILTER, einvoiceFilterValues, type EInvoiceFilter } from '@/domain/sales-lines';
+import { escapeLike } from '@/lib/like';
 
 type Params = Record<string, string | string[] | undefined>;
 const str = (v: string | string[] | undefined) => (typeof v === 'string' ? v.trim() : '');
@@ -78,7 +80,7 @@ function lateWhere(overdueDays: number, now = today()): { late: Prisma.InvoiceWh
  */
 export async function resolveInvoiceSearch(companyId: string, q: string): Promise<string[]> {
   if (q.trim().length < 3) return [];
-  const items = await db.item.findMany({ where: { companyId, serial: { contains: q.trim(), mode: 'insensitive' } }, select: { id: true }, take: 500 });
+  const items = await db.item.findMany({ where: { companyId, serial: { contains: escapeLike(q.trim()), mode: 'insensitive' } }, select: { id: true }, take: 500 });
   return items.map((i) => i.id);
 }
 
@@ -105,11 +107,11 @@ export function invoiceWhere(companyId: string, f: InvoiceFilters, overdueDays: 
   if (f.q) {
     and.push({
       OR: [
-        { number: { contains: f.q, mode: 'insensitive' } },
-        { partner: { name: { contains: f.q, mode: 'insensitive' } } },
-        { description: { contains: f.q, mode: 'insensitive' } },
+        { number: { contains: escapeLike(f.q), mode: 'insensitive' } },
+        { partner: { name: { contains: escapeLike(f.q), mode: 'insensitive' } } },
+        { description: { contains: escapeLike(f.q), mode: 'insensitive' } },
         // opis stavke i serijski broj uređaja na računu
-        { lines: { some: { description: { contains: f.q, mode: 'insensitive' } } } },
+        { lines: { some: { description: { contains: escapeLike(f.q), mode: 'insensitive' } } } },
         ...(serialItemIds.length ? [{ lines: { some: { itemId: { in: serialItemIds } } } }] : []),
       ],
     });
@@ -325,22 +327,15 @@ export type InvoiceDetail = NonNullable<Awaited<ReturnType<typeof getInvoice>>>;
 
 // ================================================================ editor — šifrarnici
 
-export async function getCustomerOptions(companyId: string) {
-  return db.partner.findMany({
-    where: { companyId, isCustomer: true },
-    orderBy: { name: 'asc' },
-    select: { id: true, name: true, city: true, country: true, note: true, paymentTermDays: true, excluded: true, vatCategoryOverride: true },
-  });
-}
-export type CustomerOption = Awaited<ReturnType<typeof getCustomerOptions>>[number];
-
-/** Sve što editori računa i ponude trebaju za odabir — kao obični objekti. */
-export async function getSalesLookups(companyId: string) {
-  const [company, lookups, partners, suppliers, kpdRent] = await Promise.all([
+/**
+ * Sve što editori računa i ponude trebaju za odabir — kao obični objekti. Partneri: samo
+ * trenutni kupac (`partnerIds`), ostali se u editoru traže pretragom na poslužitelju.
+ */
+export async function getSalesLookups(companyId: string, partnerIds: Array<string | null | undefined> = []) {
+  const [company, lookups, partners, kpdRent] = await Promise.all([
     getCompany(companyId),
     getLookups(companyId),
-    getCustomerOptions(companyId),
-    getPartnerOptions(companyId, 'supplier'),
+    partnerOptionsByIds(companyId, partnerIds),
     db.deviceModel.findMany({ where: { companyId, active: true, kpdRent: { not: null } }, select: { id: true, kpdRent: true } }),
   ]);
   const rentKpd = new Map(kpdRent.map((m) => [m.id, m.kpdRent]));
@@ -360,7 +355,6 @@ export async function getSalesLookups(companyId: string) {
     })),
     categories: lookups.categories,
     warehouses: lookups.warehouses,
-    suppliers: suppliers.map((p) => ({ id: p.id, name: p.name })),
     // birač uređaja: statusi raspoloživih uređaja i statusi najma
     statuses: lookups.statuses.filter((x) => ['IN_STOCK', 'RESERVED', 'RENTED'].includes(x.kind)).map((x) => ({ id: x.id, name: x.name, kind: x.kind })),
     company: {
@@ -460,10 +454,10 @@ export async function searchDevices(companyId: string, s: DeviceSearch): Promise
               .slice(0, 6)
               .map((w) => ({
                 OR: [
-                  { serial: { contains: w, mode: 'insensitive' as const } },
-                  { model: { name: { contains: w, mode: 'insensitive' as const } } },
-                  { model: { brand: { contains: w, mode: 'insensitive' as const } } },
-                  { model: { code: { contains: w, mode: 'insensitive' as const } } },
+                  { serial: { contains: escapeLike(w), mode: 'insensitive' as const } },
+                  { model: { name: { contains: escapeLike(w), mode: 'insensitive' as const } } },
+                  { model: { brand: { contains: escapeLike(w), mode: 'insensitive' as const } } },
+                  { model: { code: { contains: escapeLike(w), mode: 'insensitive' as const } } },
                 ],
               })),
           }
@@ -628,9 +622,9 @@ export function quoteWhere(companyId: string, f: QuoteFilters, withStatus = true
   if (f.q) {
     and.push({
       OR: [
-        { number: { contains: f.q, mode: 'insensitive' } },
-        { partner: { name: { contains: f.q, mode: 'insensitive' } } },
-        { note: { contains: f.q, mode: 'insensitive' } },
+        { number: { contains: escapeLike(f.q), mode: 'insensitive' } },
+        { partner: { name: { contains: escapeLike(f.q), mode: 'insensitive' } } },
+        { note: { contains: escapeLike(f.q), mode: 'insensitive' } },
       ],
     });
   }

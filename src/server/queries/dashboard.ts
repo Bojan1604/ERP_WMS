@@ -4,7 +4,7 @@ import { db } from '../db';
 import { can, canSeeCost, type PermissionMap } from '@/domain/permissions';
 import { addDays, daysBetween, fromISO, today, toISO } from '@/domain/dates';
 import { num } from '@/domain/money';
-import { pendingForCompany } from '../services/rentals';
+import { pendingRentSummary } from './pending-rent';
 import { returnCandidates } from './warehouse';
 import { expensesByMonth } from './reports/costs';
 import { readReceivePayload } from '@/domain/receive-request';
@@ -86,7 +86,7 @@ export async function dashboardData(companyId: string, perms: PermissionMap) {
       }),
     ),
     skip(rentals, () => db.contract.count({ where: { companyId, status: 'ACTIVE', partner: { excluded: false } } })),
-    skip(rentals, () => pendingForCompany(db, companyId).then((r) => ({ count: r.length, amount: r.reduce((a, x) => a + x.amount, 0) }))),
+    skip(rentals, () => pendingRentSummary(companyId)),
     skip(wh, () => db.item.count({ where: { companyId, state: 'RESERVED' } })),
     skip(wh, () => db.item.count({ where: { companyId, state: 'RETURNING' } })),
     skip(wh, () => db.approvalRequest.count({ where: { companyId, status: 'PENDING', kind: 'STATUS_CHANGE' } })),

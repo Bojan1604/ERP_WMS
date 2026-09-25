@@ -3,7 +3,8 @@ import { notFound } from 'next/navigation';
 import { FileCode2, FileText } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { getCompany, getLookups } from '@/server/queries/lookups';
-import { getSupplierInvoice, recentSupplierReceipts, supplierOptions } from '@/server/queries/purchasing';
+import { getSupplierInvoice, recentSupplierReceipts } from '@/server/queries/purchasing';
+import { partnerOptionsByIds } from '@/server/queries/partner-options';
 import { can } from '@/domain/permissions';
 import { toISO } from '@/domain/dates';
 import { num } from '@/domain/money';
@@ -26,8 +27,8 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
   const { id } = await params;
   const si = await getSupplierInvoice(user.companyId, id);
   if (!si) notFound();
-  const [suppliers, lookups, company, receipts] = await Promise.all([
-    supplierOptions(user.companyId, si.supplierId),
+  const [[supplier], lookups, company, receipts] = await Promise.all([
+    partnerOptionsByIds(user.companyId, [si.supplierId]),
     getLookups(user.companyId),
     getCompany(user.companyId),
     si.status === 'RECEIVED' ? recentSupplierReceipts(user.companyId, si.supplierId, si.issueDate) : 0,
@@ -190,7 +191,7 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
         }}
         bookedByReceipt={bookedByReceipt}
         goodsRule={si.goodsInvoice === null ? si.goodsRule : null}
-        suppliers={suppliers.map((s) => ({ value: s.id, label: s.name, country: s.country }))}
+        supplier={supplier ?? null}
         categories={categories}
         company={{ vatRate: num(company.vatRate), country: company.country }}
         action={saveSupplierInvoiceAction}

@@ -95,19 +95,32 @@ export async function getPartner(companyId: string, id: string) {
 
 /** Brojevi za kartice na stranici partnera. */
 export async function partnerCounts(companyId: string, partnerId: string) {
-  const [invoices, devices, contracts, prices, open] = await Promise.all([
+  const [invoices, devices, contracts, prices, open, over] = await Promise.all([
     db.invoice.count({ where: { companyId, partnerId } }),
     db.item.count({ where: { companyId, partnerId, ...ACTIVE_DEVICE } }),
     db.contract.count({ where: { companyId, partnerId } }),
     db.priceAgreement.count({ where: { companyId, partnerId } }),
     db.invoice.aggregate({ where: { companyId, partnerId, status: 'ISSUED', openAmount: { gt: 0 } }, _sum: { openAmount: true }, _count: true }),
+    partnerOverpaid(companyId, partnerId),
   ]);
-  return { invoices, devices, contracts, prices, open: num(open._sum.openAmount), openCount: open._count };
+  return { invoices, devices, contracts, prices, open: num(open._sum.openAmount), openCount: open._count, overpaid: over.amount, overpaidCount: over.count };
+}
+
+/** Preplata (za povrat kupcu) — isto pravilo kao `overpaidAmount` (domain/invoice.ts), zbroj u bazi. */
+export async function partnerOverpaid(companyId: string, partnerId: string) {
+  const [r] = await db.$queryRaw<Array<{ amount: Prisma.Decimal | null; n: number }>>`
+    SELECT SUM(x.over) AS amount, COUNT(*)::int AS n FROM (
+      SELECT "paidTotal" + "advanceAmount" + "creditedTotal" - "grandTotal" AS over
+      FROM "Invoice"
+      WHERE "companyId" = ${companyId} AND "partnerId" = ${partnerId} AND status = 'ISSUED'
+        AND kind IN ('INVOICE', 'ADVANCE') AND NOT stornoed
+    ) x WHERE x.over > 0.005`;
+  return { amount: num(r?.amount), count: r?.n ?? 0 };
 }
 
 export async function partnerInvoices(companyId: string, partnerId: string, page: { skip: number; take: number }) {
   const where: Prisma.InvoiceWhereInput = { companyId, partnerId };
-  const [rows, total, sums] = await Promise.all([
+  const [rows, total, sums, over] = await Promise.all([
     db.invoice.findMany({
       where,
       orderBy: [{ date: 'desc' }, { seq: 'desc' }],
@@ -120,8 +133,9 @@ export async function partnerInvoices(companyId: string, partnerId: string, page
     }),
     db.invoice.count({ where }),
     db.invoice.aggregate({ where: { ...where, status: 'ISSUED' }, _sum: { netTotal: true, grandTotal: true, openAmount: true } }),
+    partnerOverpaid(companyId, partnerId),
   ]);
-  return { rows, total, sums: { net: num(sums._sum.netTotal), gross: num(sums._sum.grandTotal), open: num(sums._sum.openAmount) } };
+  return { rows, total, sums: { net: num(sums._sum.netTotal), gross: num(sums._sum.grandTotal), open: num(sums._sum.openAmount), overpaid: over.amount } };
 }
 
 export const partnerDeviceSelect = {

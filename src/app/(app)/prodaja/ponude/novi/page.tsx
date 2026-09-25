@@ -13,7 +13,7 @@ export const metadata = { title: 'Nova ponuda' };
 export default async function NewQuotePage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const user = await pageAccess('sales', 'edit');
   const sp = await searchParams;
-  const lookups = await getSalesLookups(user.companyId);
+  const lookups = await getSalesLookups(user.companyId, [typeof sp.partner === 'string' ? sp.partner : null]);
   const partner = lookups.partners.find((p) => p.id === sp.partner) ?? null;
   const date = today();
   const proforma = sp.vrsta === 'predracun';

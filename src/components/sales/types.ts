@@ -33,17 +33,8 @@ export interface EditorLine {
   suggestRent?: number | null;
 }
 
-export interface PartnerOpt {
-  id: string;
-  name: string;
-  city: string | null;
-  country: string;
-  note: string | null;
-  paymentTermDays: number | null;
-  excluded: boolean;
-  /** Ručna PDV kategorija partnera (nadjačava izvedenu iz države). */
-  vatCategoryOverride?: string | null;
-}
+export type { PartnerOpt } from '@/lib/partner-option';
+import type { PartnerOpt } from '@/lib/partner-option';
 
 export interface ServiceOpt {
   id: string;
@@ -86,12 +77,12 @@ export interface CompanyDefaults extends ExemptTexts {
 }
 
 export interface SalesLookups {
+  /** Samo trenutni kupac (i po želji iz URL-a) — ostali se traže pretragom. */
   partners: PartnerOpt[];
   services: ServiceOpt[];
   models: ModelOpt[];
   categories: NamedOpt[];
   warehouses: NamedOpt[];
-  suppliers?: NamedOpt[];
   statuses?: Array<NamedOpt & { kind: string }>;
   company: CompanyDefaults;
 }

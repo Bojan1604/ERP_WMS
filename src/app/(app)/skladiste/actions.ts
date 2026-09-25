@@ -13,6 +13,7 @@ import { zBool, zId, zIds, zMoney, zOptDate, zOptId, zOptInt, zOptMoney, zOptTex
 import {
   announceReturn, applyStatusChange, bulkEdit, deleteItems, markOut, requestStatusChange, transferItems, updateItem, writeOff,
 } from '@/server/services/warehouse';
+import { escapeLike } from '@/lib/like';
 
 const kom = (n: number) => `${n} kom`;
 
@@ -227,7 +228,7 @@ export const searchInvoicesForItem = action({ module: 'warehouse', level: 'edit'
       status: 'ISSUED',
       number: { not: null },
       lines: { some: { itemId } },
-      ...(q ? { OR: [{ number: { contains: q, mode: 'insensitive' } }, { partner: { name: { contains: q, mode: 'insensitive' } } }] } : {}),
+      ...(q ? { OR: [{ number: { contains: escapeLike(q), mode: 'insensitive' } }, { partner: { name: { contains: escapeLike(q), mode: 'insensitive' } } }] } : {}),
     },
     orderBy: [{ date: 'desc' }],
     take: 30,
@@ -236,22 +237,3 @@ export const searchInvoicesForItem = action({ module: 'warehouse', level: 'edit'
   return { data: rows.map((r) => ({ value: r.id, label: r.number ?? '—', hint: `${r.partner.name} · ${r.date.toISOString().slice(0, 10)}` })), revalidate: [] };
 });
 
-/** Pretraga partnera za padajuće izbornike (bez slanja cijelog popisa u preglednik). */
-export const searchPartners = action(
-  { module: 'warehouse', level: 'view' },
-  z.object({ q: zOptText, role: z.enum(['customer', 'supplier', 'any']).default('any') }),
-  async ({ q, role }, user) => {
-    const rows = await db.partner.findMany({
-      where: {
-        companyId: user.companyId,
-        ...(role === 'customer' ? { isCustomer: true } : role === 'supplier' ? { isSupplier: true } : {}),
-        ...(q ? { OR: [{ name: { contains: q, mode: 'insensitive' } }, { oib: { startsWith: q } }] } : {}),
-      },
-      orderBy: { name: 'asc' },
-      take: 40,
-      select: { id: true, name: true, city: true },
-    });
-    // samo čitanje — bez osvježavanja prikaza
-    return { data: rows.map((p) => ({ value: p.id, label: p.name, hint: p.city ?? undefined })), revalidate: [] };
-  },
-);

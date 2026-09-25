@@ -5,7 +5,8 @@ import { KeyRound, Pencil, Plus } from 'lucide-react';
 import { Button, type ButtonProps } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { Checkbox, Field, FormGrid, Input, Select, Textarea } from '@/components/ui/field';
-import { Combobox } from '@/components/ui/combobox';
+import { PartnerCombobox } from '@/components/partners/partner-combobox';
+import type { PartnerOpt } from '@/lib/partner-option';
 import { useAction } from '@/components/ui/action';
 import { LEVEL_LABEL } from '@/domain/permissions';
 import { resetMdmPasswordAction, saveMdmUserAction, saveOrgAction, saveSiteAction } from '@/app/(app)/mdm/organizacije/actions';
@@ -28,7 +29,7 @@ export function OrgDialog({
   label,
   owner,
   distributors = [],
-  partners = [],
+  partner = null,
   lockActive,
   variant,
   size,
@@ -37,7 +38,8 @@ export function OrgDialog({
   label: string;
   owner: boolean;
   distributors?: { id: string; name: string }[];
-  partners?: { value: string; label: string }[];
+  /** Povezani ERP partner (ostali se traže pretragom na poslužitelju). */
+  partner?: PartnerOpt | null;
   lockActive?: boolean;
   variant?: ButtonProps['variant'];
   size?: ButtonProps['size'];
@@ -96,7 +98,7 @@ export function OrgDialog({
           </Field>
           {owner && (
             <Field label="ERP partner" hint="Veza na partnera u ERP-u (vidi samo vlasnik)." className="sm:col-span-2">
-              <Combobox options={partners} value={v.partnerId} onChange={(val) => set({ partnerId: val })} placeholder="— bez veze —" allowEmpty />
+              <PartnerCombobox initial={partner} value={v.partnerId} onChange={(val) => set({ partnerId: val })} placeholder="— bez veze —" allowEmpty />
             </Field>
           )}
           <Field label="Napomena" className="sm:col-span-2">

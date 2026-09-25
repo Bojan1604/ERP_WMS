@@ -5,6 +5,8 @@ import { Plus, Trash2 } from 'lucide-react';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Field, FormGrid, Input, Textarea } from '@/components/ui/field';
 import { Combobox, type ComboOption } from '@/components/ui/combobox';
+import { PartnerCombobox } from '@/components/partners/partner-combobox';
+import type { PartnerOpt } from '@/lib/partner-option';
 import { FormError, useAction, type ServerAction } from '@/components/ui/action';
 import { Card } from '@/components/ui/misc';
 import { eur } from '@/lib/format';
@@ -39,13 +41,14 @@ interface SaveInput {
 /** Zaglavlje i stavke narudžbenice (novi unos i izmjena). */
 export function OrderForm({
   initial,
-  suppliers,
+  supplier,
   models,
   action,
   cancelHref,
 }: {
   initial: OrderFormValue;
-  suppliers: ComboOption[];
+  /** Trenutni dobavljač (ostali se traže pretragom na poslužitelju). */
+  supplier: PartnerOpt | null;
   models: Array<ComboOption & { cost?: number }>;
   action: ServerAction<SaveInput>;
   cancelHref: string;
@@ -75,7 +78,7 @@ export function OrderForm({
       <Card title="Zaglavlje">
         <FormGrid cols={4}>
           <Field label="Dobavljač" required className="sm:col-span-2">
-            <Combobox options={suppliers} value={v.supplierId} onChange={(id) => setV((s) => ({ ...s, supplierId: id }))} placeholder="Odaberite dobavljača…" />
+            <PartnerCombobox role="supplier" initial={supplier} value={v.supplierId} onChange={(id) => setV((s) => ({ ...s, supplierId: id }))} placeholder="Odaberite dobavljača…" />
           </Field>
           <Field label="Datum" required>
             <Input type="date" value={v.date} onChange={(e) => setV((s) => ({ ...s, date: e.target.value }))} />

@@ -1,7 +1,9 @@
 import Link from 'next/link';
 import { Inbox, Plus } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
-import { listSupplierInvoices, supplierInvoiceYears, supplierOptions } from '@/server/queries/purchasing';
+import { listSupplierInvoices, supplierInvoiceYears } from '@/server/queries/purchasing';
+import { partnerOptionsByIds } from '@/server/queries/partner-options';
+import { PartnerFilter } from '@/components/partners/partner-combobox';
 import { getCompany } from '@/server/queries/lookups';
 import { can } from '@/domain/permissions';
 import { num } from '@/domain/money';
@@ -28,7 +30,7 @@ export default async function SupplierInvoicesPage({ searchParams }: { searchPar
   const sp = await searchParams;
   const pg = readPage(sp, 50);
   const c = user.companyId;
-  const [list, years, suppliers, company] = await Promise.all([listSupplierInvoices(c, sp, pg), supplierInvoiceYears(c), supplierOptions(c), getCompany(c)]);
+  const [list, years, suppliers, company] = await Promise.all([listSupplierInvoices(c, sp, pg), supplierInvoiceYears(c), partnerOptionsByIds(c, [typeof sp.supplier === 'string' ? sp.supplier : null]), getCompany(c)]);
   const canEdit = can(user.perms, 'purchasing', 'edit');
   const hasProvider = !!company.eInvoiceProvider && company.eInvoiceProvider !== 'none';
   const filtered = FILTERS.some((k) => typeof sp[k] === 'string' && sp[k]);
@@ -55,7 +57,7 @@ export default async function SupplierInvoicesPage({ searchParams }: { searchPar
       />
       <FilterBar>
         <SearchFilter placeholder="Broj, dobavljač, kategorija…" />
-        <SelectFilter name="supplier" placeholder="Svi dobavljači" options={suppliers.map((s) => ({ value: s.id, label: s.name }))} />
+        <PartnerFilter name="supplier" role="supplier" placeholder="Svi dobavljači" current={suppliers[0] ?? null} />
         <SelectFilter name="year" placeholder="Sve godine" options={years.map((y) => ({ value: String(y), label: `${y}.` }))} />
         <SelectFilter
           name="status"

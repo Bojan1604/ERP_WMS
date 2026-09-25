@@ -3,9 +3,9 @@ import { CalendarClock, FileSignature, Paperclip, Plus, Receipt, RotateCcw } fro
 import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import { can } from '@/domain/permissions';
-import { getPartnerOptions } from '@/server/queries/lookups';
+import { partnerOptionsByIds } from '@/server/queries/partner-options';
 import { invoiceYears, listInvoices, pendingOut, readInvoiceFilters, unsentCorrections } from '@/server/queries/sales';
-import { pendingForCompany } from '@/server/services/rentals';
+import { pendingRentSummary } from '@/server/queries/pending-rent';
 import { attachmentCounts } from '@/server/services/attachments';
 import { overpaidAmount, paymentState } from '@/domain/invoice';
 import { toISO, today } from '@/domain/dates';
@@ -21,6 +21,7 @@ import { PendingOutNotice } from '@/components/sales/pending-out';
 import { amount, date, eur, integer } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { ExportButtons } from '@/components/ui/export-buttons';
+import { PartnerMultiFilter } from '@/components/partners/partner-combobox';
 
 export const metadata = { title: 'Računi' };
 
@@ -29,7 +30,7 @@ const BASE = '/prodaja/racuni';
 
 async function pendingRentCount(companyId: string) {
   try {
-    return (await pendingForCompany(db, companyId)).length;
+    return (await pendingRentSummary(companyId)).count;
   } catch (e) {
     console.error('[racuni] rate najma', e);
     return 0;
@@ -44,7 +45,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
   const edit = can(user.perms, 'sales', 'edit');
   const [list, partners, years, pendingRent, unsent, out] = await Promise.all([
     listInvoices(user.companyId, f, page),
-    getPartnerOptions(user.companyId, 'customer'),
+    partnerOptionsByIds(user.companyId, f.partner),
     invoiceYears(user.companyId),
     can(user.perms, 'rentals', 'view') ? pendingRentCount(user.companyId) : Promise.resolve(0),
     unsentCorrections(user.companyId),
@@ -122,7 +123,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
         <SearchFilter placeholder="Broj, partner, opis, serijski broj…" />
         {/* na računalu ostali filtri u drugom retku; na mobitelu su svi iza jednog gumba „Filtri" */}
         <div aria-hidden className="h-0 basis-full max-sm:hidden" />
-        <MultiSelectFilter name="partner" label="Partner" options={partners.map((p) => ({ value: p.id, label: p.name }))} />
+        <PartnerMultiFilter label="Partner" role="customer" selected={partners} />
         <MultiSelectFilter
           name="vrsta"
           label="Vrsta"

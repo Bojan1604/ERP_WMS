@@ -3,7 +3,9 @@ import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import { attachmentCounts } from '@/server/services/attachments';
 import { getCompany, getLookups } from '@/server/queries/lookups';
-import { expensePartners, expensesForYear, expenseYears, parseExpenseFilters } from '@/server/queries/expenses';
+import { expensesForYear, expenseYears, parseExpenseFilters } from '@/server/queries/expenses';
+import { partnerOptionsByIds } from '@/server/queries/partner-options';
+import { PartnerFilter } from '@/components/partners/partner-combobox';
 import { can } from '@/domain/permissions';
 import { MONTHS_HR } from '@/domain/dates';
 import { num } from '@/domain/money';
@@ -29,13 +31,9 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
   const c = user.companyId;
   // tablica po stranicama (zbrojevi i grafovi su preko cijele godine, izvoz sadrži sve)
   const pg = readPage(sp, 100);
-  const [data, years, lookups, partners, company] = await Promise.all([
-    expensesForYear(c, f, pg),
-    expenseYears(c),
-    getLookups(c),
-    expensePartners(c),
-    getCompany(c),
-  ]);
+  const [data, years, lookups, company] = await Promise.all([expensesForYear(c, f, pg), expenseYears(c), getLookups(c), getCompany(c)]);
+  // partneri: samo oni na prikazanim ručnim troškovima i u filtru — ostali se u odabiru traže pretragom
+  const partners = await partnerOptionsByIds(c, [...Object.values(data.manual).map((m) => m.partnerId), f.partnerId]);
   const canEdit = can(user.perms, 'expenses', 'edit');
   // oznaka priloga u tablici — jedan groupBy za prikazane troškove
   const attachments = Object.fromEntries(await attachmentCounts(db, c, 'expense', [...new Set(data.rows.map((r) => r.expenseId))]));
@@ -54,7 +52,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
 
   const options = {
     categories: lookups.expenseCategories.map((x) => ({ value: x.id, label: x.name })),
-    partners: partners.map((p) => ({ value: p.id, label: p.name, country: p.country })),
+    partners,
     company: { vatRate: num(company.vatRate), country: company.country },
   };
   const actions = { save: saveExpenseAction, remove: deleteExpenseAction, occurrence: saveOccurrenceAction };
@@ -104,7 +102,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
         <SearchFilter placeholder="Opis, partner, napomena…" />
         <SelectFilter name="month" placeholder="Svi mjeseci" options={MONTHS_HR.map((m, i) => ({ value: String(i + 1), label: m }))} />
         <SelectFilter name="category" placeholder="Sve kategorije" options={options.categories} />
-        <SelectFilter name="partner" placeholder="Svi partneri" options={partners.map((p) => ({ value: p.id, label: p.name }))} />
+        <PartnerFilter role="expense" placeholder="Svi partneri" current={partners.find((p) => p.id === f.partnerId) ?? null} />
         <SelectFilter name="source" placeholder="Svi izvori" options={Object.entries(EXPENSE_SOURCE).map(([value, s]) => ({ value, label: s.label }))} />
         <SegmentFilter
           name="paid"

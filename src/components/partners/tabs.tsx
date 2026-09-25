@@ -28,6 +28,7 @@ export async function InvoicesTab({ companyId, partnerId, params, overdueDays }:
         <span>Promet (neto): <b className="text-fg tnum">{eur(sums.net)}</b></span>
         <span>S PDV-om: <b className="text-fg tnum">{eur(sums.gross)}</b></span>
         <span>Otvoreno: <b className={cn('tnum', sums.open > 0 ? 'text-bad-strong' : 'text-fg')}>{eur(sums.open)}</b></span>
+        {sums.overpaid > 0 && <span title="Preplata — kupac je platio više od iznosa računa">Za povrat kupcu: <b className="tnum text-warn">{eur(sums.overpaid)}</b></span>}
       </div>
       <TableWrap>
         <table className="data-table">

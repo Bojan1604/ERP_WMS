@@ -4,7 +4,8 @@ import { useState } from 'react';
 import { Save } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox, Field, FormGrid, Input, Select, Textarea } from '@/components/ui/field';
-import { Combobox, type ComboOption } from '@/components/ui/combobox';
+import { PartnerCombobox } from '@/components/partners/partner-combobox';
+import type { PartnerOpt } from '@/lib/partner-option';
 import { useAction, FormError } from '@/components/ui/action';
 import { BILLING_MODE_LABEL, type BillingCode, type BillingModeCode } from '@/domain/billing';
 import { BILLING_OPTIONS, MONTH_OPTIONS } from '@/domain/plan';
@@ -37,21 +38,20 @@ export function ContractForm({
   mode,
   initial,
   contractId,
-  partners,
-  partnerId: initialPartner,
+  partner,
   items = [],
   readOnly,
 }: {
   mode: 'create' | 'edit';
   initial: TermsValue;
   contractId?: string;
-  partners?: ComboOption[];
-  partnerId?: string | null;
+  /** Unaprijed odabrani klijent (novi ugovor iz skladišta / kartice partnera). */
+  partner?: PartnerOpt | null;
   items?: string[];
   readOnly?: boolean;
 }) {
   const [v, setV] = useState(initial);
-  const [partnerId, setPartnerId] = useState<string | null>(initialPartner ?? null);
+  const [partnerId, setPartnerId] = useState<string | null>(partner?.id ?? null);
   const [fixedTerm, setFixedTerm] = useState(Boolean(initial.endDate));
   const [seasonal, setSeasonal] = useState(Boolean(initial.seasonFrom));
   const [deferred, setDeferred] = useState(Boolean(initial.firstBillingDate && initial.firstBillingDate !== initial.startDate));
@@ -79,7 +79,7 @@ export function ContractForm({
       <FormGrid cols={mode === 'create' ? 2 : 3}>
         {mode === 'create' && (
           <Field label="Klijent" required error={fields.partnerId} className="sm:col-span-2">
-            <Combobox options={partners ?? []} value={partnerId} onChange={(id) => setPartnerId(id)} placeholder="Odaberite klijenta…" />
+            <PartnerCombobox role="customer" initial={partner} value={partnerId} onChange={(id) => setPartnerId(id)} placeholder="Odaberite klijenta…" />
           </Field>
         )}
         <Field label="Broj ugovora" hint={mode === 'create' ? 'Prazno = automatski.' : undefined} error={fields.number}>

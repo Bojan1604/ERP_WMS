@@ -180,11 +180,11 @@ async function notBeforeLastIssued(tx: Tx, companyId: string, date: string) {
 }
 
 /** Izdavanje jedne ili više rata odjednom (u jednoj transakciji), po želji odmah plaćeno. */
-export async function issueInstallments(tx: Tx, actor: Actor, rows: Array<{ contractId: string; period: string }>, opts: { paid?: boolean } = {}) {
+export async function issueInstallments(tx: Tx, actor: Actor, rows: Array<{ contractId: string; period: string }>, opts: { paid?: boolean; date?: string } = {}) {
   await lockInstallments(tx, actor.companyId, rows);
-  // svi računi nose datum izdavanja (danas) — izdaju se redom razdoblja
+  // svi računi nose datum izdavanja (danas; demo podaci predaju povijesni dan) — izdaju se redom razdoblja
   const drafts = [];
-  for (const r of rows) drafts.push(await draftInstallment(tx, actor, r.contractId, r.period));
+  for (const r of rows) drafts.push(await draftInstallment(tx, actor, r.contractId, r.period, { date: opts.date }));
   drafts.sort((a, b) => (a.period ?? '').localeCompare(b.period ?? ''));
   const numbers: string[] = [];
   for (const d of drafts) {

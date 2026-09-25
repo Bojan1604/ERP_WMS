@@ -1,9 +1,10 @@
 import 'server-only';
-import { revalidatePath } from 'next/cache';
+import { revalidatePath, revalidateTag } from 'next/cache';
 import { Prisma } from '@prisma/client';
 import { z, ZodError } from 'zod';
 import { requireAccess, requireUser, type SessionUser } from './auth';
 import { AuthError, DomainError } from './errors';
+import { pendingRentTag } from './queries/pending-rent';
 import type { Level, Module } from '@/domain/permissions';
 
 import type { ActionResult } from '@/lib/action-result';
@@ -35,6 +36,9 @@ export function action<S extends z.ZodTypeAny, R>(
       const out = await handler(input, user);
       const meta = isMeta(out) ? out : { data: out as R };
       for (const p of meta.revalidate ?? ['/']) revalidatePath(p, 'layout');
+      // keširani broj rata najma (nadzorna ploča, računi) — svaka promjena u firmi ga poništava
+      // (akcije samo za čitanje vraćaju `revalidate: []`)
+      if (meta.revalidate?.length !== 0) revalidateTag(pendingRentTag(user.companyId));
       return { ok: true, data: meta.data as R, message: meta.message, redirect: meta.redirect };
     } catch (e) {
       return toError(e);
@@ -59,6 +63,9 @@ export function userAction<S extends z.ZodTypeAny, R>(
       const out = await handler(input, user);
       const meta = isMeta(out) ? out : { data: out as R };
       for (const p of meta.revalidate ?? ['/']) revalidatePath(p, 'layout');
+      // keširani broj rata najma (nadzorna ploča, računi) — svaka promjena u firmi ga poništava
+      // (akcije samo za čitanje vraćaju `revalidate: []`)
+      if (meta.revalidate?.length !== 0) revalidateTag(pendingRentTag(user.companyId));
       return { ok: true, data: meta.data as R, message: meta.message, redirect: meta.redirect };
     } catch (e) {
       return toError(e);

@@ -7,6 +7,7 @@ import { addOutToContract } from '@/server/services/warehouse';
 import { audit } from '@/server/audit';
 import { zId, zIds, zOptId, zOptText } from '@/server/zod';
 import { cancelOut, receiveReturned } from '@/server/services/warehouse';
+import { escapeLike } from '@/lib/like';
 
 export const cancelOutAction = action({ module: 'warehouse', level: 'ops' }, z.object({ itemIds: zIds }), async ({ itemIds }, user) =>
   transaction(async (tx) => {
@@ -37,7 +38,7 @@ export const activeContractsAction = action(
         companyId: user.companyId,
         status: { in: ['ACTIVE', 'PAUSED'] },
         ...(partnerId && !q ? { partnerId } : {}),
-        ...(q ? { OR: [{ number: { contains: q, mode: 'insensitive' } }, { partner: { name: { contains: q, mode: 'insensitive' } } }] } : {}),
+        ...(q ? { OR: [{ number: { contains: escapeLike(q), mode: 'insensitive' } }, { partner: { name: { contains: escapeLike(q), mode: 'insensitive' } } }] } : {}),
       },
       orderBy: [{ startDate: 'desc' }],
       take: 40,

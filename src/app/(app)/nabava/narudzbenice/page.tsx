@@ -1,7 +1,9 @@
 import Link from 'next/link';
 import { ClipboardList, Plus, TriangleAlert } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
-import { listOrders, lowStock, orderYears, supplierOptions } from '@/server/queries/purchasing';
+import { listOrders, lowStock, orderYears } from '@/server/queries/purchasing';
+import { partnerOptionsByIds } from '@/server/queries/partner-options';
+import { PartnerFilter } from '@/components/partners/partner-combobox';
 import { modelLabel } from '@/server/queries/lookups';
 import { can, canSeeCost } from '@/domain/permissions';
 import { ExportButtons } from '@/components/ui/export-buttons';
@@ -20,7 +22,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
   const sp = await searchParams;
   const pg = readPage(sp, 50);
   const c = user.companyId;
-  const [list, low, years, suppliers] = await Promise.all([listOrders(c, sp, pg), lowStock(c), orderYears(c), supplierOptions(c)]);
+  const [list, low, years, suppliers] = await Promise.all([listOrders(c, sp, pg), lowStock(c), orderYears(c), partnerOptionsByIds(c, [typeof sp.supplier === 'string' ? sp.supplier : null])]);
   const canEdit = can(user.perms, 'purchasing', 'edit');
   const filtered = ['q', 'status', 'supplier', 'year'].some((k) => typeof sp[k] === 'string' && sp[k]);
   const toOrder = low.filter((m) => m.missing > 0);
@@ -106,7 +108,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
           placeholder="Svi statusi"
           options={[{ value: 'open', label: 'Otvorene (čeka robu)' }, ...Object.entries(ORDER_STATUS).map(([value, s]) => ({ value, label: s.label }))]}
         />
-        <SelectFilter name="supplier" placeholder="Svi dobavljači" options={suppliers.map((s) => ({ value: s.id, label: s.name }))} />
+        <PartnerFilter name="supplier" role="supplier" placeholder="Svi dobavljači" current={suppliers[0] ?? null} />
         <SelectFilter name="year" placeholder="Sve godine" options={years.map((y) => ({ value: String(y), label: `${y}.` }))} />
         {filtered && (
           <Link prefetch={false} href="/nabava/narudzbenice" className="text-sm text-fg-3 hover:text-fg">

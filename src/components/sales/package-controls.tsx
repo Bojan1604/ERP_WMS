@@ -5,7 +5,7 @@ import { Boxes, FileText, Package, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { Field, Input, Select } from '@/components/ui/field';
-import { Combobox } from '@/components/ui/combobox';
+import { PartnerCombobox } from '@/components/partners/partner-combobox';
 import { ActionButton, FormError, useAction } from '@/components/ui/action';
 import { amount, pct } from '@/lib/format';
 import { parseNumber } from '@/domain/money';
@@ -157,7 +157,7 @@ const TARGETS = [
 ] as const;
 
 /** Paket → ponuda, predračun ili nacrt računa za odabranog kupca (cijene prema kupcu). */
-export function PackageConvert({ id, partners, disabled }: { id: string; partners: Array<{ id: string; name: string }>; disabled?: string | null }) {
+export function PackageConvert({ id, disabled }: { id: string; disabled?: string | null }) {
   const [open, setOpen] = useState(false);
   const [partnerId, setPartnerId] = useState<string | null>(null);
   const [target, setTarget] = useState<(typeof TARGETS)[number]['value']>('QUOTE');
@@ -183,7 +183,7 @@ export function PackageConvert({ id, partners, disabled }: { id: string; partner
       >
         <div className="space-y-3">
           <Field label="Kupac" required>
-            <Combobox options={partners.map((p) => ({ value: p.id, label: p.name }))} value={partnerId} onChange={setPartnerId} placeholder="Odaberite kupca…" />
+            <PartnerCombobox role="customer" value={partnerId} onChange={(id) => setPartnerId(id)} placeholder="Odaberite kupca…" />
           </Field>
           <Field label="Dokument">
             <Select value={target} onChange={(e) => setTarget(e.target.value as typeof target)} options={TARGETS.map((t) => ({ value: t.value, label: t.label }))} />

@@ -2,7 +2,8 @@ import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import { pageAccess } from '@/server/auth';
 import { getLookups, modelLabel } from '@/server/queries/lookups';
-import { getOrder, lastCosts, supplierOptions } from '@/server/queries/purchasing';
+import { getOrder, lastCosts } from '@/server/queries/purchasing';
+import { partnerOptionsByIds } from '@/server/queries/partner-options';
 import { toISO } from '@/domain/dates';
 import { canSeeCost } from '@/domain/permissions';
 import { num } from '@/domain/money';
@@ -18,7 +19,7 @@ export default async function EditOrderPage({ params }: { params: Promise<{ id: 
   const order = await getOrder(user.companyId, id);
   if (!order) notFound();
   if (order.status === 'RECEIVED' || order.status === 'CANCELLED') redirect(`/nabava/narudzbenice/${id}`);
-  const [lookups, suppliers, costs] = await Promise.all([getLookups(user.companyId), supplierOptions(user.companyId, order.supplierId), lastCosts(user.companyId)]);
+  const [lookups, [supplier], costs] = await Promise.all([getLookups(user.companyId), partnerOptionsByIds(user.companyId, [order.supplierId]), lastCosts(user.companyId)]);
   const models = lookups.models.map((m) => ({ value: m.id, label: modelLabel(m), cost: costs.get(m.id) ?? 0 }));
   // model koji više nije aktivan, a na stavci je
   for (const l of order.lines) if (!models.some((m) => m.value === l.modelId)) models.push({ value: l.modelId, label: modelLabel(l.model), cost: 0 });
@@ -42,7 +43,7 @@ export default async function EditOrderPage({ params }: { params: Promise<{ id: 
           note: order.note,
           lines: order.lines.map((l) => ({ id: l.id, modelId: l.modelId, qty: l.qty, unitCost: num(l.unitCost), received: l.received })),
         }}
-        suppliers={suppliers.map((s) => ({ value: s.id, label: s.name }))}
+        supplier={supplier ?? null}
         models={models}
         action={saveOrderAction}
         cancelHref={`/nabava/narudzbenice/${id}`}

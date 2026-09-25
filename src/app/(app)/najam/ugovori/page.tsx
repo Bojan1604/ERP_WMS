@@ -2,7 +2,8 @@ import Link from 'next/link';
 import { FileSignature, Paperclip, Plus } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { can } from '@/domain/permissions';
-import { getPartnerOptions } from '@/server/queries/lookups';
+import { partnerOptionsByIds } from '@/server/queries/partner-options';
+import { PartnerMultiFilter } from '@/components/partners/partner-combobox';
 import { BILLINGS, CONTRACT_STATUSES, EXPIRING_DAYS, listContracts } from '@/server/queries/contract-list';
 import { BILLING_LABEL, CONTRACT_STATUS_LABEL } from '@/domain/billing';
 import { FilterBar, MultiSelectFilter, SearchFilter, SegmentFilter, ToggleFilter } from '@/components/ui/filters';
@@ -14,7 +15,7 @@ import { ContractStatusBadge, billingText } from '@/components/rentals/badges';
 import { seasonLabel } from '@/domain/plan';
 import { date, eur, integer } from '@/lib/format';
 import { ExportButtons } from '@/components/ui/export-buttons';
-import { queryWithout } from '@/lib/list-params';
+import { parseMulti, queryWithout } from '@/lib/list-params';
 
 export const metadata = { title: 'Ugovori o najmu' };
 
@@ -28,7 +29,7 @@ export default async function ContractsPage({ searchParams }: { searchParams: SP
   const page = readPage(params, 50);
   const [{ rows, total, summary }, partners] = await Promise.all([
     listContracts(user.companyId, params, page),
-    getPartnerOptions(user.companyId, 'customer'),
+    partnerOptionsByIds(user.companyId, parseMulti(params, 'partner')),
   ]);
   const qs = queryWithout(params).toString();
   const y = summary.year;
@@ -61,7 +62,7 @@ export default async function ContractsPage({ searchParams }: { searchParams: SP
         />
         <SearchFilter placeholder="Broj ugovora ili klijent…" />
         <MultiSelectFilter name="status" label="Status" options={CONTRACT_STATUSES.map((s) => ({ value: s, label: CONTRACT_STATUS_LABEL[s] }))} />
-        <MultiSelectFilter name="partner" label="Klijent" options={partners.map((p) => ({ value: p.id, label: p.name }))} />
+        <PartnerMultiFilter label="Klijent" role="customer" selected={partners} />
         <MultiSelectFilter name="billing" label="Naplata" options={BILLINGS.map((b) => ({ value: b, label: BILLING_LABEL[b] }))} />
         <ToggleFilter name="iskljuceni" label="Prikaži isključene partnere" />
       </FilterBar>

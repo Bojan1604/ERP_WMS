@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '../db';
 import { deviceWhere, orgWhere, sharedWhere, type MdmScope } from '../mdm/scope';
 import { ONLINE_GRACE_SEC, type AlertKind } from '@/domain/mdm';
+import { escapeLike } from '@/lib/like';
 
 /**
  * Čitanja za MDM stranice. Sve ide kroz opseg korisnika (deviceWhere/orgWhere);
@@ -77,7 +78,7 @@ export async function deviceListWhere(scope: MdmScope, f: DeviceFilters, opts: {
   const now = opts.now ?? new Date();
   const and: Prisma.MdmDeviceWhereInput[] = [deviceWhere(scope)];
   if (f.q) {
-    const c = { contains: f.q, mode: 'insensitive' as const };
+    const c = { contains: escapeLike(f.q), mode: 'insensitive' as const };
     and.push({ OR: [{ name: c }, { serial: c }, { model: c }, { ipAddress: c }, { imei: c }, { hardwareId: c }, { enrollCode: f.q }] });
   }
   // organizacija uključuje i njene klijente (distributer → svi njegovi uređaji)
@@ -233,7 +234,7 @@ export async function erpMatches(companyId: string, serial: string | null, linke
   // serijski broj s uređaja i u skladištu se mogu razlikovati u razmacima i velikim/malim slovima
   const sn = serial?.trim();
   // Prisma `equals` + insensitive postaje ILIKE — % i _ se escapeaju da budu doslovni
-  if (sn) or.push({ serial: { equals: sn.replace(/[\\%_]/g, '\\$&'), mode: 'insensitive' } });
+  if (sn) or.push({ serial: { equals: escapeLike(sn), mode: 'insensitive' } });
   if (linkedItemId) or.push({ id: linkedItemId });
   if (!or.length) return [];
   const [items, company] = await Promise.all([

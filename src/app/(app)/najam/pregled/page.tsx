@@ -1,7 +1,9 @@
 import { Table2 } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { can } from '@/domain/permissions';
-import { getLookups, getPartnerOptions } from '@/server/queries/lookups';
+import { getLookups } from '@/server/queries/lookups';
+import { partnerOptionsByIds } from '@/server/queries/partner-options';
+import { PartnerFilter } from '@/components/partners/partner-combobox';
 import { FilterBar, MultiSelectFilter, SearchFilter, SelectFilter, ToggleFilter } from '@/components/ui/filters';
 import { Pagination, readPage } from '@/components/ui/pagination';
 import { Empty, PageHeader, TableWrap } from '@/components/ui/misc';
@@ -23,7 +25,7 @@ export default async function RentOverviewPage({ searchParams }: { searchParams:
   const [data, lookups, partners] = await Promise.all([
     loadOverview(user.companyId, f, page),
     getLookups(user.companyId),
-    getPartnerOptions(user.companyId, 'customer'),
+    partnerOptionsByIds(user.companyId, [f.partner]),
   ]);
   const cy = Number(today().slice(0, 4));
   const years = Array.from({ length: 7 }, (_, i) => cy + 1 - i);
@@ -44,7 +46,7 @@ export default async function RentOverviewPage({ searchParams }: { searchParams:
       <FilterBar>
         <SelectFilter name="godina" placeholder={`${cy}.`} options={years.filter((y) => y !== cy).map((y) => ({ value: String(y), label: `${y}.` }))} />
         <SearchFilter placeholder="Serijski, model, klijent…" />
-        <SelectFilter name="partner" placeholder="Svi klijenti" options={partners.map((p) => ({ value: p.id, label: p.name }))} />
+        <PartnerFilter role="customer" placeholder="Svi klijenti" current={partners[0] ?? null} />
         <SelectFilter name="kategorija" placeholder="Sve kategorije" options={lookups.categories.map((c) => ({ value: c.id, label: c.name }))} />
         <SelectFilter name="model" placeholder="Svi modeli" options={lookups.models.map((m) => ({ value: m.id, label: [m.brand, m.name].filter(Boolean).join(' ') }))} />
         <MultiSelectFilter name="status" label="Status" options={lookups.statuses.map((st) => ({ value: st.id, label: st.name }))} />

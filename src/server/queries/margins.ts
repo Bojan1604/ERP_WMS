@@ -7,6 +7,7 @@ import { num, r2 } from '@/domain/money';
 import { grossMargin, priceFromMargin, suggestedSalePrice } from '@/domain/pricing';
 import { expandExpense, type FrequencyCode } from '@/domain/expenses';
 import { paramStr, parseDateRange, parseMulti, type SearchParams } from '@/lib/list-params';
+import { escapeLike } from '@/lib/like';
 
 /**
  * Marže i profit (Prodaja → Marže): prodani uređaji s poznatom prodajnom
@@ -64,7 +65,7 @@ function soldWhere(companyId: string, f: MarginFilters): Prisma.Sql {
   if (f.models.length) parts.push(Prisma.sql`i."modelId" IN (${Prisma.join(f.models)})`);
   if (f.partners.length) parts.push(Prisma.sql`i."partnerId" IN (${Prisma.join(f.partners)})`);
   if (f.q) {
-    const like = `%${f.q}%`;
+    const like = `%${escapeLike(f.q)}%`;
     parts.push(Prisma.sql`(i.serial ILIKE ${like} OR m.name ILIKE ${like} OR COALESCE(m.brand, '') ILIKE ${like} OR COALESCE(p.name, '') ILIKE ${like})`);
   }
   return Prisma.join(parts, ' AND ');
@@ -123,16 +124,34 @@ export interface MarginGroup {
 
 /** Skupine po kupcu, modelu ili kategoriji (samo uređaji s prodajnom cijenom), najveći profit prvi. */
 export async function marginGroups(companyId: string, f: MarginFilters, by: 'kupac' | 'model' | 'kategorija'): Promise<MarginGroup[]> {
+  return (await marginGroupsPage(companyId, f, by)).rows;
+}
+
+/** Isto po stranicama: redoslijed (profit) i straničenje u bazi; `total` = broj skupina. */
+export async function marginGroupsPage(
+  companyId: string,
+  f: MarginFilters,
+  by: 'kupac' | 'model' | 'kategorija',
+  page?: { skip: number; take: number },
+): Promise<{ rows: MarginGroup[]; total: number }> {
   const key =
     by === 'kupac'
       ? Prisma.sql`i."partnerId"`
       : by === 'model'
         ? Prisma.sql`i."modelId"`
         : Prisma.sql`COALESCE(i."categoryId", m."categoryId")`;
-  const rows = await db.$queryRaw<Array<{ key: string | null; n: bigint; cost: Prisma.Decimal | null; revenue: Prisma.Decimal | null }>>`
-    SELECT ${key} AS key, count(*) AS n, sum(i.cost) AS cost, sum(i."salePrice") AS revenue
+  const rows = await db.$queryRaw<Array<{ key: string | null; n: bigint; cost: Prisma.Decimal | null; revenue: Prisma.Decimal | null; total: bigint }>>`
+    SELECT ${key} AS key, count(*) AS n, sum(i.cost) AS cost, sum(i."salePrice") AS revenue, count(*) OVER () AS total
     ${SOLD_FROM} WHERE ${soldWhere(companyId, f)} AND i."salePrice" > 0
-    GROUP BY 1`;
+    GROUP BY 1
+    ORDER BY sum(i."salePrice") - sum(i.cost) DESC, 1
+    ${page ? Prisma.sql`OFFSET ${page.skip} LIMIT ${page.take}` : Prisma.empty}`;
+  // stranica iza zadnje: broj skupina posebnim upitom
+  const total = rows.length
+    ? Number(rows[0].total)
+    : page && page.skip > 0
+      ? Number((await db.$queryRaw<Array<{ n: bigint }>>`SELECT count(*) AS n FROM (SELECT ${key} ${SOLD_FROM} WHERE ${soldWhere(companyId, f)} AND i."salePrice" > 0 GROUP BY 1) g`)[0]?.n ?? 0)
+      : 0;
   const ids = rows.map((r) => r.key).filter((x): x is string => !!x);
   const names = new Map<string, string>();
   if (ids.length) {
@@ -141,14 +160,15 @@ export async function marginGroups(companyId: string, f: MarginFilters, by: 'kup
       (await db.deviceModel.findMany({ where: { companyId, id: { in: ids } }, select: { id: true, brand: true, name: true } })).forEach((x) => names.set(x.id, [x.brand, x.name].filter(Boolean).join(' ')));
     else (await db.category.findMany({ where: { companyId, id: { in: ids } }, select: { id: true, name: true } })).forEach((x) => names.set(x.id, x.name));
   }
-  return rows
-    .map((r) => {
+  return {
+    total,
+    rows: rows.map((r) => {
       const cost = r2(num(r.cost));
       const revenue = r2(num(r.revenue));
       const n = Number(r.n);
       return { key: r.key, label: r.key ? (names.get(r.key) ?? '—') : '—', n, cost, revenue, profit: r2(revenue - cost), margin: grossMargin(revenue, cost), avgPrice: n ? r2(revenue / n) : 0 };
-    })
-    .sort((a, b) => b.profit - a.profit);
+    }),
+  };
 }
 
 /** Prodani uređaji (po stranicama, filtar i redoslijed u bazi). */
@@ -160,9 +180,9 @@ export async function soldItems(companyId: string, f: MarginFilters, page: { ski
   if (f.q) {
     and.push({
       OR: [
-        { serial: { contains: f.q, mode: 'insensitive' } },
-        { model: { name: { contains: f.q, mode: 'insensitive' } } },
-        { partner: { name: { contains: f.q, mode: 'insensitive' } } },
+        { serial: { contains: escapeLike(f.q), mode: 'insensitive' } },
+        { model: { name: { contains: escapeLike(f.q), mode: 'insensitive' } } },
+        { partner: { name: { contains: escapeLike(f.q), mode: 'insensitive' } } },
       ],
     });
   }
@@ -273,22 +293,45 @@ export async function business(companyId: string, f: MarginFilters) {
       LIMIT 100`,
   ]);
 
-  // rashodi: jednokratni u rasponu i ponavljajući koji su počeli prije kraja raspona
+  // rashodi: jednokratni se zbrajaju u bazi (po kategoriji i mjesecu), ponavljajući (malo zapisa)
+  // koji su počeli prije kraja raspona šire se u rate u JS-u (expandExpense: preskočene/izmijenjene rate)
   const bookedTo = to < t ? to : t;
-  const expenses = await db.expense.findMany({
-    where: {
-      companyId,
-      date: { lte: fromISO(to) },
-      OR: [{ frequency: null, date: { gte: fromISO(from) } }, { frequency: { not: null }, OR: [{ recurringUntil: null }, { recurringUntil: { gte: fromISO(from) } }] }],
-      AND: [{ OR: [{ partnerId: null }, { partner: { excluded: false } }] }, ...(f.partners.length ? [{ OR: [{ partnerId: null }, { partnerId: { in: f.partners } }] }] : [])],
-    },
-    select: { id: true, date: true, netAmount: true, vatAmount: true, frequency: true, recurringUntil: true, overrides: true, category: { select: { name: true } } },
-  });
+  const expensePartner = Prisma.sql`(e."partnerId" IS NULL OR NOT ep.excluded) ${f.partners.length ? Prisma.sql`AND (e."partnerId" IS NULL OR e."partnerId" IN (${Prisma.join(f.partners)}))` : Prisma.empty}`;
+  const [oneOff, recurring] = await Promise.all([
+    db.$queryRaw<Array<{ cat: string | null; m: number; amount: Prisma.Decimal | null; n: bigint }>>`
+      SELECT c.name AS cat, extract(month FROM e.date)::int AS m, sum(e."netAmount") AS amount, count(*) AS n
+      FROM "Expense" e
+      LEFT JOIN "ExpenseCategory" c ON c.id = e."categoryId"
+      LEFT JOIN "Partner" ep ON ep.id = e."partnerId"
+      WHERE e."companyId" = ${companyId} AND e.frequency IS NULL AND e.date BETWEEN ${fromISO(from)} AND ${fromISO(to)} AND ${expensePartner}
+      GROUP BY 1, 2`,
+    db.expense.findMany({
+      where: {
+        companyId,
+        frequency: { not: null },
+        date: { lte: fromISO(to) },
+        OR: [{ recurringUntil: null }, { recurringUntil: { gte: fromISO(from) } }],
+        AND: [{ OR: [{ partnerId: null }, { partner: { excluded: false } }] }, ...(f.partners.length ? [{ OR: [{ partnerId: null }, { partnerId: { in: f.partners } }] }] : [])],
+      },
+      select: { id: true, date: true, netAmount: true, vatAmount: true, frequency: true, recurringUntil: true, overrides: true, category: { select: { name: true } } },
+    }),
+  ]);
   const byCat = new Map<string, { amount: number; n: number }>();
   const expMonth = new Array(12).fill(0) as number[];
   let expense = 0;
   let expenseN = 0;
-  for (const e of expenses) {
+  const book = (cat: string | null | undefined, month: number, amount: number, n: number) => {
+    const k = cat ?? 'Bez kategorije';
+    const cur = byCat.get(k) ?? { amount: 0, n: 0 };
+    cur.amount += amount;
+    cur.n += n;
+    byCat.set(k, cur);
+    expMonth[month - 1] += amount;
+    expense += amount;
+    expenseN += n;
+  };
+  for (const r of oneOff) book(r.cat, r.m, num(r.amount), Number(r.n));
+  for (const e of recurring) {
     const occ = expandExpense(
       {
         id: e.id,
@@ -303,16 +346,7 @@ export async function business(companyId: string, f: MarginFilters) {
       to,
       bookedTo,
     );
-    for (const o of occ) {
-      const k = e.category?.name ?? 'Bez kategorije';
-      const cur = byCat.get(k) ?? { amount: 0, n: 0 };
-      cur.amount += o.netAmount;
-      cur.n += 1;
-      byCat.set(k, cur);
-      expMonth[Number(o.period.slice(5, 7)) - 1] += o.netAmount;
-      expense += o.netAmount;
-      expenseN += 1;
-    }
+    for (const o of occ) book(e.category?.name, Number(o.period.slice(5, 7)), o.netAmount, 1);
   }
 
   const s = sums[0];

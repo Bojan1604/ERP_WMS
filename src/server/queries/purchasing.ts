@@ -4,6 +4,7 @@ import { db } from '../db';
 import { num, r2 } from '@/domain/money';
 import { addDays, fromISO, toISO } from '@/domain/dates';
 import { goodsInvoiceContext } from '../services/supplier-invoices';
+import { escapeLike } from '@/lib/like';
 
 type Params = Record<string, string | string[] | undefined>;
 const str = (v: string | string[] | undefined) => (typeof v === 'string' && v.trim() ? v.trim() : null);
@@ -12,7 +13,7 @@ const yearOf = (v: string | string[] | undefined) => {
   return Number.isInteger(y) && y > 1900 && y < 3000 ? y : null;
 };
 const yearRange = (y: number) => ({ gte: fromISO(`${y}-01-01`), lt: fromISO(`${y + 1}-01-01`) });
-const ci = (q: string) => ({ contains: q, mode: 'insensitive' as const });
+const ci = (q: string) => ({ contains: escapeLike(q), mode: 'insensitive' as const });
 
 const ORDER_STATUSES: OrderStatus[] = ['DRAFT', 'ORDERED', 'PARTIAL', 'RECEIVED', 'CANCELLED'];
 
@@ -321,15 +322,6 @@ export async function getSupplierInvoice(companyId: string, id: string) {
 export async function recentSupplierReceipts(companyId: string, supplierId: string, invoiceDate: Date) {
   const from = fromISO(addDays(toISO(invoiceDate), -90));
   return db.goodsReceipt.count({ where: { companyId, supplierId, status: 'POSTED', date: { gte: from } } });
-}
-
-/** Dobavljači za odabir: partneri označeni kao dobavljači (+ trenutni, ako to više nije). */
-export async function supplierOptions(companyId: string, includeId?: string | null) {
-  return db.partner.findMany({
-    where: { companyId, OR: [{ isSupplier: true }, ...(includeId ? [{ id: includeId }] : [])] },
-    orderBy: { name: 'asc' },
-    select: { id: true, name: true, city: true, country: true },
-  });
 }
 
 /** Zadnja nabavna cijena po modelu (prijedlog cijene na narudžbenici). */

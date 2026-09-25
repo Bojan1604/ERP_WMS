@@ -1,6 +1,7 @@
 import 'server-only';
 import { db } from '../db';
 import { can, type PermissionMap } from '@/domain/permissions';
+import { escapeLike } from '@/lib/like';
 
 const LIMIT = 10;
 
@@ -10,7 +11,7 @@ const LIMIT = 10;
  */
 export async function globalSearch(companyId: string, perms: PermissionMap, raw: string) {
   const q = raw.trim().slice(0, 100);
-  const ci = { contains: q, mode: 'insensitive' as const };
+  const ci = { contains: escapeLike(q), mode: 'insensitive' as const };
   const on = <T,>(ok: boolean, fn: () => Promise<T[]>) => (ok ? fn() : Promise.resolve(null));
 
   const [exact, devices, invoices, partners, contracts, quotes, services] = await Promise.all([
@@ -33,7 +34,7 @@ export async function globalSearch(companyId: string, perms: PermissionMap, raw:
     ),
     on(can(perms, 'partners'), () =>
       db.partner.findMany({
-        where: { companyId, OR: [{ name: ci }, { oib: { startsWith: q } }, { vatId: ci }] },
+        where: { companyId, OR: [{ name: ci }, { oib: { startsWith: escapeLike(q) } }, { vatId: ci }] },
         orderBy: { name: 'asc' },
         take: LIMIT,
         select: { id: true, name: true, oib: true, city: true, excluded: true },

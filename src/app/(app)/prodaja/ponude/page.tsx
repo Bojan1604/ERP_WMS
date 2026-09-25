@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { FileText, Plus } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { can } from '@/domain/permissions';
-import { getPartnerOptions } from '@/server/queries/lookups';
+import { partnerOptionsByIds } from '@/server/queries/partner-options';
 import { listQuotes, readQuoteFilters } from '@/server/queries/sales';
 import { toISO, today } from '@/domain/dates';
 import { num } from '@/domain/money';
@@ -11,6 +11,7 @@ import { ExportButtons } from '@/components/ui/export-buttons';
 import { getCompany } from '@/server/queries/lookups';
 import { LinkButton } from '@/components/ui/button';
 import { FilterBar, SearchFilter, SegmentFilter, SelectFilter } from '@/components/ui/filters';
+import { PartnerFilter } from '@/components/partners/partner-combobox';
 import { Pagination, readPage } from '@/components/ui/pagination';
 import { QuoteBadge, quoteStatus } from '@/components/sales/quote-status';
 import { amount, date, integer, pct } from '@/lib/format';
@@ -24,7 +25,7 @@ export default async function QuotesPage({ searchParams }: { searchParams: Promi
   const sp = await searchParams;
   const f = readQuoteFilters(sp);
   const page = readPage(sp, 50);
-  const [list, partners, company] = await Promise.all([listQuotes(user.companyId, f, page), getPartnerOptions(user.companyId, 'customer'), getCompany(user.companyId)]);
+  const [list, partners, company] = await Promise.all([listQuotes(user.companyId, f, page), partnerOptionsByIds(user.companyId, [typeof sp.partner === 'string' ? sp.partner : null]), getCompany(user.companyId)]);
   const cur = Number(today().slice(0, 4));
   const proformaTitle = company.proformaTitle || 'Predračun';
   const edit = can(user.perms, 'sales', 'edit');
@@ -81,7 +82,7 @@ export default async function QuotesPage({ searchParams }: { searchParams: Promi
             { value: 'EXPIRED', label: 'Istekla' },
           ]}
         />
-        <SelectFilter name="partner" placeholder="Svi partneri" options={partners.map((p) => ({ value: p.id, label: p.name }))} />
+        <PartnerFilter role="customer" placeholder="Svi partneri" current={partners[0] ?? null} />
       </FilterBar>
 
       <TableWrap>

@@ -44,7 +44,7 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
   const edit = can(user.perms, 'sales', 'edit');
 
   if (inv.status === 'DRAFT' && edit) {
-    const lookups = await getSalesLookups(user.companyId);
+    const lookups = await getSalesLookups(user.companyId, [inv.partnerId]);
     return (
       <>
         <PageHeader

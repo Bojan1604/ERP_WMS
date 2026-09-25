@@ -19,6 +19,7 @@
     "db:seed": "tsx --conditions=react-server prisma/seed.ts",
     "db:reset": "prisma migrate reset --force",
     "test:db": "DATABASE_URL=${TEST_DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/wms_test?schema=public} tsx --conditions=react-server --test --test-concurrency=1 \"tests/integration/*.test.ts\"",
+    "test:seed": "tsx --conditions=react-server --test \"tests/seed/*.test.ts\"",
     "setup": "prisma migrate deploy && npm run db:seed",
     "serve": "next build && next start",
     "dev:https": "next dev --turbopack --experimental-https"

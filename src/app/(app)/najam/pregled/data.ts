@@ -6,6 +6,7 @@ import { devicePlan, deviceChargesInYear, type ContractDevice, type PlanPeriodIn
 import { today, toISO } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import { parseMulti } from '@/lib/list-params';
+import { escapeLike } from '@/lib/like';
 
 type Params = Record<string, string | string[] | undefined>;
 const str = (v: string | string[] | undefined) => (typeof v === 'string' ? v.trim() : '');
@@ -82,7 +83,7 @@ async function rowIds(companyId: string, f: OverviewFilters): Promise<{ ids: str
         WHERE l."itemId" IS NOT NULL AND v."companyId" = ${companyId} AND v.status = 'ISSUED' AND v.kind = 'INVOICE'
           AND v.type = 'SALE' AND NOT v.stornoed AND v.year = ${f.year})`
     : Prisma.empty;
-  const q = f.q ? `%${f.q.replace(/[%_\\]/g, (m) => `\\${m}`)}%` : '';
+  const q = f.q ? `%${escapeLike(f.q)}%` : '';
   const rows = await db.$queryRaw<Array<{ id: string } & Omit<RowContractItem, 'contractId' | 'itemId'> & { contractId: string | null }>>`
     SELECT i.id, ci."contractId", ci.monthly::float8 AS monthly, ci.plan, ci.status, ci.paused
     FROM "Item" i

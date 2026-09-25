@@ -12,13 +12,11 @@ export async function PackagesView({
   f,
   edit,
   catalog,
-  partners,
 }: {
   companyId: string;
   f: MarginFilters;
   edit: boolean;
   catalog: React.ComponentProps<typeof PackageEditor>['catalog'];
-  partners: Array<{ id: string; name: string }>;
 }) {
   const rows = await packages(companyId, f);
   if (!rows.length) {
@@ -74,7 +72,7 @@ export async function PackagesView({
           )}
           {edit && (
             <div className="mt-3 flex justify-end">
-              <PackageConvert id={p.id} partners={partners} disabled={p.unavailable.length ? 'Neki uređaji više nisu na skladištu — uredite paket' : null} />
+              <PackageConvert id={p.id} disabled={p.unavailable.length ? 'Neki uređaji više nisu na skladištu — uredite paket' : null} />
             </div>
           )}
         </Card>

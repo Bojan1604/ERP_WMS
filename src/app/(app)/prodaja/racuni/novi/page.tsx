@@ -16,7 +16,7 @@ export const metadata = { title: 'Novi račun' };
 export default async function NewInvoicePage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const user = await pageAccess('sales', 'edit');
   const sp = await searchParams;
-  const lookups = await getSalesLookups(user.companyId);
+  const lookups = await getSalesLookups(user.companyId, [typeof sp.partner === 'string' ? sp.partner : null]);
   const partnerId = typeof sp.partner === 'string' && lookups.partners.some((p) => p.id === sp.partner) ? sp.partner : null;
   const wanted = typeof sp.items === 'string' ? [...new Set(sp.items.split(',').map((s) => s.trim()).filter(Boolean))].slice(0, 500) : [];
   const rent = sp.vrsta === 'najam';

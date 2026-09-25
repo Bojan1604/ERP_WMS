@@ -68,6 +68,12 @@ export default async function PartnerPage({ params, searchParams }: { params: Pr
                 <p className="font-semibold text-bad-strong tnum">{eur(counts.open)}</p>
               </div>
             ) : null}
+            {canSales && counts.overpaid > 0 ? (
+              <div className="rounded-lg bg-warn-soft px-3 py-1.5 text-right" title="Preplata — kupac je platio više od iznosa računa">
+                <p className="text-xs text-warn">Za povrat kupcu ({counts.overpaidCount})</p>
+                <p className="font-semibold text-warn tnum">{eur(counts.overpaid)}</p>
+              </div>
+            ) : null}
           </>
         }
       />

@@ -4,10 +4,11 @@ import { db } from '../db';
 import { expandExpense, type ExpenseInput, type FrequencyCode } from '@/domain/expenses';
 import { fromISO, toISO, today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
+import { escapeLike } from '@/lib/like';
 
 type Params = Record<string, string | string[] | undefined>;
 const str = (v: string | string[] | undefined) => (typeof v === 'string' && v.trim() ? v.trim() : null);
-const ci = (q: string) => ({ contains: q, mode: 'insensitive' as const });
+const ci = (q: string) => ({ contains: escapeLike(q), mode: 'insensitive' as const });
 
 export interface ExpenseFilters {
   year: number;
@@ -255,11 +256,3 @@ export async function expenseYears(companyId: string) {
   return [...years].sort((a, b) => b - a);
 }
 
-/** Partneri za odabir na trošku: dobavljači i svi koji se već pojavljuju na troškovima. */
-export async function expensePartners(companyId: string) {
-  return db.partner.findMany({
-    where: { companyId, OR: [{ isSupplier: true }, { expenses: { some: {} } }] },
-    orderBy: { name: 'asc' },
-    select: { id: true, name: true, country: true },
-  });
-}

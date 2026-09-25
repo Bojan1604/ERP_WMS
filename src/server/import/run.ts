@@ -309,7 +309,7 @@ export async function runImport(
   const counts = planCounts(plan);
   if (!counts.items && !counts.invoices && !counts.partners && !counts.models) throw new DomainError('Datoteka nema podataka za uvoz.');
 
-  return db.$transaction(async (tx) => {
+  const result = await db.$transaction(async (tx) => {
     let companyId = opts.actor.companyId;
     let companyName: string;
     let admin: ImportResult['admin'];
@@ -359,4 +359,22 @@ export async function runImport(
     }
     return { companyId, companyName, created: c.created, skipped: c.skipped, durationMs: Date.now() - t0, steps: c.steps, admin };
   }, { maxWait: 20_000, timeout: IMPORT_TIMEOUT_MS });
+  await analyzeAfterImport(Object.values(result.created).reduce((a, n) => a + n, 0), log);
+  return { ...result, durationMs: Date.now() - t0 };
+}
+
+/**
+ * Nakon velikog uvoza statistika planera je zastarjela (tablice su narasle za desetke tisuća
+ * redaka, autovacuum još nije stigao) pa upiti popisa biraju loše planove — ANALYZE odmah.
+ * Greška ne ruši uvoz (podaci su već spremljeni).
+ */
+export async function analyzeAfterImport(rows: number, log: (m: string) => void = () => {}) {
+  if (rows < 1000) return;
+  const t = Date.now();
+  try {
+    await db.$executeRawUnsafe('ANALYZE');
+    log(`ANALYZE nakon uvoza: ${Date.now() - t} ms`);
+  } catch (e) {
+    console.error('[uvoz] ANALYZE', e);
+  }
 }

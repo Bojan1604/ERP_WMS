@@ -5,7 +5,7 @@ import { Boxes, Info, Layers, PenLine, Save, Wrench } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, Badge, Notice } from '@/components/ui/misc';
 import { Checkbox, Field, Input, Textarea } from '@/components/ui/field';
-import { Combobox } from '@/components/ui/combobox';
+import { PartnerCombobox } from '@/components/partners/partner-combobox';
 import { useAction } from '@/components/ui/action';
 import { useToast } from '@/components/ui/toast';
 import { eur } from '@/lib/format';
@@ -21,7 +21,7 @@ import { TaxFields } from './invoice-tax-fields';
 import { TotalsBox } from './totals-box';
 import { lineKey } from './inputs';
 import { ServicePicker } from './service-picker';
-import { modelName, type EditorLine, type SalesLookups, type ServiceOpt } from './types';
+import { modelName, type EditorLine, type PartnerOpt, type SalesLookups, type ServiceOpt } from './types';
 
 export interface QuoteEditorValue {
   id: string | null;
@@ -54,7 +54,9 @@ export function QuoteEditor({
   showCost?: boolean;
   canCreateService?: boolean;
 }) {
-  const { partners, models, company } = lookups;
+  const { models, company } = lookups;
+  // poznati partneri: trenutni kupac + odabrani pretragom (cijeli popis se ne šalje u preglednik)
+  const [partners, setPartners] = useState<PartnerOpt[]>(lookups.partners);
   const [services, setServices] = useState<ServiceOpt[]>(lookups.services);
   const [v, setV] = useState<QuoteEditorValue>(initial);
   const [stock, setStock] = useState(initialStock);
@@ -72,8 +74,9 @@ export function QuoteEditor({
     [v.lines, v.vatRate, v.discountPct, v.discountAmount],
   );
 
-  const choosePartner = (id: string | null) => {
-    const p = partners.find((x) => x.id === id);
+  const choosePartner = (id: string | null, picked?: PartnerOpt) => {
+    if (picked && !partners.some((x) => x.id === picked.id)) setPartners((cur) => [...cur, picked]);
+    const p = picked ?? partners.find((x) => x.id === id);
     if (!p) return set({ partnerId: null });
     set({ partnerId: p.id, vatRate: customerVat(p, company).rate });
   };
@@ -147,12 +150,7 @@ export function QuoteEditor({
       <Card title="Kupac i rok" className="mb-4">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
           <Field label="Kupac" required className="md:col-span-2">
-            <Combobox
-              options={partners.map((p) => ({ value: p.id, label: p.name, hint: [p.city, p.country !== 'HR' ? p.country : null].filter(Boolean).join(', ') }))}
-              value={v.partnerId}
-              onChange={choosePartner}
-              placeholder="Odaberite kupca…"
-            />
+            <PartnerCombobox role="customer" initial={partners} value={v.partnerId} onChange={choosePartner} placeholder="Odaberite kupca…" />
           </Field>
           <Field label="Datum ponude" required>
             <Input
@@ -285,7 +283,7 @@ export function QuoteEditor({
         categories={lookups.categories}
         warehouses={lookups.warehouses}
         exclude={v.lines.map((l) => l.itemId).filter((x): x is string => !!x)}
-        suppliers={lookups.suppliers}
+        supplierFilter
         statuses={lookups.statuses}
         showCost={showCost}
       />

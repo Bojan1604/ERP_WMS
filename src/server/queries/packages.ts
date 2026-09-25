@@ -4,6 +4,7 @@ import { getCompany } from './lookups';
 import { num } from '@/domain/money';
 import { packageTotals, suggestedSalePrice } from '@/domain/pricing';
 import type { MarginFilters } from './margins';
+import { escapeLike } from '@/lib/like';
 
 /**
  * Paketi: skupine uređaja s ukupnom nabavnom, preporučenom cijenom (zbroj
@@ -15,7 +16,7 @@ export async function packages(companyId: string, f: Pick<MarginFilters, 'q'>) {
   const rows = await db.package.findMany({
     where: {
       companyId,
-      ...(f.q ? { OR: [{ name: { contains: f.q, mode: 'insensitive' } }, { note: { contains: f.q, mode: 'insensitive' } }, { items: { some: { item: { serial: { contains: f.q, mode: 'insensitive' } } } } }] } : {}),
+      ...(f.q ? { OR: [{ name: { contains: escapeLike(f.q), mode: 'insensitive' } }, { note: { contains: escapeLike(f.q), mode: 'insensitive' } }, { items: { some: { item: { serial: { contains: escapeLike(f.q), mode: 'insensitive' } } } } }] } : {}),
     },
     orderBy: [{ createdAt: 'desc' }],
     take: 100,

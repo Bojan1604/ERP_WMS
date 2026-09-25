@@ -60,6 +60,9 @@ src/components/<modul>/  klijentske komponente pojedinog modula
 12. Nazivi ruta i sučelja na hrvatskom, kod (identifikatori) na engleskom, komentari na hrvatskom.
 13. **Nema `loading.tsx` u `(app)`** — u Next 15.5 s prefetchom zaglavi navigaciju unutar iste stranice
      (kartice `?tab=`, straničenje, filtri: URL se ne promijeni). Odziv daje `LinkPending` (`useLinkStatus`).
+14. **Partneri se u preglednik ne šalju cijeli** (tisuće zapisa): odabir je `PartnerCombobox`, filtri `PartnerFilter` /
+     `PartnerMultiFilter` (`components/partners/partner-combobox.tsx`, pretraga `searchPartnerOptions`); stranica razrješava
+     samo odabrane s `partnerOptionsByIds` (`queries/partner-options.ts`). Tekstualna pretraga uvijek kroz `escapeLike` (`lib/like.ts`).
 
 ## Naredbe
 
@@ -71,6 +74,7 @@ npm run db:push        # shema → baza (razvoj)
 npm run db:deploy      # migracije → baza (produkcija)
 npm run test:db        # integracijski testovi servisa (baza wms_test)
 npm run db:seed        # demo firma (admin@demo.hr / admin123)
+npm run test:seed      # seed na praznoj bazi wms_seedtest (stvara je i briše)
 node scripts/smoke.mjs http://localhost:3000 / /skladiste …   # prolaz kroz stranice u pregledniku
 ```
 

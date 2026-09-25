@@ -7,6 +7,7 @@ import { num } from '@/domain/money';
 import { today } from '@/domain/dates';
 import { inOrAll, parseMulti, parseSort, sortOrderBy } from '@/lib/list-params';
 import { ITEM_SORTS, type ItemSort } from '@/domain/warehouse-list';
+import { escapeLike } from '@/lib/like';
 
 type Params = Record<string, string | string[] | undefined>;
 
@@ -64,7 +65,7 @@ export interface SearchIds {
 
 export async function resolveSearch(companyId: string, q: string | null, categoryIds: string[] = []): Promise<SearchIds | undefined> {
   if (!q && !categoryIds.length) return undefined;
-  const contains = q ? { contains: q, mode: 'insensitive' as const } : null;
+  const contains = q ? { contains: escapeLike(q), mode: 'insensitive' as const } : null;
   const [models, partners, catModels] = await Promise.all([
     contains ? db.deviceModel.findMany({ where: { companyId, OR: [{ name: contains }, { brand: contains }] }, select: { id: true }, take: 500 }) : [],
     contains ? db.partner.findMany({ where: { companyId, name: contains }, select: { id: true }, take: 500 }) : [],
@@ -81,7 +82,7 @@ export async function resolveSearch(companyId: string, q: string | null, categor
 export function itemWhere(companyId: string, f: ItemFilters, opts: { ignoreState?: boolean; search?: SearchIds } = {}): Prisma.ItemWhereInput {
   const and: Prisma.ItemWhereInput[] = [];
   if (f.q) {
-    const contains = { contains: f.q, mode: 'insensitive' as const };
+    const contains = { contains: escapeLike(f.q), mode: 'insensitive' as const };
     const or: Prisma.ItemWhereInput[] = [{ serial: contains }, { note: contains }, { dupNote: contains }];
     if (opts.search?.modelIds.length) or.push({ modelId: { in: opts.search.modelIds } });
     if (opts.search?.partnerIds.length) or.push({ partnerId: { in: opts.search.partnerIds } });
@@ -408,7 +409,7 @@ export function returningItems(companyId: string) {
 export function outsideItems(companyId: string, q: string | null) {
   if (!q) return Promise.resolve([]);
   return db.item.findMany({
-    where: { companyId, state: { in: ['SOLD', 'RENTED', 'OTHER'] }, serial: { contains: q, mode: 'insensitive' } },
+    where: { companyId, state: { in: ['SOLD', 'RENTED', 'OTHER'] }, serial: { contains: escapeLike(q), mode: 'insensitive' } },
     orderBy: { serial: 'asc' },
     take: 100,
     select: {
@@ -434,7 +435,7 @@ export async function outCounts(companyId: string) {
 export async function listTransfers(companyId: string, page: { skip: number; take: number }, q: string | null) {
   const where: Prisma.TransferWhereInput = {
     companyId,
-    ...(q ? { OR: [{ number: { contains: q, mode: 'insensitive' } }, { items: { some: { item: { serial: { contains: q, mode: 'insensitive' } } } } }] } : {}),
+    ...(q ? { OR: [{ number: { contains: escapeLike(q), mode: 'insensitive' } }, { items: { some: { item: { serial: { contains: escapeLike(q), mode: 'insensitive' } } } } }] } : {}),
   };
   const [rows, total] = await Promise.all([
     db.transfer.findMany({

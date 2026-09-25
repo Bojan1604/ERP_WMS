@@ -8,6 +8,7 @@ import { DateFilter, FilterBar, SearchFilter, SelectFilter } from '@/components/
 import { Pagination, readPage } from '@/components/ui/pagination';
 import { dateTime } from '@/lib/format';
 import { canSeeCost, redactCostDiff, redactCostSummary } from '@/domain/permissions';
+import { escapeLike } from '@/lib/like';
 
 export const metadata = { title: 'Dnevnik promjena' };
 
@@ -56,7 +57,7 @@ export default async function AuditLogPage({ searchParams }: { searchParams: Pro
   const where: Prisma.AuditLogWhereInput = { companyId: user.companyId };
   if (typeof params.entitet === 'string' && params.entitet) where.entity = params.entitet;
   if (typeof params.korisnik === 'string' && params.korisnik) where.userId = params.korisnik;
-  if (typeof params.q === 'string' && params.q.trim()) where.summary = { contains: params.q.trim(), mode: 'insensitive' };
+  if (typeof params.q === 'string' && params.q.trim()) where.summary = { contains: escapeLike(params.q.trim()), mode: 'insensitive' };
   const from = isoDay(params.od);
   const to = isoDay(params.do);
   if (from || to) where.at = { ...(from ? { gte: fromISO(from) } : {}), ...(to ? { lt: fromISO(addDays(to, 1)) } : {}) };

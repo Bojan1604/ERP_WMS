@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
-import { getPartnerOptions } from '@/server/queries/lookups';
+import { partnerOptionsByIds } from '@/server/queries/partner-options';
 import { Card, Notice, PageHeader } from '@/components/ui/misc';
 import { ContractForm } from '@/components/rentals/contract-form';
 import { today } from '@/domain/dates';
@@ -15,13 +15,12 @@ export default async function NewContractPage({ searchParams }: { searchParams: 
   const params = await searchParams;
   const ids = typeof params.items === 'string' ? params.items.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 500) : [];
   const partnerParam = typeof params.partner === 'string' ? params.partner : null;
-  const [partners, items] = await Promise.all([
-    getPartnerOptions(user.companyId, 'customer'),
+  const [[partner], items] = await Promise.all([
+    partnerOptionsByIds(user.companyId, [partnerParam]),
     ids.length
       ? db.item.findMany({ where: { id: { in: ids }, companyId: user.companyId, contractItem: { is: null } }, select: { id: true, serial: true } })
       : Promise.resolve([]),
   ]);
-  const partnerId = partnerParam && partners.some((p) => p.id === partnerParam) ? partnerParam : null;
   const t = today();
 
   return (
@@ -44,8 +43,7 @@ export default async function NewContractPage({ searchParams }: { searchParams: 
       <Card className="max-w-4xl">
         <ContractForm
           mode="create"
-          partners={partners.map((p) => ({ value: p.id, label: p.name, hint: p.excluded ? 'isključen' : (p.city ?? undefined) }))}
-          partnerId={partnerId}
+          partner={partner ?? null}
           items={items.map((i) => i.id)}
           initial={{
             startDate: t,

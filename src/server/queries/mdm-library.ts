@@ -8,6 +8,7 @@ import { appReferences } from '../mdm/apps';
 import { maskWifi, pinFor, redactSettings } from '../mdm/profiles';
 import { mergeConfig, type DeviceOverrides, type Platform, type ProfileApp, type ProfileSettings } from '@/domain/mdm';
 import { toEditor, type LibraryApp } from '@/components/mdm/config-model';
+import { escapeLike } from '@/lib/like';
 
 /**
  * Čitanja za knjižnicu MDM-a: konfiguracije (profili), aplikacije, datoteke,
@@ -59,7 +60,7 @@ export async function listProfiles(scope: MdmScope, params: Params, page: { skip
   const q = str(params.q);
   const platform = platformParam(params.platform);
   const where: Prisma.MdmProfileWhereInput = {
-    AND: [sharedWhere(scope), ...(q ? [{ name: { contains: q, mode: 'insensitive' as const } }] : []), ...(platform ? [{ platform }] : [])],
+    AND: [sharedWhere(scope), ...(q ? [{ name: { contains: escapeLike(q), mode: 'insensitive' as const } }] : []), ...(platform ? [{ platform }] : [])],
   };
   const [rows, total] = await Promise.all([
     db.mdmProfile.findMany({
@@ -150,7 +151,7 @@ export async function listApps(scope: MdmScope, params: Params, page: { skip: nu
   const where: Prisma.MdmAppWhereInput = {
     AND: [
       sharedWhere(scope),
-      ...(q ? [{ OR: [{ name: { contains: q, mode: 'insensitive' as const } }, { packageName: { contains: q, mode: 'insensitive' as const } }] }] : []),
+      ...(q ? [{ OR: [{ name: { contains: escapeLike(q), mode: 'insensitive' as const } }, { packageName: { contains: escapeLike(q), mode: 'insensitive' as const } }] }] : []),
       ...(platform ? [{ platform }] : []),
     ],
   };
@@ -215,7 +216,7 @@ export async function appDetail(scope: MdmScope, id: string) {
 
 export async function listLibraryFiles(scope: MdmScope, kind: 'FILE' | 'DOC', params: Params, page: { skip: number; take: number }) {
   const q = str(params.q);
-  const where: Prisma.MdmFileWhereInput = { AND: [sharedWhere(scope), { kind }, ...(q ? [{ name: { contains: q, mode: 'insensitive' as const } }] : [])] };
+  const where: Prisma.MdmFileWhereInput = { AND: [sharedWhere(scope), { kind }, ...(q ? [{ name: { contains: escapeLike(q), mode: 'insensitive' as const } }] : [])] };
   const [rows, total] = await Promise.all([
     db.mdmFile.findMany({
       where,

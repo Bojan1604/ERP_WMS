@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import { getCompany, getLookups } from '@/server/queries/lookups';
-import { supplierOptions } from '@/server/queries/purchasing';
+import { partnerOptionsByIds } from '@/server/queries/partner-options';
 import { goodsInvoiceContext } from '@/server/services/supplier-invoices';
 import { today } from '@/domain/dates';
 import { num } from '@/domain/money';
@@ -16,14 +16,14 @@ export default async function NewSupplierInvoicePage({ searchParams }: { searchP
   const sp = await searchParams;
   const orderId = typeof sp.narudzbenica === 'string' ? sp.narudzbenica : null;
   const receiptId = typeof sp.primka === 'string' ? sp.primka : null;
-  const [suppliers, lookups, company, order, receipt] = await Promise.all([
-    supplierOptions(user.companyId),
+  const [lookups, company, order, receipt] = await Promise.all([
     getLookups(user.companyId),
     getCompany(user.companyId),
     orderId ? db.purchaseOrder.findFirst({ where: { id: orderId, companyId: user.companyId }, select: { id: true, number: true, supplierId: true, total: true } }) : null,
     receiptId ? db.goodsReceipt.findFirst({ where: { id: receiptId, companyId: user.companyId }, select: { id: true, number: true, supplierId: true, total: true, orderId: true } }) : null,
   ]);
   const supplierId = receipt?.supplierId ?? order?.supplierId ?? null;
+  const [supplier] = await partnerOptionsByIds(user.companyId, [supplierId]);
   const net = receipt ? num(receipt.total) : order ? num(order.total) : 0;
   const links = { orderId: order?.id ?? receipt?.orderId ?? null, receiptId: receipt?.id ?? null };
   // zadano „račun za robu s primke": obrazac ga preračunava iz UPISANE osnovice (vrijednosti robe i broj
@@ -67,7 +67,7 @@ export default async function NewSupplierInvoicePage({ searchParams }: { searchP
           order: order ? { value: order.id, label: order.number } : null,
           receipt: receipt ? { value: receipt.id, label: receipt.number } : null,
         }}
-        suppliers={suppliers.map((s) => ({ value: s.id, label: s.name, country: s.country }))}
+        supplier={supplier ?? null}
         categories={[...new Set([...lookups.expenseCategories.map((c) => c.name), 'Nabava robe'])]}
         company={{ vatRate: num(company.vatRate), country: company.country }}
         goodsRule={ctx ? { refs: ctx.refs, others: ctx.otherGoodsInvoices } : null}

@@ -3,6 +3,8 @@
 import { X } from 'lucide-react';
 import { DateRangeFilter, FilterBar, MultiSelectFilter, SegmentFilter, useQueryParams } from '@/components/ui/filters';
 import type { Option } from '@/components/ui/field';
+import { PartnerMultiFilter } from '@/components/partners/partner-combobox';
+import type { PartnerOpt } from '@/lib/partner-option';
 
 type FilterKey = 'year' | 'range' | 'partner' | 'category' | 'model' | 'status' | 'warehouse' | 'supplier' | 'type' | 'days';
 
@@ -30,8 +32,9 @@ export function ReportFilters({
   currentYear: number;
   /** Nudi se „Sve" (sve godine). */
   allYears: boolean;
-  partners: Option[];
-  suppliers: Option[];
+  /** Odabrani klijenti / dobavljači (razriješeni na poslužitelju); ostali se traže pretragom. */
+  partners: PartnerOpt[];
+  suppliers: PartnerOpt[];
   categories: Option[];
   models: Option[];
   statuses: Option[];
@@ -74,12 +77,12 @@ export function ReportFilters({
           ]}
         />
       )}
-      {has('partner') && <MultiSelectFilter name="partner" label="Klijent" options={partners} searchable />}
+      {has('partner') && <PartnerMultiFilter name="partner" label="Klijent" selected={partners} />}
       {has('category') && <MultiSelectFilter name="kategorija" label="Kategorija" options={categories} />}
       {has('model') && <MultiSelectFilter name="model" label="Model" options={models} searchable />}
       {has('status') && <MultiSelectFilter name="status" label="Status" options={statuses} />}
       {has('warehouse') && <MultiSelectFilter name="skladiste" label="Skladište" options={warehouses} />}
-      {has('supplier') && <MultiSelectFilter name="dobavljac" label="Dobavljač" options={suppliers} searchable />}
+      {has('supplier') && <PartnerMultiFilter name="dobavljac" label="Dobavljač" role="supplier" selected={suppliers} />}
       {active && (
         <button
           type="button"

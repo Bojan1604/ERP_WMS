@@ -2,6 +2,7 @@ import 'server-only';
 import { Prisma } from '@prisma/client';
 import { db, type Tx } from '../db';
 import { classifyScan, itemIdFromLink, scanCandidates, serialLabel, stocktakeCounts, type StocktakeCounts, type StocktakeKind } from '@/domain/warehouse';
+import { escapeLike } from '@/lib/like';
 
 // ---------------------------------------------------------------- skeniranje: kod → uređaj
 
@@ -57,7 +58,7 @@ export async function findItemsByCode(client: Tx, companyId: string, code: strin
   // dio serijskog: samo ako je jednoznačan (naljepnica sa skraćenim brojem)
   const main = cands[cands.length - 1];
   if (main.length >= 5) {
-    const partial = await client.item.findMany({ where: { companyId, serial: { contains: main, mode: 'insensitive' } }, select: scanItemSelect, take: 2 });
+    const partial = await client.item.findMany({ where: { companyId, serial: { contains: escapeLike(main), mode: 'insensitive' } }, select: scanItemSelect, take: 2 });
     if (partial.length === 1) return { items: partial, via: 'partial' };
   }
   return { items: [], via: null };

@@ -5,7 +5,8 @@ import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { Attachments } from '@/components/ui/attachments';
 import { Checkbox, Field, FormGrid, Input, Select, Textarea } from '@/components/ui/field';
-import { Combobox } from '@/components/ui/combobox';
+import { PartnerCombobox } from '@/components/partners/partner-combobox';
+import type { PartnerOpt } from '@/lib/partner-option';
 import { FormError, useAction, type ServerAction } from '@/components/ui/action';
 import { FREQUENCY_LABEL, type FrequencyCode } from '@/domain/expenses';
 import { periodLabel } from '@/domain/dates';
@@ -37,7 +38,8 @@ export interface ExpenseActions {
 
 export interface ExpenseOptions {
   categories: Array<{ value: string; label: string }>;
-  partners: Array<{ value: string; label: string; country: string }>;
+  /** Partneri prikazanih troškova (odabir ostalih ide pretragom na poslužitelju). */
+  partners: PartnerOpt[];
   company: { vatRate: number; country: string };
 }
 
@@ -70,13 +72,14 @@ export function ExpenseDialog({
   const remove = useAction(actions.remove, { onSuccess: onClose });
   const occ = useAction(actions.occurrence, { onSuccess: onClose });
 
-  const vatRateFor = (partnerId: string | null) => {
-    const p = options.partners.find((x) => x.value === partnerId);
+  const [picked, setPicked] = useState<PartnerOpt | null>(options.partners.find((p) => p.id === value.partnerId) ?? null);
+  const vatRateFor = (partnerId: string | null, known: PartnerOpt | null = picked) => {
+    const p = known?.id === partnerId ? known : null;
     return supplierVat(p?.country ?? options.company.country, options.company).rate;
   };
-  const update = (patch: Partial<ExpenseValue>) => {
+  const update = (patch: Partial<ExpenseValue>, known: PartnerOpt | null = picked) => {
     const next = { ...v, ...patch };
-    if (!vatTouched) next.vatAmount = r2((next.netAmount * vatRateFor(next.partnerId)) / 100);
+    if (!vatTouched) next.vatAmount = r2((next.netAmount * vatRateFor(next.partnerId, known)) / 100);
     setV(next);
   };
   const skipped = Object.entries(value.overrides).filter(([, o]) => o.skipped);
@@ -163,7 +166,17 @@ export function ExpenseDialog({
               <Input value={v.description} onChange={(e) => setV({ ...v, description: e.target.value })} />
             </Field>
             <Field label="Dobavljač / partner" className="sm:col-span-2">
-              <Combobox allowEmpty options={options.partners} value={v.partnerId} onChange={(id) => update({ partnerId: id })} placeholder="— bez partnera —" />
+              <PartnerCombobox
+                allowEmpty
+                role="expense"
+                initial={picked}
+                value={v.partnerId}
+                onChange={(id, p) => {
+                  setPicked(p ?? null);
+                  update({ partnerId: id }, p ?? null);
+                }}
+                placeholder="— bez partnera —"
+              />
             </Field>
             <Field label="Iznos bez PDV-a" required>
               <Input type="number" step="0.01" value={v.netAmount} onChange={(e) => update({ netAmount: Number(e.target.value) })} />

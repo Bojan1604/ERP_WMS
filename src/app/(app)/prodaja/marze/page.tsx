@@ -2,8 +2,10 @@ import Link from 'next/link';
 import { TrendingUp } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { can } from '@/domain/permissions';
-import { getLookups, getPartnerOptions } from '@/server/queries/lookups';
-import { business, marginGroups, marginTotals, marginYears, modelMargins, readMarginFilters, soldItems, type MarginFilters, type MarginGroup } from '@/server/queries/margins';
+import { getLookups } from '@/server/queries/lookups';
+import { partnerOptionsByIds } from '@/server/queries/partner-options';
+import { PartnerMultiFilter } from '@/components/partners/partner-combobox';
+import { business, marginGroupsPage, marginTotals, marginYears, modelMargins, readMarginFilters, soldItems, type MarginFilters, type MarginGroup } from '@/server/queries/margins';
 import { PageHeader, Card, Stat, TableWrap, Empty, Badge } from '@/components/ui/misc';
 import { Tabs } from '@/components/ui/tabs';
 import { DateRangeFilter, FilterBar, MultiSelectFilter, SearchFilter, SegmentFilter } from '@/components/ui/filters';
@@ -39,7 +41,7 @@ export default async function MarginsPage({ searchParams }: { searchParams: Prom
   const sp = await searchParams;
   const f = readMarginFilters(sp);
   const edit = can(user.perms, 'sales', 'edit');
-  const [years, lookups, partners] = await Promise.all([marginYears(user.companyId), getLookups(user.companyId), getPartnerOptions(user.companyId, 'customer')]);
+  const [years, lookups, partners] = await Promise.all([marginYears(user.companyId), getLookups(user.companyId), partnerOptionsByIds(user.companyId, f.partners)]);
   const keep = new URLSearchParams();
   for (const [k, v] of Object.entries(sp)) if (typeof v === 'string' && v && k !== 'page' && k !== 'pogled') keep.set(k, v);
   // zadani pogled (poslovanje) bez parametra — kartica je tada označena
@@ -75,16 +77,16 @@ export default async function MarginsPage({ searchParams }: { searchParams: Prom
           <SegmentFilter name="godina" options={[{ value: '', label: cur }, ...years.slice(1, 5).map((y) => ({ value: String(y), label: String(y) })), { value: 'sve', label: 'Sve' }]} />
           <SearchFilter placeholder="Serijski broj, model, kupac…" />
           <DateRangeFilter label="Razdoblje" />
-          <MultiSelectFilter name="kupac" label="Kupac" options={partners.map((p) => ({ value: p.id, label: p.name }))} />
+          <PartnerMultiFilter name="kupac" label="Kupac" role="customer" selected={partners} />
           <MultiSelectFilter name="kategorija" label="Kategorija" options={lookups.categories.map((c) => ({ value: c.id, label: c.name }))} />
           <MultiSelectFilter name="model" label="Model" options={lookups.models.map((m) => ({ value: m.id, label: [m.brand, m.name].filter(Boolean).join(' ') }))} />
         </FilterBar>
       )}
       {f.view === 'poslovanje' && <BusinessView companyId={user.companyId} f={f} />}
       {f.view === 'artikl' && <ItemsView companyId={user.companyId} f={f} sp={sp} />}
-      {(f.view === 'kupac' || f.view === 'model' || f.view === 'kategorija') && <GroupsView companyId={user.companyId} f={f} by={f.view} />}
+      {(f.view === 'kupac' || f.view === 'model' || f.view === 'kategorija') && <GroupsView companyId={user.companyId} f={f} by={f.view} sp={sp} />}
       {f.view === 'marze' && <ModelsView companyId={user.companyId} canEdit={edit} />}
-      {f.view === 'paketi' && <PackagesView companyId={user.companyId} f={f} edit={edit} catalog={catalog} partners={partners.map((p) => ({ id: p.id, name: p.name }))} />}
+      {f.view === 'paketi' && <PackagesView companyId={user.companyId} f={f} edit={edit} catalog={catalog} />}
     </>
   );
 }
@@ -294,18 +296,20 @@ async function ItemsView({ companyId, f, sp }: { companyId: string; f: MarginFil
   );
 }
 
-async function GroupsView({ companyId, f, by }: { companyId: string; f: MarginFilters; by: 'kupac' | 'model' | 'kategorija' }) {
-  const rows = await marginGroups(companyId, f, by);
+async function GroupsView({ companyId, f, by, sp }: { companyId: string; f: MarginFilters; by: 'kupac' | 'model' | 'kategorija'; sp: SP }) {
+  const page = readPage(sp, 100);
+  const { rows, total } = await marginGroupsPage(companyId, f, by, page);
   const label = by === 'kupac' ? 'Kupac' : by === 'model' ? 'Model' : 'Kategorija';
   return (
     <>
       <TotalsStats companyId={companyId} f={f} />
-      {rows.length > 0 && (
+      {rows.length > 0 && page.page === 1 && (
         <Card title={`Profit po ${by === 'kupac' ? 'kupcu' : by === 'model' ? 'modelu' : 'kategoriji'} (prvih 15)`} className="mb-4">
           <HBarChart rows={rows.slice(0, 15).map((r) => ({ label: r.label, value: r.profit }))} slot={1} />
         </Card>
       )}
       <GroupTable rows={rows} label={label} />
+      <Pagination page={page.page} pageSize={page.pageSize} total={total} params={sp} basePath={BASE} />
     </>
   );
 }

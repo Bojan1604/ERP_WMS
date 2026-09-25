@@ -101,6 +101,9 @@ async function main() {
       phone: '+385 1 555 0101',
       web: 'www.demo-oprema.hr',
       invoicePremises: 'ZG1',
+      // KPD 2025 (eRačun, HR-BR-25): najam opreme — stavke rata nose šifru iz postavki firme
+      kpdRent: '77.33.12',
+      kpdService: '95.11.10',
       invoiceFooter: 'Društvo je upisano u sudski registar Trgovačkog suda u Zagrebu. Temeljni kapital 2.654,46 € uplaćen u cijelosti.',
     },
   });
@@ -259,7 +262,7 @@ async function main() {
         const pending = await tx((t) => pendingForCompany(t, companyId, { now: ev.date }));
         if (pending.length) {
           const old = ev.date < addMonths(TODAY, -2);
-          await tx((t) => issueInstallments(t, actor, pending.map((p) => ({ contractId: p.contractId, period: p.period })), { paid: old && rnd() < 0.93 }));
+          await tx((t) => issueInstallments(t, actor, pending.map((p) => ({ contractId: p.contractId, period: p.period })), { paid: old && rnd() < 0.93, date: ev.date }));
           invoicesIssued += pending.length;
         }
         continue;

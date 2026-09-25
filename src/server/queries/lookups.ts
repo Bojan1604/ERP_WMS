@@ -19,15 +19,6 @@ export const getLookups = cache(async (companyId: string) => {
   return { warehouses, categories, models, statuses, services, expenseCategories };
 });
 
-/** Partneri za odabir (samo osnovni podaci). */
-export const getPartnerOptions = cache(async (companyId: string, role: 'customer' | 'supplier' | 'any' = 'any') => {
-  return db.partner.findMany({
-    where: { companyId, ...(role === 'customer' ? { isCustomer: true } : role === 'supplier' ? { isSupplier: true } : {}) },
-    orderBy: { name: 'asc' },
-    select: { id: true, name: true, city: true, country: true, excluded: true },
-  });
-});
-
 /** Firma bez tajni (certifikat, lozinka, API ključ) — one se čitaju samo u src/server/fiscal. */
 export const getCompany = cache(async (companyId: string) =>
   db.company.findUniqueOrThrow({ where: { id: companyId }, omit: { fiscalCert: true, fiscalCertPassword: true, eInvoiceApiKey: true, smtpPassword: true } }),

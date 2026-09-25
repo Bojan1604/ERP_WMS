@@ -33,4 +33,7 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run test:db
+      - run: npm run test:seed
+        env:
+          SEED_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/wms_seedtest?schema=public
       - run: npm run build

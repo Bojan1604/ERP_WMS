@@ -5,7 +5,7 @@ import { BadgeEuro, Boxes, Info, PenLine, Save, Send, Wrench } from 'lucide-reac
 import { Button } from '@/components/ui/button';
 import { Card, Badge, Notice } from '@/components/ui/misc';
 import { Field, Input, Select, Textarea } from '@/components/ui/field';
-import { Combobox } from '@/components/ui/combobox';
+import { PartnerCombobox } from '@/components/partners/partner-combobox';
 import { useAction } from '@/components/ui/action';
 import { useToast } from '@/components/ui/toast';
 import { eur } from '@/lib/format';
@@ -25,7 +25,7 @@ import { autoKpd, deviceToLine as toLine, isRentLine, withRentMonths } from './l
 import { IssueDialog } from './invoice-issue-dialog';
 import { AdvancePicker, type AdvanceChoice } from './invoice-advances';
 import { RentCard, rentMonthsFor, type ContractOpt, type RentNextValue, type RentTermsValue } from './invoice-rent-card';
-import type { DeviceOpt, EditorCharge, EditorLine, SalesLookups, ServiceOpt } from './types';
+import type { DeviceOpt, EditorCharge, EditorLine, PartnerOpt, SalesLookups, ServiceOpt } from './types';
 
 export interface InvoiceEditorValue {
   id: string | null;
@@ -71,7 +71,9 @@ export function InvoiceEditor({
   showCost?: boolean;
   canCreateService?: boolean;
 }) {
-  const { partners, company, models } = lookups;
+  const { company, models } = lookups;
+  // poznati partneri: trenutni kupac + odabrani pretragom (cijeli popis se ne šalje u preglednik)
+  const [partners, setPartners] = useState<PartnerOpt[]>(lookups.partners);
   const [services, setServices] = useState<ServiceOpt[]>(lookups.services);
   const [v, setV] = useState<InvoiceEditorValue>({
     contractId: null,
@@ -123,8 +125,9 @@ export function InvoiceEditor({
   );
   const rentCtx = { docType: v.type, months: rentMonths, company, models, allowRent: v.type !== 'SERVICE', locked: v.rentLocked };
 
-  const choosePartner = (id: string | null) => {
-    const p = partners.find((x) => x.id === id);
+  const choosePartner = (id: string | null, picked?: PartnerOpt) => {
+    if (picked && !partners.some((x) => x.id === picked.id)) setPartners((cur) => [...cur, picked]);
+    const p = picked ?? partners.find((x) => x.id === id);
     if (!p) return set({ partnerId: null });
     // dogovorene cijene prethodnog kupca ne vrijede za novog — stavke dobivaju cijenu novog kupca ili standardnu
     if (p.id !== v.partnerId && v.lines.some((l) => l.agreedPrice)) void repriceFor(p.id, false);
@@ -263,12 +266,7 @@ export function InvoiceEditor({
       <Card title="Kupac i datumi" className="mb-4">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-6">
           <Field label="Kupac" required className="md:col-span-3">
-            <Combobox
-              options={partners.map((p) => ({ value: p.id, label: p.name, hint: [p.city, p.country !== 'HR' ? p.country : null].filter(Boolean).join(', ') }))}
-              value={v.partnerId}
-              onChange={(id) => choosePartner(id)}
-              placeholder="Odaberite kupca…"
-            />
+            <PartnerCombobox role="customer" initial={partners} value={v.partnerId} onChange={choosePartner} placeholder="Odaberite kupca…" />
           </Field>
           <Field label="Vrsta" className="md:col-span-1">
             {v.rentLocked ? (
@@ -453,7 +451,7 @@ export function InvoiceEditor({
         models={models}
         categories={lookups.categories}
         warehouses={lookups.warehouses}
-        suppliers={lookups.suppliers}
+        supplierFilter
         statuses={lookups.statuses}
         exclude={usedItems}
         rent={v.type === 'RENT'}

@@ -7,6 +7,7 @@ import { ACCOUNTANT_ROW_CAP, directionsOf, rowKey, type AccountantFilters, type 
 import { paymentState, type PaymentState } from '@/domain/invoice';
 import { fromISO, toISO } from '@/domain/dates';
 import { num } from '@/domain/money';
+import { escapeLike } from '@/lib/like';
 
 /**
  * Knjigovođa: izdani izlazni računi i ulazni računi u razdoblju. Filtriranje i
@@ -50,7 +51,7 @@ const EMPTY: DirTotals = { count: 0, net: 0, vat: 0, total: 0, notSent: 0 };
 async function partnerIdsFor(companyId: string, q: string) {
   if (!q) return [];
   const rows = await db.partner.findMany({
-    where: { companyId, OR: [{ name: { contains: q, mode: 'insensitive' } }, { oib: { startsWith: q.replace(/\s+/g, '') } }] },
+    where: { companyId, OR: [{ name: { contains: escapeLike(q), mode: 'insensitive' } }, { oib: { startsWith: escapeLike(q.replace(/\s+/g, '')) } }] },
     select: { id: true },
     take: 500,
   });
@@ -62,7 +63,7 @@ const sentWhere = (sent: AccountantFilters['sent']) => (sent === 'da' ? { accoun
 export function outboundWhere(companyId: string, f: AccountantFilters, partnerIds: string[]): Prisma.InvoiceWhereInput {
   const and: Prisma.InvoiceWhereInput[] = [{ companyId, status: 'ISSUED', date: { gte: fromISO(f.from), lte: fromISO(f.to) } }, sentWhere(f.sent)];
   if (f.kind && f.kind !== 'INBOUND') and.push({ kind: f.kind });
-  if (f.q) and.push({ OR: [{ number: { contains: f.q, mode: 'insensitive' } }, ...(partnerIds.length ? [{ partnerId: { in: partnerIds } }] : [])] });
+  if (f.q) and.push({ OR: [{ number: { contains: escapeLike(f.q), mode: 'insensitive' } }, ...(partnerIds.length ? [{ partnerId: { in: partnerIds } }] : [])] });
   return { AND: and };
 }
 
@@ -70,7 +71,7 @@ export function inboundWhere(companyId: string, f: AccountantFilters, partnerIds
   // odbijeni ulazni račun (Fiskalizacija 2.0) nije knjigovodstvena isprava
   const and: Prisma.SupplierInvoiceWhereInput[] = [{ companyId, status: { not: 'REJECTED' }, issueDate: { gte: fromISO(f.from), lte: fromISO(f.to) } }, sentWhere(f.sent)];
   if (f.q) {
-    const c = { contains: f.q, mode: 'insensitive' as const };
+    const c = { contains: escapeLike(f.q), mode: 'insensitive' as const };
     and.push({ OR: [{ number: c }, { internalNo: c }, ...(partnerIds.length ? [{ supplierId: { in: partnerIds } }] : [])] });
   }
   return { AND: and };

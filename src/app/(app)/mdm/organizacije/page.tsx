@@ -4,7 +4,6 @@ import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import { getMdmScope } from '@/server/mdm/scope';
 import { orgTree } from '@/server/queries/mdm';
-import { getPartnerOptions } from '@/server/queries/lookups';
 import { can } from '@/domain/permissions';
 import { Badge, Card, Empty, PageHeader } from '@/components/ui/misc';
 import { OrgDialog } from '@/components/mdm/org-forms';
@@ -24,7 +23,6 @@ export default async function OrgsPage() {
   const home = scope.homeOrgId ? tree.orgs.find((o) => o.id === scope.homeOrgId) : null;
   const isDistributor = home?.type === 'DISTRIBUTOR';
   const canCreate = canEdit && (scope.owner || isDistributor);
-  const partners = scope.owner && canCreate ? (await getPartnerOptions(user.companyId, 'any')).map((p) => ({ value: p.id, label: p.city ? `${p.name} (${p.city})` : p.name })) : [];
   const distributors = tree.orgs.filter((o) => o.type === 'DISTRIBUTOR').map((o) => ({ id: o.id, name: o.name }));
   const devicesTotal = scope.owner ? await db.mdmDevice.count({ where: { companyId: scope.companyId, orgId: null } }) : 0;
 
@@ -36,8 +34,8 @@ export default async function OrgsPage() {
         actions={
           canCreate && (
             <>
-              {scope.owner && <OrgDialog label="Novi distributer" owner value={emptyOrg('DISTRIBUTOR', null)} distributors={distributors} partners={partners} variant="secondary" />}
-              <OrgDialog label="Novi klijent" owner={scope.owner} value={emptyOrg('CUSTOMER', scope.owner ? null : scope.homeOrgId)} distributors={distributors} partners={partners} />
+              {scope.owner && <OrgDialog label="Novi distributer" owner value={emptyOrg('DISTRIBUTOR', null)} distributors={distributors} variant="secondary" />}
+              <OrgDialog label="Novi klijent" owner={scope.owner} value={emptyOrg('CUSTOMER', scope.owner ? null : scope.homeOrgId)} distributors={distributors} />
             </>
           )
         }

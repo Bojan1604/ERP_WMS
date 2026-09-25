@@ -32,7 +32,7 @@ export default async function QuotePage({ params }: { params: Promise<{ id: stri
   const st = quoteStatus(q.status, q.validUntil ? toISO(q.validUntil) : null);
   // pretvorena u račun ili ugovor — više se ne mijenja
   const locked = !!q.invoiceId || !!q.contractId;
-  const [lookups, company] = await Promise.all([edit ? getSalesLookups(user.companyId) : null, getCompany(user.companyId)]);
+  const [lookups, company] = await Promise.all([edit ? getSalesLookups(user.companyId, [q.partnerId]) : null, getCompany(user.companyId)]);
   const proforma = q.kind === 'PROFORMA';
   const kindLabel = quoteDocTitle(q, company);
   const showCost = canSeeCost(user.perms);

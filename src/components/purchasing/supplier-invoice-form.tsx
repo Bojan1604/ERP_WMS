@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Checkbox, Field, FormGrid, Input, Select, Textarea } from '@/components/ui/field';
 import { Combobox, type ComboOption } from '@/components/ui/combobox';
+import { PartnerCombobox } from '@/components/partners/partner-combobox';
+import type { PartnerOpt } from '@/lib/partner-option';
 import { FormError, useAction, type ServerAction } from '@/components/ui/action';
 import { Card } from '@/components/ui/misc';
 import { useToast } from '@/components/ui/toast';
@@ -56,7 +58,7 @@ export interface LinkOptions {
  */
 export function SupplierInvoiceForm({
   initial,
-  suppliers,
+  supplier: initialSupplier,
   categories,
   company,
   action,
@@ -69,7 +71,8 @@ export function SupplierInvoiceForm({
   goodsRule = null,
 }: {
   initial: SupplierInvoiceValue;
-  suppliers: Array<{ value: string; label: string; country: string }>;
+  /** Trenutni dobavljač (ostali se traže pretragom na poslužitelju). */
+  supplier: PartnerOpt | null;
   categories: string[];
   company: { vatRate: number; country: string };
   action: ServerAction<SaveInput, { warning?: string | null } | unknown>;
@@ -114,7 +117,8 @@ export function SupplierInvoiceForm({
     };
   }, [v.supplierId, free]);
 
-  const supplier = suppliers.find((s) => s.value === v.supplierId);
+  const [picked, setPicked] = useState<PartnerOpt | null>(initialSupplier);
+  const supplier = picked?.id === v.supplierId ? picked : null;
   const vatInfo = supplierVat(free ? company.country : supplier?.country, company);
   const recompute = (patch: Partial<SupplierInvoiceValue>, s = v, country = supplier?.country) => {
     const next = { ...s, ...patch };
@@ -156,12 +160,13 @@ export function SupplierInvoiceForm({
               </>
             ) : (
               <Field label="Dobavljač" required className="sm:col-span-2">
-                <Combobox
-                  options={suppliers.map((s) => ({ value: s.value, label: s.label, hint: s.country !== company.country ? s.country : undefined }))}
+                <PartnerCombobox
+                  role="supplier"
+                  initial={initialSupplier}
                   value={v.supplierId}
-                  onChange={(id) => {
-                    const c = suppliers.find((s) => s.value === id)?.country;
-                    recompute({ supplierId: id, orderId: null, receiptId: null }, v, c);
+                  onChange={(id, p) => {
+                    setPicked(p ?? null);
+                    recompute({ supplierId: id, orderId: null, receiptId: null }, v, p?.country);
                   }}
                   placeholder="Odaberite dobavljača…"
                   disabled={lockDocument || readOnly}
