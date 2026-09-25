@@ -97,6 +97,8 @@ Otvorite program s mobitela preko adrese računala u lokalnoj mreži (npr. `http
 i u pregledniku odaberite „Dodaj na početni zaslon" — otvara se kao aplikacija. **Kamera za
 skeniranje radi samo preko HTTPS-a** (ili na `localhost`): za probu na mreži pokrenite
 `npm run dev:https`, a za stalni rad stavite ispred programa HTTPS (npr. Caddy:
+
+> Prijava s mobitela preko `http://192.168.x.x:3000` radi: kolačić prijave dobiva oznaku Secure samo kad je veza HTTPS (iza Caddyja automatski). Po potrebi se nadjača s `COOKIE_SECURE=true|false` u `.env`.
 `caddy reverse-proxy --from wms.firma.hr --to localhost:3000`). USB/Bluetooth skeneri barkoda
 rade bez HTTPS-a — program sam prepoznaje njihov unos.
 

@@ -8,6 +8,7 @@ import { createSession, destroySession, verifyPassword } from '@/server/auth';
 import { audit } from '@/server/audit';
 import { CHALLENGE_TTL_MS, checkSecondFactor, readChallenge, signChallenge } from '@/server/services/two-factor';
 import { beginAttempt, dummyPasswordCheck, loginKeys, requestIp, succeedAttempt } from '@/server/services/login-attempts';
+import { secureCookie } from '@/server/cookie-secure';
 
 const schema = z.object({ email: z.string().trim().toLowerCase().min(1).max(200), password: z.string().min(1).max(200), next: z.string().optional() });
 const codeSchema = z.object({ code: z.string().trim().min(6).max(20), next: z.string().optional() });
@@ -37,7 +38,7 @@ export async function login(_: LoginState, fd: FormData): Promise<LoginState> {
     (await cookies()).set(CHALLENGE_COOKIE, signChallenge(user.id), {
       httpOnly: true,
       sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
+      secure: await secureCookie(),
       path: '/login',
       maxAge: CHALLENGE_TTL_MS / 1000,
     });

@@ -6,6 +6,7 @@ import { AuthError } from '../errors';
 import { revokePortalSession, resolvePortalSession, type PortalUser } from './session';
 import { PORTAL_COOKIE, PORTAL_PATH } from '@/lib/portal-cookie';
 import { parseTrustProxy, pickClientIp } from '@/domain/client-ip';
+import { secureCookie } from '../cookie-secure';
 
 export * from './session';
 
@@ -21,7 +22,7 @@ export async function setPortalCookie(token: string, expiresAt: Date) {
   (await cookies()).set(PORTAL_COOKIE, token, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    secure: await secureCookie(),
     path: PORTAL_PATH,
     expires: expiresAt,
   });

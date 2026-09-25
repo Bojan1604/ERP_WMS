@@ -11,6 +11,7 @@ import { SESSION_COOKIE } from '@/lib/session-cookie';
 import { homeHref } from '@/components/layout/nav-items';
 import { can, isExternalRole, resolvePermissions, type Level, type Module, type PermissionMap, type RoleCode } from '@/domain/permissions';
 import { parseTrustProxy, pickClientIp } from '@/domain/client-ip';
+import { secureCookie } from './cookie-secure';
 
 export interface SessionUser {
   id: string;
@@ -59,7 +60,7 @@ export async function createSession(userId: string) {
   (await cookies()).set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    secure: await secureCookie(),
     path: '/',
     expires: expiresAt,
   });
