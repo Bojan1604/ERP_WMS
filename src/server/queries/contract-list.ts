@@ -73,44 +73,63 @@ export interface ContractYear {
   custom: number;
 }
 
+/** Skupina istih uređaja ugovora (ista cijena, plan, status, pauze; skinuti i isti kraj) iz baze. */
+interface DeviceGroup {
+  contractId: string;
+  monthly: string;
+  plan: string;
+  status: ContractStatus | null;
+  paused: string[];
+  endDate: Date | null;
+  returned: boolean;
+  n: number;
+}
+
 /**
- * Obračun i naplata u godini za sve ugovore filtra (za stupce i podnožje): jedan
- * upit za uvjete, jedan za uređaje; uređaji istog ugovora s istom cijenom i planom
- * računaju se jednom (veliki ugovori s tisućama istih uređaja).
+ * Obračun i naplata u godini za sve ugovore filtra (za stupce i podnožje): uvjeti
+ * ugovora, pa uređaji grupirani u bazi po (ugovor, cijena, plan, status, pauze) —
+ * veliki ugovori s tisućama istih uređaja ne učitavaju se redak po redak. Skinuti
+ * uređaji (naplata do dana skidanja) ulaze u obračun i naplatu, ne u broj uređaja.
  */
 async function yearStats(where: Prisma.ContractWhereInput, year: number) {
-  const [contracts, items] = await Promise.all([
-    db.contract.findMany({
-      where,
-      select: {
-        id: true, status: true, startDate: true, endDate: true, firstBillingDate: true, billingDay: true, billing: true, billingMode: true,
-        seasonFrom: true, seasonTo: true, closedAt: true,
-      },
-    }),
-    db.contractItem.findMany({
-      where: { contract: where },
-      select: { contractId: true, monthly: true, plan: true, status: true, paused: true },
-    }),
-  ]);
+  const contracts = await db.contract.findMany({
+    where,
+    select: {
+      id: true, status: true, startDate: true, endDate: true, firstBillingDate: true, billingDay: true, billing: true, billingMode: true,
+      seasonFrom: true, seasonTo: true, closedAt: true,
+    },
+  });
+  const ids = contracts.map((c) => c.id);
+  const groups = ids.length
+    ? await db.$queryRaw<DeviceGroup[]>`
+        SELECT "contractId", monthly::text AS monthly, plan::text AS plan, status, paused, NULL::date AS "endDate", false AS returned, count(*)::int AS n
+        FROM "ContractItem" WHERE "contractId" = ANY(${ids}::text[])
+        GROUP BY "contractId", monthly, plan::text, status, paused
+        UNION ALL
+        SELECT "contractId", monthly::text, plan::text, NULL, paused, "endDate", true, count(*)::int
+        FROM "ReturnedContractItem" WHERE "contractId" = ANY(${ids}::text[]) AND "endDate" >= ${fromISO(`${year}-01-01`)}
+        GROUP BY "contractId", monthly, plan::text, paused, "endDate"`
+    : [];
   const terms = new Map(contracts.map((c) => [c.id, termsOf(c)]));
   const out = new Map<string, ContractYear>(contracts.map((c) => [c.id, { accrual: 0, billing: 0, monthly: 0, devices: 0, custom: 0 }]));
-  const memo = new Map<string, { accrual: number; billing: number }>();
-  for (const ci of items) {
-    const t = terms.get(ci.contractId);
-    const s = out.get(ci.contractId);
+  for (const g of groups) {
+    const t = terms.get(g.contractId);
+    const s = out.get(g.contractId);
     if (!t || !s) continue;
-    const d: ContractDevice = { itemId: '', monthly: num(ci.monthly), plan: (ci.plan as unknown as PlanPeriodInput[]) ?? [], status: ci.status, paused: ci.paused };
-    const key = `${ci.contractId}|${d.monthly}|${d.status ?? ''}|${JSON.stringify(d.plan)}|${ci.paused.join(',')}`;
-    let v = memo.get(key);
-    if (!v) {
-      v = { accrual: contractAccrual(t, [d], year).reduce((a, b) => a + b, 0), billing: contractBilling(t, [d], year).reduce((a, b) => a + b, 0) };
-      memo.set(key, v);
-    }
-    s.accrual += v.accrual;
-    s.billing += v.billing;
-    s.monthly += d.monthly;
-    s.devices += 1;
-    if (hasCustomPlan(d)) s.custom += 1;
+    const d: ContractDevice = {
+      itemId: '',
+      monthly: num(g.monthly),
+      plan: (JSON.parse(g.plan) as PlanPeriodInput[]) ?? [],
+      status: g.status,
+      paused: g.paused,
+      endDate: g.endDate ? toISO(g.endDate) : null,
+    };
+    s.accrual += contractAccrual(t, [d], year).reduce((a, b) => a + b, 0) * g.n;
+    s.billing += contractBilling(t, [d], year).reduce((a, b) => a + b, 0) * g.n;
+    if (g.returned) continue;
+    s.monthly += d.monthly * g.n;
+    s.devices += g.n;
+    if (hasCustomPlan(d)) s.custom += g.n;
   }
   for (const s of out.values()) {
     s.accrual = r2(s.accrual);
@@ -163,7 +182,11 @@ export async function listContracts(companyId: string, params: Params, page: { s
     attachmentCounts(db, companyId, 'contract', ids),
   ]);
   const itemsBy = new Map<string, ContractDevice[]>();
-  const push = (contractId: string, d: ContractDevice) => itemsBy.set(contractId, [...(itemsBy.get(contractId) ?? []), d]);
+  const push = (contractId: string, d: ContractDevice) => {
+    const list = itemsBy.get(contractId);
+    if (list) list.push(d);
+    else itemsBy.set(contractId, [d]);
+  };
   for (const ci of items) push(ci.contractId, toDevice(ci));
   for (const r of returned) push(r.contractId, toReturnedDevice(r));
   const rows = contracts.map((c) => {
@@ -201,11 +224,13 @@ export async function listContracts(companyId: string, params: Params, page: { s
     const n = daysBetween(now, toISO(e));
     return n >= 0 && n < EXPIRING_DAYS;
   };
-  const summary = { devices: 0, monthly: 0, accrual: 0, billed: 0, custom: 0, seasonal: 0, expiring: 0, year };
+  // monthly = aktivni ugovori (sažetak), monthlyAll = zbroj stupca „Mjesečno" za sve ugovore filtra
+  const summary = { devices: 0, monthly: 0, monthlyAll: 0, accrual: 0, billed: 0, custom: 0, seasonal: 0, expiring: 0, year };
   for (const c of all) {
     const s = stats.get(c.id)!;
     summary.devices += s.devices;
     if (c.status === 'ACTIVE') summary.monthly += s.monthly;
+    summary.monthlyAll += s.monthly;
     summary.accrual += s.accrual;
     summary.billed += s.billing;
     summary.custom += s.custom;
@@ -213,6 +238,7 @@ export async function listContracts(companyId: string, params: Params, page: { s
     if (expiring(c.endDate)) summary.expiring += 1;
   }
   summary.monthly = r2(summary.monthly);
+  summary.monthlyAll = r2(summary.monthlyAll);
   summary.accrual = r2(summary.accrual);
   summary.billed = r2(summary.billed);
   return { rows, total, summary };

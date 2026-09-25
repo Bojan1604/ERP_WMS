@@ -86,7 +86,7 @@ export default async function ServiceOrderPage({ params }: { params: Promise<{ i
             </LinkButton>
             <PdfButton kind={open ? 'service' : 'service-delivery'} id={id} send={canEdit} />
             {canEdit && <SendEmailButton kind="service" id={id} />}
-            {canEdit && o.status !== 'REPLACED' && (
+            {canEdit && o.status !== 'REPLACED' && o.status !== 'WRITTEN_OFF' && !o.invoice && (
               <ActionButton
                 action={deleteServiceAction}
                 input={{ id }}

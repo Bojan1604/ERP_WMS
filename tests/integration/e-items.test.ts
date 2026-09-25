@@ -108,6 +108,9 @@ test('kartica: ručni ispravci (prodajna, datum izlaza, račun, klijent, kategor
   const inv = await transaction((tx) =>
     createDraft(tx, s.actor, { type: 'SERVICE', partnerId: s.partner.id, date: '2026-03-01', vatRate: 25, lines: [{ kind: 'MANUAL', description: 'X', qty: 1, unitPrice: 1 }] }),
   );
+  // račun se veže samo uz prodan uređaj koji je stavka izdanog računa
+  await db.invoiceLine.create({ data: { invoiceId: inv.id, kind: 'DEVICE', itemId: it.id, description: 'C-1' } });
+  await db.invoice.update({ where: { id: inv.id }, data: { status: 'ISSUED', number: `E-${Date.now()}` } });
   const base = { serial: 'C-1', dupNote: null, modelId: s.model.id, warehouseId: null, supplierId: null, rentPrice: null, warrantyMonths: null, importDate: '2026-01-10', note: null };
   const r = await transaction((tx) =>
     updateItem(tx, s.actor, it.id, { ...base, salePrice: 199.9, issueDate: '2026-02-02', invoiceId: inv.id, partnerId: s.partner.id, categoryId: cat.id, cpu: ' i5 ', screen: '', os: 'Win 11' }),
@@ -127,10 +130,11 @@ test('kartica: ručni ispravci (prodajna, datum izlaza, račun, klijent, kategor
   const stockItem = await s.mk('C-2');
   await assert.rejects(transaction((tx) => updateItem(tx, s.actor, stockItem.id, { ...base, serial: 'C-2', warehouseId: s.wh.id, partnerId: s.partner.id })), /na skladištu/);
   // tuđi račun ne prolazi
-  await assert.rejects(transaction((tx) => updateItem(tx, s.actor, it.id, { ...base, invoiceId: 'nepostojeci' })), /Račun ne postoji/);
+  const sold2 = await s.mk('C-3', { statusId: s.sold.id, state: 'SOLD', warehouseId: null, issueDate: fromISO('2026-02-01') });
+  await assert.rejects(transaction((tx) => updateItem(tx, s.actor, sold2.id, { ...base, serial: 'C-3', invoiceId: 'nepostojeci' })), /Račun ne postoji/);
 
   // kategorija po komadu u filtru popisa (kategorija uređaja ima prednost pred modelovom)
-  const list = await listItems(s.companyId, parseItemFilters({ category: cat.id }), { skip: 0, take: 50 });
+  const list = await listItems(s.companyId, parseItemFilters({ category: cat.id }, { canSeeCost: true }), { skip: 0, take: 50 });
   assert.deepEqual(list.rows.map((x) => x.serial), ['C-1']);
 });
 
@@ -147,11 +151,11 @@ test('zaprimanje: specifikacije s modela, prekidač knjiženja troška; popis fi
   const r3 = await db.item.findFirstOrThrow({ where: { companyId: s.companyId, serial: 'R-3' } });
   assert.equal(r3.os, 'Android 13', 'upisana vrijednost ima prednost pred modelom');
 
-  const byOs = await listItems(s.companyId, parseItemFilters({ os: 'Android 13' }), { skip: 0, take: 50 });
+  const byOs = await listItems(s.companyId, parseItemFilters({ os: 'Android 13' }, { canSeeCost: true }), { skip: 0, take: 50 });
   assert.deepEqual(byOs.rows.map((x) => x.serial), ['R-3']);
-  const sorted = await listItems(s.companyId, parseItemFilters({ sort: 'nabavna', dir: 'desc' }), { skip: 0, take: 50 });
+  const sorted = await listItems(s.companyId, parseItemFilters({ sort: 'nabavna', dir: 'desc' }, { canSeeCost: true }), { skip: 0, take: 50 });
   assert.equal(sorted.rows[0].serial, 'R-3');
-  const bySerial = await listItems(s.companyId, parseItemFilters({ sort: 'serijski', dir: 'asc', year: '2026,2020' }), { skip: 0, take: 50 });
+  const bySerial = await listItems(s.companyId, parseItemFilters({ sort: 'serijski', dir: 'asc', year: '2026,2020' }, { canSeeCost: true }), { skip: 0, take: 50 });
   assert.deepEqual(bySerial.rows.map((x) => x.serial), ['R-1', 'R-2', 'R-3']);
   const facets = await itemFacets(s.companyId);
   assert.deepEqual(facets.years, [2026]);

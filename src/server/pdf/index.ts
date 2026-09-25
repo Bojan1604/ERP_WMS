@@ -20,7 +20,7 @@ export interface RenderedDocument {
 }
 
 export interface RenderOptions {
-  /** Prikaži nabavne cijene (primka) — samo uz pravo `costs`. Zadano: ne. */
+  /** Prikaži nabavne cijene (primka, narudžbenica) — samo uz pravo `costs`. Zadano: ne. */
   showCost?: boolean;
 }
 
@@ -40,7 +40,7 @@ export async function documentDefinitionFor(kind: PdfKind, id: string, companyId
     case 'service-delivery':
       return renderServiceDefinition(companyId, id, true);
     case 'order':
-      return renderOrderDefinition(companyId, id);
+      return renderOrderDefinition(companyId, id, !!opts.showCost);
     case 'receipt':
       return renderReceiptDefinition(companyId, id, !!opts.showCost);
     case 'contract-list':

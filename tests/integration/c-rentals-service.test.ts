@@ -128,8 +128,10 @@ test('„Vrati u izdavanje": preskočena rata ponovno je za izdati', async () =>
 
 test('skupno na uređajima ugovora: sezona, naplata i cijena zajedno', async () => {
   const s = await setup();
-  const c = await transaction((tx) => createContract(tx, s.actor, { ...terms('2026-01-01'), partnerId: s.partner.id }));
-  await transaction((tx) => attachItems(tx, s.actor, c.id, s.items.map((i) => ({ itemId: i.id, monthly: 10 })), { issueDate: '2026-01-01' }));
+  // ugovor kreće idući mjesec — izmjena vrijedi za cijeli plan (za prošla razdoblja vidi c-review-fixes)
+  const from = addMonths(today(), 1).slice(0, 7) + '-01';
+  const c = await transaction((tx) => createContract(tx, s.actor, { ...terms(from), partnerId: s.partner.id }));
+  await transaction((tx) => attachItems(tx, s.actor, c.id, s.items.map((i) => ({ itemId: i.id, monthly: 10 })), { issueDate: today() }));
   const rows = await db.contractItem.findMany({ where: { contractId: c.id }, orderBy: { id: 'asc' } });
   const ids = rows.slice(0, 2).map((r) => r.id);
 

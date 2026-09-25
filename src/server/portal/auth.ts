@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import { AuthError } from '../errors';
 import { revokePortalSession, resolvePortalSession, type PortalUser } from './session';
 import { PORTAL_COOKIE, PORTAL_PATH } from '@/lib/portal-cookie';
+import { parseTrustProxy, pickClientIp } from '@/domain/client-ip';
 
 export * from './session';
 
@@ -12,7 +13,8 @@ export * from './session';
 
 export async function requestMeta() {
   const h = await headers();
-  return { ip: h.get('x-forwarded-for')?.split(',')[0]?.trim() || h.get('x-real-ip') || null, userAgent: h.get('user-agent') };
+  // prvi unos X-Forwarded-For upisuje klijent — vjeruje se samo unosu našeg posrednika (TRUST_PROXY)
+  return { ip: pickClientIp(h.get('x-forwarded-for'), parseTrustProxy(process.env.TRUST_PROXY)), userAgent: h.get('user-agent') };
 }
 
 export async function setPortalCookie(token: string, expiresAt: Date) {

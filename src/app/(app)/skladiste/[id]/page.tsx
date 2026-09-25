@@ -123,9 +123,10 @@ export default async function ItemCardPage({ params }: { params: Promise<{ id: s
                   modelId: item.modelId,
                   warehouseId: item.warehouseId,
                   supplier: item.supplier ? { value: item.supplier.id, label: item.supplier.name } : null,
-                  cost: item.cost,
+                  // nabavna i marža ne idu u preglednik bez prava `costs`
+                  cost: costs ? item.cost : null,
                   rentPrice: item.rentPrice,
-                  marginPct: item.marginPct,
+                  marginPct: costs ? item.marginPct : null,
                   warrantyMonths: item.warrantyMonths,
                   importDate: item.importDate,
                   note: item.note,
@@ -213,10 +214,13 @@ export default async function ItemCardPage({ params }: { params: Promise<{ id: s
                   </span>
                 ) : null}
               </Detail>
-              <Detail label="Preporučena prodajna">
-                {eur(suggested.price)}
-                <span className="text-xs text-fg-3"> · {suggested.source === 'model' ? 'cijena modela' : 'iz marže'}</span>
-              </Detail>
+              {/* preporučena iz marže otkriva nabavnu — bez prava `costs` samo cijena modela */}
+              {(costs || suggested.source === 'model') && (
+                <Detail label="Preporučena prodajna">
+                  {eur(suggested.price)}
+                  <span className="text-xs text-fg-3"> · {suggested.source === 'model' ? 'cijena modela' : 'iz marže'}</span>
+                </Detail>
+              )}
               <Detail label="Primka">
                 {item.receipt ? (
                   <Link prefetch={false} href={`/nabava/primke/${item.receipt.id}`} className="link">

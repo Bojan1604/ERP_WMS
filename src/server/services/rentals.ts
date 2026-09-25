@@ -13,7 +13,7 @@ import {
 } from '@/domain/billing';
 import { addMonths, formatDate, fromISO, periodLabel, toISO, today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
-import { applyBulkTerms, BULK_SEASON_OPTIONS, pastPeriods, validatePlan, type BulkSeason } from '@/domain/plan';
+import { applyBulkTerms, BULK_SEASON_OPTIONS, bulkCutoff, pastPeriods, validatePlan, type BulkSeason } from '@/domain/plan';
 import { customerVat } from '@/domain/tax';
 
 export { toDevice, toReturnedDevice, toTerms } from './contract-items';
@@ -164,6 +164,7 @@ async function notBeforeLastIssued(tx: Tx, companyId: string, date: string) {
 
 /** Izdavanje jedne ili više rata odjednom (u jednoj transakciji), po želji odmah plaćeno. */
 export async function issueInstallments(tx: Tx, actor: Actor, rows: Array<{ contractId: string; period: string }>, opts: { paid?: boolean } = {}) {
+  await lockInstallments(tx, actor.companyId, rows);
   // datum mora pratiti redni broj — izdaje se kronološki
   const drafts = [];
   for (const r of rows) drafts.push(await draftInstallment(tx, actor, r.contractId, r.period));
@@ -473,10 +474,24 @@ export async function updateContractItems(
   if (bulkPlan) {
     const terms = toTerms(c);
     const base = terms.firstBillingDate || terms.startDate;
-    const cur = await tx.contractItem.findMany({ where: { contractId, id: { in: ids } }, select: { id: true, plan: true } });
+    const [cur, coveredAll] = await Promise.all([
+      tx.contractItem.findMany({ where: { contractId, id: { in: ids } } }),
+      coveredPeriods(tx, [contractId]).then((m) => m.get(contractId) ?? new Set<string>()),
+    ]);
+    // pokrivena razdoblja po uređaju (ključevi `itemId|YYYY-MM`)
+    const coveredBy = new Map<string, Set<string>>();
+    for (const k of coveredAll) {
+      const [itemId, period] = k.split('|');
+      coveredBy.set(itemId, (coveredBy.get(itemId) ?? new Set()).add(period));
+    }
+    const now = today();
+    const cuts = new Set<string>();
     const groups = new Map<string, { plan: PlanPeriodInput[]; ids: string[] }>();
     for (const r of cur) {
-      const next = applyBulkTerms((r.plan as unknown as PlanPeriodInput[]) ?? [], base, { billing: patch.billing, season: patch.season });
+      // nova pravila tek od prve neizdane rate — prošla i fakturirana razdoblja ostaju
+      const cut = bulkCutoff(terms, toDevice(r), coveredBy.get(r.itemId) ?? new Set(), now);
+      if (cut > base) cuts.add(cut);
+      const next = applyBulkTerms((r.plan as unknown as PlanPeriodInput[]) ?? [], base, { billing: patch.billing, season: patch.season }, cut);
       const err = validatePlan(next);
       assert(!err, err ?? '');
       const key = JSON.stringify(next);
@@ -486,6 +501,10 @@ export async function updateContractItems(
     }
     for (const g of groups.values()) {
       await tx.contractItem.updateMany({ where: { contractId, id: { in: g.ids } }, data: { plan: g.plan as unknown as Prisma.InputJsonValue } });
+    }
+    if (cuts.size) {
+      const first = [...cuts].sort()[0];
+      what.push(`vrijedi od ${formatDate(first)}${cuts.size > 1 ? ' (po uređaju od prve neizdane rate)' : ''}`);
     }
   }
   const t = today();
@@ -580,6 +599,26 @@ export async function setRentOverride(tx: Tx, actor: Actor, input: { itemId: str
   await audit(tx, actor, { entity: 'item', entityId: item.id, action: 'rent-override', summary: `SN ${item.serial}: ručni iznos najma za ${label} = ${amount.toFixed(2).replace('.', ',')} €` });
 }
 
+/**
+ * Advisory lock rate (firma, ugovor, razdoblje) — isti ključ za ručno izdavanje
+ * („Rate za izdati"), „Pregledaj" i automatsko izdavanje (jobs/auto-issue.ts).
+ * Pokrivenost se računa tek nakon zaključavanja, pa druga transakcija koja čeka
+ * vidi već izdani račun i ratu ne izdaje ponovno.
+ */
+const installmentLockKey = (companyId: string, contractId: string, period: string) => `auto-issue:${companyId}:${contractId}:${period}`;
+
+/** Zaključava rate do kraja transakcije (čeka dok ih druga transakcija ne pusti); stalni redoslijed — bez zastoja. */
+export async function lockInstallments(tx: Tx, companyId: string, rows: Array<{ contractId: string; period: string }>) {
+  const keys = [...new Set(rows.map((r) => installmentLockKey(companyId, r.contractId, r.period)))].sort();
+  for (const k of keys) await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${k}))`;
+}
+
+/** Kao `lockInstallments`, ali bez čekanja: false = ratu upravo izdaje druga transakcija. */
+export async function tryLockInstallment(tx: Tx, companyId: string, contractId: string, period: string) {
+  const [lock] = await tx.$queryRaw<Array<{ ok: boolean }>>`SELECT pg_try_advisory_xact_lock(hashtext(${installmentLockKey(companyId, contractId, period)})) AS ok`;
+  return !!lock?.ok;
+}
+
 /** Postojeći nacrt za ratu (npr. otvoren preko „Pregledaj") ili novi. */
 async function draftFor(tx: Tx, actor: Actor, contractId: string, period: string) {
   const existing = await tx.invoice.findFirst({
@@ -592,6 +631,7 @@ async function draftFor(tx: Tx, actor: Actor, contractId: string, period: string
 /** „Pregledaj": nacrt rate koji se uređuje u Prodaji — postojeći se ponovno koristi. */
 export async function previewInstallment(tx: Tx, actor: Actor, contractId: string, period: string) {
   const c = await ownContract(tx, actor, contractId);
+  await lockInstallments(tx, actor.companyId, [{ contractId, period }]);
   const d = await draftFor(tx, actor, contractId, period);
   await audit(tx, actor, { entity: 'contract', entityId: c.id, action: 'draft', summary: `Nacrt računa za ${periodLabel(period)}` });
   return d.id;
@@ -603,9 +643,11 @@ export async function previewInstallment(tx: Tx, actor: Actor, contractId: strin
  */
 export async function issuePending(tx: Tx, actor: Actor, rows: Array<{ contractId: string; period: string }>, opts: { paid?: boolean } = {}) {
   assert(rows.length, 'Odaberite barem jednu ratu.');
+  for (const r of rows) await ownContract(tx, actor, r.contractId);
+  // isto zaključavanje kao automatsko izdavanje — dvije istodobne transakcije ne izdaju istu ratu dvaput
+  await lockInstallments(tx, actor.companyId, rows);
   const drafts = [];
   for (const r of rows) {
-    await ownContract(tx, actor, r.contractId);
     drafts.push(await draftFor(tx, actor, r.contractId, r.period));
   }
   drafts.sort((a, b) => a.date.getTime() - b.date.getTime());

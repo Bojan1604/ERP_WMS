@@ -42,11 +42,23 @@ export function inferColumnType(values: Cell[]): ExportColumnType {
   return 'text';
 }
 
+const FORMULA_START = /^[=+\-@\t\r]/;
+const PLAIN_NUMBER = /^[-+]?\d[\d.,]*$/;
+
+/**
+ * Tekst ćelije siguran za Excel: tekst koji počinje s = + - @ ili tabom/CR-om
+ * Excel bi izvršio kao formulu (CSV injection) — dobiva apostrof ispred.
+ * Obični brojevi zapisani kao tekst („-12,50") ostaju kakvi jesu.
+ */
+export function csvSafeText(s: string): string {
+  return FORMULA_START.test(s) && !PLAIN_NUMBER.test(s) ? `'${s}` : s;
+}
+
 /** CSV za Excel (točka-zarez, UTF-8 s BOM-om, decimalni zarez). */
 export function toCsv<T>(rows: T[], columns: CsvColumn<T>[]): string {
   const esc = (v: string | number | null | undefined) => {
     if (v === null || v === undefined) return '';
-    const s = typeof v === 'number' ? String(v).replace('.', ',') : String(v);
+    const s = typeof v === 'number' ? String(v).replace('.', ',') : csvSafeText(String(v));
     return /[;"\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const lines = [columns.map((c) => esc(c.label)).join(';'), ...rows.map((r) => columns.map((c) => esc(c.value(r))).join(';'))];

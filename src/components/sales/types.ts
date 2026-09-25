@@ -1,5 +1,7 @@
 /** Oblici podataka koje poslužitelj šalje editorima računa i ponude (obični objekti). */
 
+import type { ExemptTexts } from '@/domain/tax';
+
 export type LineKindCode = 'DEVICE' | 'MODEL' | 'SERVICE' | 'MANUAL';
 
 export interface EditorLine {
@@ -68,7 +70,7 @@ export interface NamedOpt {
   name: string;
 }
 
-export interface CompanyDefaults {
+export interface CompanyDefaults extends ExemptTexts {
   vatRegistered: boolean;
   vatRate: number;
   country: string;

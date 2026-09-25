@@ -16,6 +16,7 @@ import { date, dateTime, eur, integer } from '@/lib/format';
 export function OverviewTab({
   contract: c,
   devices,
+  returnedSkipped = [],
   pending,
   canEdit,
   canIssue,
@@ -23,6 +24,8 @@ export function OverviewTab({
 }: {
   contract: Contract;
   devices: ContractDevice[];
+  /** Preskočena razdoblja uređaja skinutih s ugovora. */
+  returnedSkipped?: string[][];
   pending: PendingRow[];
   canEdit: boolean;
   canIssue: boolean;
@@ -36,7 +39,7 @@ export function OverviewTab({
   const pendingTotal = r2(pending.reduce((a, p) => a + p.amount, 0));
   // razdoblja označena kao izdana izvan programa (najnovija prva) — „Vrati u izdavanje"
   const skippedBy = new Map<string, number>();
-  for (const d of devices) for (const p of d.skipped ?? []) skippedBy.set(p, (skippedBy.get(p) ?? 0) + 1);
+  for (const list of [...devices.map((d) => d.skipped ?? []), ...returnedSkipped]) for (const p of list) skippedBy.set(p, (skippedBy.get(p) ?? 0) + 1);
   const skipped = [...skippedBy].sort((a, b) => b[0].localeCompare(a[0]));
 
   return (

@@ -425,6 +425,7 @@ const EDIT_LABEL: Record<string, string> = {
   categoryId: 'kategorija',
   salePrice: 'prodajna cijena',
   issueDate: 'datum izlaza',
+  warrantyStart: 'početak jamstva',
   invoiceId: 'račun',
   partnerId: 'klijent',
 };
@@ -462,8 +463,31 @@ export async function updateItem(tx: Tx, actor: Actor, id: string, input: ItemEd
   if (input.categoryId) {
     assert(await tx.category.count({ where: { id: input.categoryId, companyId: actor.companyId } }), 'Kategorija ne postoji.');
   }
-  if (input.invoiceId) {
-    assert(await tx.invoice.count({ where: { id: input.invoiceId, companyId: actor.companyId } }), 'Račun ne postoji.');
+  // izlazni podaci (račun, datum izlaza, prodajna) — samo za izdane uređaje; provjerava se samo stvarna izmjena
+  const newIssue = input.issueDate === undefined ? undefined : input.issueDate ? fromISO(input.issueDate) : null;
+  const newSale = input.salePrice === undefined ? undefined : input.salePrice === null ? null : r2(input.salePrice);
+  const invoiceChanged = input.invoiceId !== undefined && (input.invoiceId ?? null) !== before.invoiceId;
+  const issueChanged = newIssue !== undefined && norm(newIssue) !== norm(before.issueDate);
+  const saleChanged = newSale !== undefined && norm(newSale) !== norm(before.salePrice);
+  if (before.state === 'IN_STOCK') {
+    assert(!(invoiceChanged && input.invoiceId), 'Uređaj na skladištu nije prodan — račun se veže samo uz prodan uređaj.');
+    assert(!(issueChanged && newIssue), 'Uređaj na skladištu nema datum izlaza.');
+    assert(!(saleChanged && newSale !== null), 'Uređaj na skladištu nema prodajnu cijenu — upisuje se pri prodaji.');
+  }
+  assert(!(issueChanged && !newIssue && before.state === 'SOLD'), 'Prodan uređaj mora imati datum izlaza.');
+  if (invoiceChanged) {
+    // veza s računom određuje što storno vraća na skladište — uređaj koji je stavka izdanog računa ne odvaja se ručno
+    if (before.invoiceId) {
+      const onOld = await tx.invoiceLine.count({ where: { invoiceId: before.invoiceId, itemId: id, invoice: { status: 'ISSUED' } } });
+      assert(!onOld, 'Uređaj je stavka izdanog računa — veza se mijenja stornom ili odobrenjem, ne ručno.');
+    }
+    if (input.invoiceId) {
+      assert(before.state === 'SOLD', 'Račun se veže samo uz prodan uređaj.');
+      const inv = await tx.invoice.findFirst({ where: { id: input.invoiceId, companyId: actor.companyId }, select: { status: true } });
+      assert(inv, 'Račun ne postoji.');
+      assert(inv.status === 'ISSUED', 'Uređaj se veže samo uz izdan račun.');
+      assert(await tx.invoiceLine.count({ where: { invoiceId: input.invoiceId, itemId: id } }), 'Uređaj nije stavka odabranog računa.');
+    }
   }
   if (input.partnerId !== undefined && input.partnerId !== before.partnerId) {
     await ensurePartner(tx, actor, input.partnerId);
@@ -493,9 +517,13 @@ export async function updateItem(tx: Tx, actor: Actor, id: string, input: ItemEd
     if (v !== undefined) data[k] = v;
   }
   if (input.categoryId !== undefined) data.categoryId = input.categoryId;
-  if (input.salePrice !== undefined) data.salePrice = input.salePrice === null ? null : r2(input.salePrice);
-  if (input.issueDate !== undefined) data.issueDate = input.issueDate ? fromISO(input.issueDate) : null;
-  if (input.invoiceId !== undefined) data.invoiceId = input.invoiceId;
+  if (saleChanged) data.salePrice = newSale;
+  if (issueChanged) {
+    data.issueDate = newIssue;
+    // jamstvo teče od izlaza — početak jamstva prati datum izlaza dok nije upisan drukčiji
+    if (!before.warrantyStart || norm(before.warrantyStart) === norm(before.issueDate)) data.warrantyStart = newIssue;
+  }
+  if (invoiceChanged) data.invoiceId = input.invoiceId ?? null;
   if (input.partnerId !== undefined) data.partnerId = input.partnerId;
   await tx.item.update({ where: { id }, data: data as Prisma.ItemUncheckedUpdateInput });
 

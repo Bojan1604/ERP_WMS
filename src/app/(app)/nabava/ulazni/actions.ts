@@ -29,6 +29,8 @@ const schema = z.object({
   note: zOptText,
   paidDate: zOptDate,
   book: zBool,
+  /** „Ovo je račun za robu s primke"; null = zadano pravilo (iznos ≈ vrijednost robe, prvi povezani račun). */
+  goods: z.boolean().nullable().optional(),
 });
 
 export const saveSupplierInvoiceAction = action({ module: 'purchasing', level: 'edit' }, schema, async ({ id, ...input }, user) => {

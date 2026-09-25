@@ -71,10 +71,14 @@ async function consumeTotp(tx: Tx, userId: string, secret: string, code: string,
   return n > 0;
 }
 
-/** Korak 1 uključivanja: nova tajna (još neaktivna) + QR kod za aplikaciju. */
-export async function startTotpSetup(tx: Tx, actor: Actor) {
-  const u = await tx.user.findUniqueOrThrow({ where: { id: actor.id }, select: { email: true, totpEnabled: true } });
+/**
+ * Korak 1 uključivanja: nova tajna (još neaktivna) + QR kod za aplikaciju. Traži
+ * lozinku — tuđa (ukradena ili ostavljena) sesija ne može vezati 2FA na svoj mobitel.
+ */
+export async function startTotpSetup(tx: Tx, actor: Actor, password: string) {
+  const u = await tx.user.findUniqueOrThrow({ where: { id: actor.id }, select: { email: true, totpEnabled: true, passwordHash: true } });
   assert(!u.totpEnabled, 'Prijava u dva koraka je već uključena.');
+  assert(await bcrypt.compare(password, u.passwordHash), 'Lozinka nije ispravna.');
   const secret = generateSecret();
   await tx.user.update({ where: { id: actor.id }, data: { totpSecret: encryptSecret(secret) } });
   const uri = generateURI({ issuer: TOTP_ISSUER, label: u.email, secret });

@@ -175,8 +175,8 @@ export function DeviceBulkBar({ contractId, devices, defaultFrom }: { contractId
           </Field>
         </FormGrid>
         <p className="mt-3 text-sm text-fg-3">
-          Naplata i sezona mijenjaju se u planu svakog označenog uređaja (u svim njegovim razdobljima). „Kao na ugovoru" briše vlastitu sezonu — uređaj
-          bez drugih odstupanja vraća se na uvjete ugovora.
+          Naplata i sezona mijenjaju se u planu svakog označenog uređaja od prve neizdane rate (ne prije tekućeg mjeseca) — već fakturirana i
+          prošla razdoblja ostaju po starim uvjetima. „Kao na ugovoru" briše vlastitu sezonu — uređaj bez drugih odstupanja vraća se na uvjete ugovora.
         </p>
       </Dialog>
 

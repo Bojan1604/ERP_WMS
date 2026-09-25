@@ -9,7 +9,7 @@ import { fromISO, today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import { supplierVat } from '@/domain/tax';
 import { receiptBooksExpense } from '@/domain/purchase-links';
-import { syncOrderSupplierInvoice } from './supplier-invoices';
+import { lockPurchaseDocs, paidGoodsInvoiceDate, syncOrderSupplierInvoice } from './supplier-invoices';
 
 // =============================================================================
 //  Nabava: narudžbenice i primke (zaprimanje robe). Ulazni računi (URA) → expenses.ts
@@ -288,11 +288,15 @@ export async function receiveGoods(tx: Tx, actor: Actor, input: ReceiveInput) {
   }
 
   // primka bez vrijednosti ne knjiži trošak od 0 €; ulazni račun narudžbenice s vlastitim troškom već je knjižio robu
+  // (narudžbenica je zaključana — istovremeno povezivanje računa čeka, pa se trošak ne knjiži dvaput)
+  if (order) await lockPurchaseDocs(tx, actor.companyId, { orderId: order.id });
   const invoiceOwnExpenses = order
     ? await tx.expense.count({ where: { companyId: actor.companyId, source: 'SUPPLIER_INVOICE', supplierInvoice: { orderId: order.id } } })
     : 0;
   const booked = receiptBooksExpense({ bookExpense: input.bookExpense !== false, total, invoiceOwnExpenses });
   if (booked) {
+    // plaćen račun za robu po narudžbenici — i trošak primke je plaćen
+    const paidDate = order ? await paidGoodsInvoiceDate(tx, actor.companyId, { orderId: order.id, receiptId: receipt.id }) : null;
     await tx.expense.create({
       data: {
         companyId: actor.companyId,
@@ -304,6 +308,8 @@ export async function receiveGoods(tx: Tx, actor: Actor, input: ReceiveInput) {
         vatAmount: await vatFor(tx, actor.companyId, vendor?.country, total),
         source: 'RECEIPT',
         receiptId: receipt.id,
+        paid: !!paidDate,
+        paidDate,
         createdBy: actor.name,
       },
     });

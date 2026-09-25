@@ -141,7 +141,7 @@ export function RentCard({
             ]}
           />
         </Field>
-        <Field label="Razdoblje najma" hint="Prazno = prva nefakturirana rata (ili mjesec računa)" className="md:col-span-3">
+        <Field label="Razdoblje najma" hint="Prazno = prva nefakturirana rata uređaja s računa (ili mjesec računa); isto razdoblje se ne fakturira dvaput" className="md:col-span-3">
           <Input type="month" value={period} onChange={(e) => onPeriod(e.target.value)} title="Mjesec na koji se račun odnosi — određuje koja se rata smatra izdanom" />
         </Field>
         {isNew && (

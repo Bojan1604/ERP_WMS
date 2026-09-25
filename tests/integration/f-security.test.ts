@@ -30,7 +30,9 @@ after(async () => {
 test('2FA: uključivanje s QR kodom, drugi korak prijave, rezervni kod vrijedi jednom, isključivanje i poništavanje', async () => {
   const s = await setupCompany({ items: 0 });
   await db.user.update({ where: { id: s.user.id }, data: { passwordHash: await bcrypt.hash('lozinka123', 4) } });
-  const setup = await transaction((tx) => startTotpSetup(tx, s.actor));
+  // uključivanje traži lozinku
+  await assert.rejects(transaction((tx) => startTotpSetup(tx, s.actor, 'kriva')), /Lozinka nije ispravna/);
+  const setup = await transaction((tx) => startTotpSetup(tx, s.actor, 'lozinka123'));
   assert.match(setup.qr, /^data:image\/png;base64,/);
   assert.match(setup.uri, /^otpauth:\/\/totp\//);
   const row = await db.user.findUniqueOrThrow({ where: { id: s.user.id } });
@@ -79,9 +81,9 @@ test('2FA: uključivanje s QR kodom, drugi korak prijave, rezervni kod vrijedi j
   assert.equal(off.totpSecret, null);
 
   // administrator poništava 2FA drugom korisniku (izgubljen mobitel) — sesije se odjavljuju
-  const u2 = await db.user.create({ data: { companyId: s.companyId, email: `z${Math.random()}@t.hr`, name: 'Zaposlenik', passwordHash: 'x', role: 'SALES' } });
+  const u2 = await db.user.create({ data: { companyId: s.companyId, email: `z${Math.random()}@t.hr`, name: 'Zaposlenik', passwordHash: await bcrypt.hash('lozinka123', 4), role: 'SALES' } });
   const a2 = { id: u2.id, name: u2.name, companyId: s.companyId };
-  const s2 = await transaction((tx) => startTotpSetup(tx, a2));
+  const s2 = await transaction((tx) => startTotpSetup(tx, a2, 'lozinka123'));
   await transaction(async (tx) => confirmTotpSetup(tx, a2, await generate({ secret: s2.secret })));
   await db.session.create({ data: { userId: u2.id, tokenHash: `h${Math.random()}`, expiresAt: new Date(Date.now() + 3_600_000) } });
   await transaction((tx) => resetUserTotp(tx, s.actor, u2.id, s.companyId));

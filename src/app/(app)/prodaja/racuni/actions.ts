@@ -264,11 +264,11 @@ export const findDevices = action(
 
 // ---------------------------------------------------------------- račun za najam: ugovori kupca
 
-/** Ugovori kupca na koje se mogu dodati uređaji (aktivni i pauzirani). */
+/** Ugovori kupca na koje se mogu dodati uređaji (aktivni i pauzirani; bez jednokratne naplate). */
 export const partnerContracts = action({ module: 'sales', level: 'view' }, z.object({ partnerId: zId }), async ({ partnerId }, user) => ({
   data: (
     await db.contract.findMany({
-      where: { companyId: user.companyId, partnerId, status: { in: ['ACTIVE', 'PAUSED'] } },
+      where: { companyId: user.companyId, partnerId, status: { in: ['ACTIVE', 'PAUSED'] }, billing: { not: 'ONCE' } },
       orderBy: [{ startDate: 'desc' }],
       take: 100,
       select: { id: true, number: true, billing: true, startDate: true, seasonFrom: true, seasonTo: true, status: true, _count: { select: { items: true } } },
@@ -333,7 +333,8 @@ const outcome = (r: { ok: boolean; message: string; lines?: string[] }) => {
   return { message: r.message };
 };
 
-export const validateEInvoiceAction = action({ module: 'sales', level: 'view' }, zInv, async ({ invoiceId }, user) => outcome(await validateEInvoice(invoiceId, user)));
+// provjera zove posrednika i piše dnevnik fiskalizacije — kao i ostale radnje eRačuna, uz pravo uređivanja
+export const validateEInvoiceAction = action({ module: 'sales', level: 'edit' }, zInv, async ({ invoiceId }, user) => outcome(await validateEInvoice(invoiceId, user)));
 export const refreshEInvoiceAction = action({ module: 'sales', level: 'edit' }, zInv, async ({ invoiceId }, user) => outcome(await refreshEInvoiceStatus(invoiceId, user)));
 export const amsCheckAction = action({ module: 'sales', level: 'view' }, zInv, async ({ invoiceId }, user) => outcome(await amsCheckInvoice(invoiceId, user)));
 export const fiscalizeIrAction = action({ module: 'sales', level: 'edit' }, zInv, async ({ invoiceId }, user) => outcome(await reportWithoutSending(invoiceId, user, 'IR')));

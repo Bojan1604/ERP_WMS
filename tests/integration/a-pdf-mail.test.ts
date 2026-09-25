@@ -243,10 +243,14 @@ test('PDF predračuna, ponude, otpremnice, servisnog naloga, narudžbenice, prim
   const po = await db.purchaseOrder.create({
     data: { companyId: s.companyId, number: 'NAR-2026-0001', supplierId: s.business.id, date: new Date('2026-03-01'), total: 300, lines: { create: [{ modelId: model.id, qty: 3, unitCost: 100 }] } },
   });
-  const pot = texts((await documentDefinitionFor('order', po.id, s.companyId)).def);
+  const pot = texts((await documentDefinitionFor('order', po.id, s.companyId, { showCost: true })).def);
   assert.match(pot, /NARUDŽBENICA/);
   assert.match(pot, /Lenovo ThinkPad X1/);
   assert.match(pot, /300,00/);
+  // bez prava costs narudžbenica nema nabavnih cijena ni zbroja (kao ekran narudžbenice)
+  const potNoCost = texts((await documentDefinitionFor('order', po.id, s.companyId)).def);
+  assert.match(potNoCost, /Lenovo ThinkPad X1/);
+  assert.doesNotMatch(potNoCost, /100,00|300,00/, 'bez prava costs nema nabavnih cijena na narudžbenici');
 
   const wh = await db.warehouse.findFirstOrThrow({ where: { companyId: s.companyId } });
   const rc = await db.goodsReceipt.create({ data: { companyId: s.companyId, number: 'PRM-2026-0001', date: new Date('2026-03-02'), supplierId: s.business.id, warehouseId: wh.id, total: 123.45 } });

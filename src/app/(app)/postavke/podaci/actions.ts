@@ -110,7 +110,7 @@ export const resetDemoAction = userAction(z.object(zConfirm), async (input, user
     await confirmDanger(tx, user, input);
     await assertDemo(tx, user.companyId);
   });
-  await resetDemo();
+  await resetDemo(user.companyId);
   return { message: 'Demo podaci su vraćeni — prijavite se ponovno.', redirect: '/login' };
 }, dangerOnly);
 

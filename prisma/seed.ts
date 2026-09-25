@@ -12,6 +12,8 @@ import { bootstrapCompany } from '../src/server/services/company';
 import { changeItemStatus, type Actor } from '../src/server/services/items';
 import { createDraft, issueInvoice, markPaid, addPayment } from '../src/server/services/invoices';
 import { attachItems, pendingForCompany, issueInstallments } from '../src/server/services/rentals';
+import { removeDemoCompany } from '../src/server/services/danger';
+import { removeStoredFiles } from '../src/server/mdm/wipe';
 import { nextDocNumber } from '../src/server/numbering';
 import { addDays, addMonths, fromISO, today, ymd } from '../src/domain/dates';
 import { priceFromMargin } from '../src/domain/pricing';
@@ -66,32 +68,21 @@ const SUPPLIERS: Array<{ name: string; city: string; country: string; oib?: stri
   { name: 'Barkod Sustavi d.o.o.', city: 'Split', country: 'HR' },
 ];
 
-/** Brisanje firme sa svim podacima — redom, od dokumenata prema šifrarnicima. */
+/**
+ * Brisanje demo firme — samo one s oznakom isDemo (nikad druge firme istog naziva).
+ * Korisnici s pristupom drugoj firmi vraćaju se u nju (removeDemoCompany).
+ */
 async function deleteCompany(companyId: string) {
-  const w = { where: { companyId } };
-  await db.$transaction([
-    db.session.deleteMany({ where: { user: { companyId } } }),
-    db.user.deleteMany(w),
-    db.payment.deleteMany({ where: { invoice: { companyId } } }),
-    db.quote.deleteMany(w),
-    db.serviceOrder.deleteMany(w),
-    db.expense.deleteMany(w),
-    db.invoice.updateMany({ ...w, data: { refInvoiceId: null } }),
-    db.item.updateMany({ ...w, data: { invoiceId: null, receiptId: null } }),
-    db.invoice.deleteMany(w),
-    db.contract.deleteMany(w),
-    db.transfer.deleteMany(w),
-    db.supplierInvoice.deleteMany(w),
-    db.goodsReceipt.deleteMany(w),
-    db.purchaseOrder.deleteMany(w),
-    db.item.deleteMany(w),
-    db.company.delete({ where: { id: companyId } }),
-  ]);
+  const r = await tx((t) => removeDemoCompany(t, companyId));
+  await removeStoredFiles(r.mdmFiles);
 }
 
 async function main() {
   const t0 = Date.now();
-  const existing = await db.company.findMany({ where: { name: 'Demo Oprema d.o.o.' }, select: { id: true } });
+  // „Vrati demo podatke" u programu predaje id svoje demo firme; inače (npm run db:seed) — demo firme tog naziva
+  const only = process.env.SEED_DEMO_COMPANY_ID;
+  const existing = await db.company.findMany({ where: only ? { id: only, isDemo: true } : { name: 'Demo Oprema d.o.o.', isDemo: true }, select: { id: true } });
+  if (only && !existing.length) throw new Error('Demo firma ne postoji.');
   for (const c of existing) await deleteCompany(c.id);
 
   const company = await db.company.create({
@@ -124,7 +115,14 @@ async function main() {
     { email: 'ana@demo.hr', name: 'Ana Babić', role: 'WAREHOUSE' as const },
     { email: 'iva@demo.hr', name: 'Iva Knjigović', role: 'ACCOUNTANT' as const },
   ];
-  await db.user.createMany({ data: users.map((u) => ({ ...u, companyId, passwordHash: hash })) });
+  // demo korisnik koji je imao i drugu firmu (pa nije obrisan) vraća se u demo firmu, pristup drugoj ostaje
+  const kept = await db.user.findMany({ where: { email: { in: users.map((u) => u.email) } }, select: { id: true, email: true, companyId: true } });
+  for (const k of kept) {
+    const u = users.find((x) => x.email === k.email)!;
+    await db.userCompany.createMany({ data: [{ userId: k.id, companyId: k.companyId }, { userId: k.id, companyId }], skipDuplicates: true });
+    await db.user.update({ where: { id: k.id }, data: { ...u, companyId, passwordHash: hash, active: true } });
+  }
+  await db.user.createMany({ data: users.filter((u) => !kept.some((k) => k.email === u.email)).map((u) => ({ ...u, companyId, passwordHash: hash })) });
   const admin = await db.user.findUniqueOrThrow({ where: { email: 'admin@demo.hr' } });
   const actor: Actor = { id: admin.id, name: admin.name, companyId };
 

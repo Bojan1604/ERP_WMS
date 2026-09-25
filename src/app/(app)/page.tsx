@@ -45,7 +45,12 @@ export default async function Dashboard() {
         href={rep('starost-potrazivanja', '/prodaja/racuni')}
       />
     ),
-    kpi.stock && <KpiTile key="stk" label="Vrijednost zalihe" value={eur(kpi.stock.value)} hint={`${integer(kpi.stock.count)} uređaja na skladištu`} href="/skladiste" />,
+    kpi.stock &&
+      (kpi.stock.value !== null ? (
+        <KpiTile key="stk" label="Vrijednost zalihe" value={eur(kpi.stock.value)} hint={`${integer(kpi.stock.count)} uređaja na skladištu`} href="/skladiste" />
+      ) : (
+        <KpiTile key="stk" label="Na skladištu" value={integer(kpi.stock.count)} hint="uređaja" href="/skladiste" />
+      )),
     kpi.rent && <KpiTile key="rent" label="Mjesečni najam" value={eur(kpi.rent.monthly)} hint={`${integer(kpi.rent.contracts)} aktivnih ugovora`} href="/najam/ugovori" />,
     kpi.expenses && (
       <KpiTile

@@ -3,7 +3,7 @@
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
 import { authenticatePortalUser, clearPortalSession, createPortalSession, requestMeta, setPortalCookie } from '@/server/portal/auth';
-import { portalLoginByEmail, portalLoginByIp } from '@/server/portal/limits';
+import { TOO_MANY, beginAttempt, loginKeys, succeedAttempt } from '@/server/services/login-attempts';
 
 const schema = z.object({ email: z.string().trim().toLowerCase().min(1).max(200), password: z.string().min(1).max(200) });
 
@@ -13,16 +13,13 @@ export async function portalLogin(_: unknown, fd: FormData): Promise<{ error?: s
   if (!parsed.success) return { error: 'Upišite e-adresu i lozinku.' };
   const { email, password } = parsed.data;
   const meta = await requestMeta();
-  const ipKey = `ip:${meta.ip ?? '?'}`;
-  if (portalLoginByEmail.blocked(email) || portalLoginByIp.blocked(ipKey)) return { error: 'Previše neuspjelih pokušaja. Pokušajte ponovno za minutu.' };
+  // pokušaj se upisuje u bazu prije provjere lozinke (po adresi i po IP-u)
+  const attempt = await beginAttempt(loginKeys('portal', email, meta.ip));
+  if (!attempt.allowed) return { error: TOO_MANY };
 
   const user = await authenticatePortalUser(email, password);
-  if (!user) {
-    portalLoginByEmail.fail(email);
-    portalLoginByIp.fail(ipKey);
-    return { error: 'Pogrešna e-adresa ili lozinka.' };
-  }
-  portalLoginByEmail.reset(email);
+  if (!user) return { error: 'Pogrešna e-adresa ili lozinka.' };
+  await succeedAttempt(attempt);
   const { token, expiresAt } = await createPortalSession(user.id, meta);
   await setPortalCookie(token, expiresAt);
   redirect('/portal');

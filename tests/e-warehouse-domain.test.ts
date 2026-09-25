@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import {
   availableColumns, deleteBlockedMessage, deleteBlocker, looksLikeSerial, ocrTokens, ocrVariants, visibleColumns, warrantyDaysLeft,
 } from '../src/domain/warehouse-list';
-import { invoiceExpenseMode, receiptBooksExpense, vatPctOf } from '../src/domain/purchase-links';
+import { csvSafeText, toCsv } from '../src/lib/csv';
+import { defaultGoodsInvoice, invoiceExpenseMode, matchesGoodsAmount, receiptBooksExpense, vatPctOf } from '../src/domain/purchase-links';
 import { planReceiveRows } from '../src/domain/receive-request';
 import { accountantEInvoiceLabel } from '../src/domain/accountant';
 
@@ -53,10 +54,20 @@ test('OCR: tokeni s naljepnice, prefiks SN, varijante slovo/znamenka', () => {
 });
 
 test('trošak robe se knjiži jednom', () => {
-  assert.equal(invoiceExpenseMode({ book: true, rejected: false, receiptExpenses: 0 }), 'own');
-  assert.equal(invoiceExpenseMode({ book: true, rejected: false, receiptExpenses: 2 }), 'receipt');
-  assert.equal(invoiceExpenseMode({ book: false, rejected: false, receiptExpenses: 0 }), 'none');
-  assert.equal(invoiceExpenseMode({ book: true, rejected: true, receiptExpenses: 1 }), 'none');
+  assert.equal(invoiceExpenseMode({ book: true, rejected: false, receiptExpenses: 0, goods: true }), 'own');
+  assert.equal(invoiceExpenseMode({ book: true, rejected: false, receiptExpenses: 2, goods: true }), 'receipt');
+  assert.equal(invoiceExpenseMode({ book: false, rejected: false, receiptExpenses: 0, goods: true }), 'none');
+  assert.equal(invoiceExpenseMode({ book: true, rejected: true, receiptExpenses: 1, goods: true }), 'none');
+  // drugi račun iste narudžbenice (prijevoz) knjiži se zasebno; zaprimljeni eRačun ne knjiži ništa
+  assert.equal(invoiceExpenseMode({ book: true, rejected: false, receiptExpenses: 2, goods: false }), 'own');
+  assert.equal(invoiceExpenseMode({ book: true, rejected: false, pending: true, receiptExpenses: 0, goods: false }), 'none');
+  assert.equal(matchesGoodsAmount(1000, [1009, 0]), true);
+  assert.equal(matchesGoodsAmount(1000, [1011]), false);
+  assert.equal(matchesGoodsAmount(50, [50.9]), true, 'do 1 € razlike kod malih iznosa');
+  assert.equal(matchesGoodsAmount(60, [0, 0]), false);
+  assert.equal(defaultGoodsInvoice({ net: 200, refs: [200, 500], otherGoodsInvoices: 0 }), true);
+  assert.equal(defaultGoodsInvoice({ net: 200, refs: [200], otherGoodsInvoices: 1 }), false, 'drugi račun nije zadano račun za robu');
+  assert.equal(defaultGoodsInvoice({ net: 30, refs: [200, 500], otherGoodsInvoices: 0 }), false, 'prijevoz');
   assert.equal(receiptBooksExpense({ bookExpense: true, total: 100, invoiceOwnExpenses: 0 }), true);
   assert.equal(receiptBooksExpense({ bookExpense: true, total: 100, invoiceOwnExpenses: 1 }), false);
   assert.equal(receiptBooksExpense({ bookExpense: false, total: 100, invoiceOwnExpenses: 0 }), false);
@@ -85,4 +96,14 @@ test('knjigovođa: oznaka eRačuna', () => {
   assert.equal(accountantEInvoiceLabel(null), '');
   assert.equal(accountantEInvoiceLabel('INBOUND'), 'ulazni eRačun');
   assert.equal(accountantEInvoiceLabel('DELIVERED'), 'eRačun · dostavljen');
+});
+
+test('CSV: tekst koji Excel čita kao formulu dobiva apostrof; brojevi ostaju', () => {
+  const csv = toCsv(
+    [{ a: '=HYPERLINK("http://x")', b: '+1+2', c: '@SUM(A1)', d: '-12,50', e: 'obično', f: -5, g: '\tx' }],
+    ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((k) => ({ label: k, value: (r: Record<string, string | number>) => r[k] })),
+  );
+  const row = csv.split('\r\n')[1];
+  assert.equal(row, `"'=HYPERLINK(""http://x"")";'+1+2;'@SUM(A1);-12,50;obično;-5;'\tx`);
+  assert.equal(csvSafeText('-A1+B1'), "'-A1+B1");
 });

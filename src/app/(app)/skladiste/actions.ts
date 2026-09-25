@@ -219,11 +219,14 @@ export const deleteItemsAction = action({ module: 'warehouse', level: 'edit' }, 
 );
 
 /** Računi za ručnu vezu s karticom uređaja (pretraga po broju ili kupcu). */
-export const searchInvoicesForItem = action({ module: 'warehouse', level: 'edit' }, z.object({ q: zOptText }), async ({ q }, user) => {
+export const searchInvoicesForItem = action({ module: 'warehouse', level: 'edit' }, z.object({ q: zOptText, itemId: zId }), async ({ q, itemId }, user) => {
+  // nude se samo izdani računi na kojima je ovaj uređaj stavka (ostalo updateItem odbija)
   const rows = await db.invoice.findMany({
     where: {
       companyId: user.companyId,
+      status: 'ISSUED',
       number: { not: null },
+      lines: { some: { itemId } },
       ...(q ? { OR: [{ number: { contains: q, mode: 'insensitive' } }, { partner: { name: { contains: q, mode: 'insensitive' } } }] } : {}),
     },
     orderBy: [{ date: 'desc' }],

@@ -37,7 +37,7 @@ export default async function ContractsPage({ searchParams }: { searchParams: SP
     <>
       <PageHeader
         title="Ugovori o najmu"
-        subtitle={`${integer(total)} ugovora · ${integer(summary.devices)} uređaja · mjesečno ${eur(summary.monthly)}`}
+        subtitle={`${integer(total)} ugovora · ${integer(summary.devices)} uređaja · mjesečno (aktivni) ${eur(summary.monthly)}`}
         actions={
           <>
             <ExportButtons href={`/api/najam/ugovori${qs ? `?${qs}` : ''}`} />
@@ -161,8 +161,8 @@ export default async function ContractsPage({ searchParams }: { searchParams: SP
               <tr>
                 <td colSpan={6}>{integer(total)} ugovora</td>
                 <td className="num">{integer(summary.devices)}</td>
-                <td className="num" title="Mjesečno aktivnih ugovora">
-                  {eur(summary.monthly)}
+                <td className="num" title="Zbroj stupca za sve ugovore filtra">
+                  {eur(summary.monthlyAll)}
                 </td>
                 <td />
                 <td className="num">{eur(summary.accrual)}</td>

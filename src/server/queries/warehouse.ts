@@ -30,9 +30,13 @@ export interface ItemFilters {
 
 const str = (v: string | string[] | undefined) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 
-/** Filtri popisa uređaja iz URL-a (više vrijednosti odvojeno zarezom). */
-export function parseItemFilters(p: Params): ItemFilters {
+/**
+ * Filtri popisa uređaja iz URL-a (više vrijednosti odvojeno zarezom). Bez prava
+ * na nabavne cijene sortiranje po nabavnoj se zanemaruje (redoslijed bi otkrivao cijene).
+ */
+export function parseItemFilters(p: Params, opts: { canSeeCost: boolean }): ItemFilters {
   const state = str(p.state);
+  const sort = parseSort(p, ITEM_SORTS);
   return {
     q: str(p.q),
     statusIds: parseMulti(p, 'status'),
@@ -46,7 +50,7 @@ export function parseItemFilters(p: Params): ItemFilters {
     cpu: parseMulti(p, 'cpu'),
     screen: parseMulti(p, 'screen'),
     os: parseMulti(p, 'os'),
-    sort: parseSort(p, ITEM_SORTS),
+    sort: sort && sort.sort === 'nabavna' && !opts.canSeeCost ? null : sort,
   };
 }
 
@@ -147,18 +151,25 @@ const listSelect = {
   contractItem: { select: { contractId: true, contract: { select: { number: true } } } },
 } satisfies Prisma.ItemSelect;
 
-/** Stranica popisa, ukupan broj, vrijednost filtriranog skupa i brojevi po stanju. */
+/**
+ * Stranica popisa, ukupan broj, vrijednost filtriranog skupa i brojevi po stanju.
+ * Zbrojevi idu jednim prolazom (groupBy po stanju bez filtra stanja): ukupno i
+ * vrijednost filtriranog skupa su zbroj odabranog stanja ili svih stanja — filtar
+ * stanja je jedino po čemu se ta dva skupa razlikuju.
+ */
 export async function listItems(companyId: string, f: ItemFilters, page: { skip: number; take: number }) {
   const search = await resolveSearch(companyId, f.q, f.categoryIds);
   const where = itemWhere(companyId, f, { search });
   const orderBy = itemOrder(f);
-  const [rows, agg, byState] = await Promise.all([
+  const [rows, byState] = await Promise.all([
     db.item.findMany({ where, select: listSelect, orderBy, skip: page.skip, take: page.take }),
-    db.item.aggregate({ where, _count: { _all: true }, _sum: { cost: true } }),
-    db.item.groupBy({ by: ['state'], where: itemWhere(companyId, f, { ignoreState: true, search }), _count: { _all: true } }),
+    db.item.groupBy({ by: ['state'], where: itemWhere(companyId, f, { ignoreState: true, search }), _count: { _all: true }, _sum: { cost: true } }),
   ]);
   const counts = Object.fromEntries(byState.map((s) => [s.state, s._count._all])) as Partial<Record<StatusKind, number>>;
-  return { rows, total: agg._count._all, costSum: num(agg._sum.cost), counts };
+  const inSet = byState.filter((s) => !f.state || s.state === f.state);
+  const total = inSet.reduce((a, s) => a + s._count._all, 0);
+  const costSum = inSet.reduce((a, s) => a + num(s._sum.cost), 0);
+  return { rows, total, costSum: Math.round(costSum * 100) / 100, counts };
 }
 
 export type ItemListRow = Awaited<ReturnType<typeof listItems>>['rows'][number];

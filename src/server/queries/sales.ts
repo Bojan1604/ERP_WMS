@@ -371,6 +371,11 @@ export async function getSalesLookups(companyId: string) {
       kpdRent: company.kpdRent,
       kpdService: company.kpdService,
       proformaTitle: company.proformaTitle,
+      // tekstovi oslobođenja PDV-a za strane kupce (Postavke → Firma)
+      vatTextEuGoods: company.vatTextEuGoods,
+      vatTextEuService: company.vatTextEuService,
+      vatTextThirdGoods: company.vatTextThirdGoods,
+      vatTextThirdService: company.vatTextThirdService,
     },
   };
 }

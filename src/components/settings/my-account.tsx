@@ -58,7 +58,15 @@ function TwoFactor({ enabled, backupLeft }: { enabled: boolean; backupLeft: numb
   const [disable, setDisable] = useState(false);
   const [password, setPassword] = useState('');
   const [regen, setRegen] = useState(false);
-  const start = useAction(startTotpAction, { refresh: false, onSuccess: (d) => setSetup(d as { secret: string; qr: string }) });
+  const [asking, setAsking] = useState(false);
+  const start = useAction(startTotpAction, {
+    refresh: false,
+    onSuccess: (d) => {
+      setAsking(false);
+      setPassword('');
+      setSetup(d as { secret: string; qr: string });
+    },
+  });
   const confirm = useAction(confirmTotpAction, {
     onSuccess: (d) => {
       setSetup(null);
@@ -117,12 +125,30 @@ function TwoFactor({ enabled, backupLeft }: { enabled: boolean; backupLeft: numb
           <FormError error={confirm.error} />
         </div>
       ) : (
-        <Button variant="primary" icon={<ShieldCheck className="size-4" />} loading={start.pending} onClick={() => start.run({})}>
+        <Button variant="primary" icon={<ShieldCheck className="size-4" />} onClick={() => setAsking(true)}>
           Uključi prijavu u dva koraka
         </Button>
       )}
 
       {codes && <BackupCodes codes={codes} onClose={() => setCodes(null)} />}
+      <Dialog
+        open={asking}
+        onClose={() => setAsking(false)}
+        title="Uključiti prijavu u dva koraka?"
+        size="sm"
+        footer={
+          <>
+            <Button onClick={() => setAsking(false)}>Odustani</Button>
+            <Button variant="primary" loading={start.pending} disabled={!password} onClick={() => start.run({ password })}>
+              Nastavi
+            </Button>
+          </>
+        }
+      >
+        <Field label="Za potvrdu upišite svoju lozinku" error={start.error ?? undefined}>
+          <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" autoFocus />
+        </Field>
+      </Dialog>
       <Dialog
         open={disable}
         onClose={() => setDisable(false)}

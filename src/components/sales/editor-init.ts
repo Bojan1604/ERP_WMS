@@ -13,7 +13,8 @@ import { autoKpd, deviceToLine } from './line-tools';
 export function newInvoiceValue(lookups: SalesLookups, partnerId: string | null, devices: DeviceOpt[] = [], type: 'SALE' | 'RENT' = 'SALE'): InvoiceEditorValue {
   const { company, models } = lookups;
   const partner = lookups.partners.find((p) => p.id === partnerId) ?? null;
-  const vat = customerVat(partner ?? company.country, company);
+  // tretman prema vrsti računa: najam je usluga (strani kupac: čl. 17., ne čl. 41./45.)
+  const vat = customerVat(partner ?? company.country, company, type);
   const date = today();
   const lines: EditorLine[] =
     type === 'RENT'

@@ -53,7 +53,8 @@ const opts = (values: string[]) => values.map((v) => ({ value: v, label: v }));
 export default async function WarehousePage({ searchParams }: { searchParams: Promise<Params> }) {
   const user = await pageAccess('warehouse', 'view');
   const sp = await searchParams;
-  const f = parseItemFilters(sp);
+  const costs = canSeeCost(user.perms);
+  const f = parseItemFilters(sp, { canSeeCost: costs });
   const pg = readPage(sp, 50);
   const c = user.companyId;
 
@@ -66,7 +67,6 @@ export default async function WarehousePage({ searchParams }: { searchParams: Pr
     f.supplierId ? db.partner.findFirst({ where: { id: f.supplierId, companyId: c }, select: { id: true, name: true } }) : null,
   ]);
 
-  const costs = canSeeCost(user.perms);
   const perms = {
     canEdit: can(user.perms, 'warehouse', 'edit'),
     canOps: can(user.perms, 'warehouse', 'ops'),
@@ -94,13 +94,15 @@ export default async function WarehousePage({ searchParams }: { searchParams: Pr
     const rent = r.rentPrice ?? r.model.rentPrice;
     const start = r.warrantyStart ?? r.invoice?.date ?? r.issueDate;
     const days = warrantyDaysLeft(start ? toISO(start) : null, r.warrantyMonths ?? r.model.warrantyMonths ?? company.defaultWarrantyMonths);
-    const suggested = suggestedSalePrice({
+    const sug = suggestedSalePrice({
       modelPrice: r.model.salePrice === null ? null : num(r.model.salePrice),
       cost,
       itemMargin: r.marginPct === null ? null : num(r.marginPct),
       modelMargin: r.model.marginPct === null ? null : num(r.model.marginPct),
       companyMargin,
-    }).price;
+    });
+    // preporučena iz marže otkriva nabavnu — bez prava `costs` samo cijena modela
+    const suggested = costs || sug.source === 'model' ? sug.price : null;
     return {
       status: <Badge tone={COLOR_TONE[r.status.color] ?? 'neutral'}>{r.status.name}</Badge>,
       partner: r.partner ? (
@@ -118,7 +120,7 @@ export default async function WarehousePage({ searchParams }: { searchParams: Pr
       os: <span className="text-fg-3">{r.os ?? '—'}</span>,
       warehouse: r.warehouse?.name ?? dash,
       cost: eur(cost),
-      suggested: <span className="text-fg-3">{eur(suggested)}</span>,
+      suggested: suggested === null ? dash : <span className="text-fg-3">{eur(suggested)}</span>,
       sale: r.salePrice && num(r.salePrice) > 0 ? eur(num(r.salePrice)) : dash,
       rent: rent && num(rent) > 0 ? eur(num(rent)) : dash,
       import: date(r.importDate),

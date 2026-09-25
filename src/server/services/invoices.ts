@@ -6,12 +6,13 @@ import { nextSeq } from '../numbering';
 import { audit } from '../audit';
 import { changeItemStatus, itemEvents, type Actor } from './items';
 import { documentTotals, formatInvoiceNumber, lineShareOfNet, openAmount, paymentReference, INVOICE_KIND_LABEL, type ChargeInput } from '@/domain/invoice';
-import { addDays, addMonths, formatDate, fromISO, toISO, today } from '@/domain/dates';
-import { pendingInstallments, type BillingCode, type PlanPeriodInput } from '@/domain/billing';
-import { coveredPeriods, toDevice, toTerms } from './contract-items';
+import { addDays, formatDate, fromISO, toISO, today } from '@/domain/dates';
+import type { BillingCode, PlanPeriodInput } from '@/domain/billing';
+import { coveredPeriods, rentPeriodFor } from './contract-items';
 import { num, r2 } from '@/domain/money';
 import { fiscalAtIssue } from '../fiscal/issue';
 import { billingFromMonths, defaultKpd, effectiveLineType, hasRentLines, invoiceRentPlan } from '@/domain/sales-lines';
+import { alignInvoiceVat, mixedSupplyError, supplyKindOf } from '@/domain/tax';
 
 // ---------------------------------------------------------------- ulazni oblici
 
@@ -211,9 +212,30 @@ function headerData(input: InvoiceInput) {
   } satisfies Partial<Prisma.InvoiceUncheckedCreateInput>;
 }
 
+/**
+ * Porezni tretman nacrta prema vrsti isporuke (roba / najam i usluge): automatski
+ * upisan tretman stranog kupca usklađuje se s vrstom računa (npr. najam kupcu u EU →
+ * AE i čl. 17., ne K i čl. 41.), a miješani račun robe i usluge stranom kupcu se
+ * odbija — račun ima jednu kategoriju i jedan razlog oslobođenja.
+ */
+async function vatForDraft(tx: Tx, actor: Actor, partner: { country: string | null; vatCategoryOverride: string | null }, input: InvoiceInput): Promise<InvoiceInput> {
+  const company = await tx.company.findUniqueOrThrow({
+    where: { id: actor.companyId },
+    select: { vatRegistered: true, vatRate: true, country: true, vatTextEuGoods: true, vatTextEuService: true, vatTextThirdGoods: true, vatTextThirdService: true },
+  });
+  const vc = { ...company, vatRate: num(company.vatRate) };
+  const kind = supplyKindOf(input.type, input.lines);
+  const taxCategory = input.taxCategory ?? 'S';
+  const mixed = mixedSupplyError(partner, vc, taxCategory, kind);
+  if (mixed) throw new DomainError(mixed);
+  const t = alignInvoiceVat(partner, vc, kind, { taxCategory, taxExemptReason: input.taxExemptReason ?? null });
+  return { ...input, taxCategory: t.taxCategory, taxExemptReason: t.taxExemptReason, vatRate: t.taxCategory === 'S' ? input.vatRate : 0 };
+}
+
 export async function createDraft(tx: Tx, actor: Actor, input: InvoiceInput) {
   const partner = await tx.partner.findFirst({ where: { id: input.partnerId, companyId: actor.companyId } });
   assert(partner, 'Kupac ne postoji.');
+  input = await vatForDraft(tx, actor, partner, input);
   const inv = await tx.invoice.create({
     data: { companyId: actor.companyId, ...headerData(input), createdBy: actor.name },
   });
@@ -227,8 +249,9 @@ export async function updateDraft(tx: Tx, actor: Actor, id: string, input: Invoi
   const inv = await tx.invoice.findFirst({ where: { id, companyId: actor.companyId } });
   assert(inv, 'Račun ne postoji.');
   assert(inv.status === 'DRAFT', 'Izdani račun se ne može mijenjati — ispravak ide stornom ili odobrenjem.');
-  const partner = await tx.partner.findFirst({ where: { id: input.partnerId, companyId: actor.companyId }, select: { id: true } });
+  const partner = await tx.partner.findFirst({ where: { id: input.partnerId, companyId: actor.companyId }, select: { id: true, country: true, vatCategoryOverride: true } });
   assert(partner, 'Kupac ne postoji.');
+  input = await vatForDraft(tx, actor, partner, input);
   await tx.invoice.update({ where: { id }, data: headerData(input) });
   await writeLines(tx, actor, id, input.type, input.lines);
   await recalcInvoice(tx, id);
@@ -276,6 +299,11 @@ export async function issueInvoice(tx: Tx, actor: Actor, id: string) {
   assert(inv, 'Račun ne postoji.');
   assert(inv.status === 'DRAFT', 'Račun je već izdan.');
   assert(inv.lines.length > 0, 'Račun nema stavki.');
+  if (inv.kind === 'INVOICE' || inv.kind === 'ADVANCE') {
+    // nacrt spremljen prije provjere: roba i usluga stranom kupcu ne idu na isti račun
+    const mixed = mixedSupplyError(inv.partner, { ...inv.company, vatRate: num(inv.company.vatRate) }, inv.taxCategory, supplyKindOf(inv.type, inv.lines));
+    if (mixed) throw new DomainError(mixed);
+  }
 
   const date = toISO(inv.date);
   const year = inv.date.getUTCFullYear();
@@ -385,6 +413,8 @@ async function applySale(tx: Tx, actor: Actor, inv: IssuingInvoice, saleLines: I
  */
 async function applyRent(tx: Tx, actor: Actor, inv: IssuingInvoice, rentLines: IssuingInvoice['lines']) {
   assert(inv.contractId, 'Stavke najma moraju biti vezane uz ugovor — odaberite ugovor ili „+ Novi ugovor".');
+  // zaključavanje ugovora: dva istodobna računa (ili račun i rata iz Najma) ne fakturiraju isto razdoblje
+  await tx.$queryRaw`SELECT id FROM "Contract" WHERE id = ${inv.contractId} FOR UPDATE`;
   const contract = await tx.contract.findFirst({ where: { id: inv.contractId, companyId: actor.companyId } });
   assert(contract, 'Ugovor ne postoji.');
   assert(contract.partnerId === inv.partnerId, 'Ugovor pripada drugom klijentu.');
@@ -400,6 +430,8 @@ async function applyRent(tx: Tx, actor: Actor, inv: IssuingInvoice, rentLines: I
   const attach = devLines.filter((l) => !known.has(l.itemId!));
   const date = toISO(inv.date);
   if (attach.length) {
+    // jednokratna naplata pokriva cijeli ugovor — stavka s mjesecima bi uređaju dala mjesečnu naplatu
+    assert(contract.billing !== 'ONCE', `Ugovor ${contract.number} ima jednokratnu naplatu — nove uređaje na njega dodajte u modulu Najam.`);
     // dinamički uvoz: rentals.ts uvozi ovaj modul (izbjegava kružni uvoz pri učitavanju)
     const { attachItems } = await import('./rentals');
     const start = toISO(contract.startDate);
@@ -432,8 +464,8 @@ async function applyRent(tx: Tx, actor: Actor, inv: IssuingInvoice, rentLines: I
       summary: `Ugovor ${contract.number}: dodano ${attach.length} uređaja računom za najam`,
     });
   }
-  if (!inv.period) {
-    const period = await firstRentPeriod(tx, contract.id, ids, date);
+  const period = await rentPeriodFor(tx, contract.id, devLines, inv.period, date);
+  if (period !== inv.period) {
     await tx.invoice.update({ where: { id: inv.id }, data: { period } });
     inv.period = period;
   }
@@ -447,16 +479,6 @@ async function applyRent(tx: Tx, actor: Actor, inv: IssuingInvoice, rentLines: I
       refId: inv.id,
     });
   }
-}
-
-/** Prva nefakturirana rata uređaja s računa na ugovoru (mjesec računa kad je nema). */
-async function firstRentPeriod(tx: Tx, contractId: string, itemIds: string[], date: string): Promise<string> {
-  if (!itemIds.length) return date.slice(0, 7);
-  const c = await tx.contract.findUniqueOrThrow({ where: { id: contractId }, include: { items: { where: { itemId: { in: itemIds } } } } });
-  const covered = (await coveredPeriods(tx, [contractId])).get(contractId) ?? new Set<string>();
-  const now = addMonths(date > today() ? date : today(), 12);
-  const rows = pendingInstallments({ ...toTerms(c), status: 'ACTIVE' }, c.items.map(toDevice), covered, now, 36);
-  return rows[0]?.period ?? date.slice(0, 7);
 }
 
 /**

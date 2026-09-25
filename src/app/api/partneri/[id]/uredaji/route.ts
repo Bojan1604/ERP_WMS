@@ -17,7 +17,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     return new Response(e instanceof AuthError ? e.message : 'Greška', { status: e instanceof AuthError ? e.status : 500 });
   }
   const { id } = await params;
-  const sheet = await clientSheet(user.companyId, id, { view, contractId });
+  const sheet = await clientSheet(user.companyId, id, { view, contractId, limit: null });
   if (!sheet) return new Response('Partner ili ugovor ne postoji.', { status: 404 });
   const slug = sheet.partner.name.normalize('NFD').replace(/[^\w]+/g, '-').replace(/^-|-$/g, '').toLowerCase().slice(0, 40);
   const terms = sheet.contracts

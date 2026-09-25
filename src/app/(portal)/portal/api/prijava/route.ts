@@ -14,6 +14,9 @@ const schema = z.object({
   contact: z.string().trim().max(200, 'Kontakt je predug.').optional(),
 });
 
+/** Najveće tijelo zahtjeva: sve fotografije + tekst i zaglavlja multiparta. */
+const REQUEST_MAX_BYTES = PORTAL_MAX_PHOTOS * ATTACHMENT_MAX_BYTES + 64 * 1024;
+
 /**
  * Prijava kvara s portala (multipart: itemId, issue, contact, do 4 × `photo`).
  * Nalog i fotografije (prilozi servisnog naloga) nastaju u jednoj transakciji.
@@ -22,6 +25,10 @@ export async function POST(req: Request) {
   try {
     const user = await requirePortalUser();
     if (portalReportLimit.blocked(user.id)) return Response.json({ ok: false, error: 'Previše prijava u kratkom vremenu. Pokušajte kasnije ili nas nazovite.' }, { status: 429 });
+    // veličina zahtjeva prije čitanja obrasca (inače se cijelo tijelo učita u memoriju)
+    const length = Number(req.headers.get('content-length') ?? NaN);
+    if (!Number.isFinite(length)) return Response.json({ ok: false, error: 'Nedostaje veličina zahtjeva.' }, { status: 411 });
+    if (length > REQUEST_MAX_BYTES) return Response.json({ ok: false, error: `Prijava s fotografijama je prevelika (najviše ${PORTAL_MAX_PHOTOS} × ${ATTACHMENT_MAX_BYTES / 1024 / 1024} MB).` }, { status: 413 });
     const form = await req.formData();
     const input = schema.parse({ itemId: form.get('itemId') ?? '', issue: form.get('issue') ?? '', contact: form.get('contact') ?? undefined });
     const files = form.getAll('photo').filter((f): f is File => typeof f === 'object' && f !== null && 'arrayBuffer' in f && f.size > 0);

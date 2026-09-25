@@ -45,7 +45,8 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
   const xml = si.attachments.find((a) => a.mime === 'application/xml');
   const pdfs = si.attachments.filter((a) => a.mime === 'application/pdf');
   const fileHref = (attId: string) => `/api/nabava/ulazni/${si.id}/prilog/${attId}`;
-  const bookedByReceipt = si.receiptExpenses > 0;
+  // račun za robu s primke: roba je knjižena primkom, a račun nema vlastitog troška (drugi računi — prijevoz i sl. — imaju svoj)
+  const bookedByReceipt = si.receiptExpenses > 0 && !si.expense;
   // prihvaćen račun bez troška (obrisan stornom primke ili nikad knjižen) — „Knjiži ponovno"
   const canRebook = canEdit && si.status === 'ACCEPTED' && !si.expense && !bookedByReceipt;
 
@@ -176,6 +177,8 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
           note: si.note,
           paidDate: si.paidDate ? toISO(si.paidDate) : null,
           book: !!si.expense || bookedByReceipt,
+          // bez vlastitog troška uz knjiženu primku = račun za robu; inače zadano pravilo iznosa
+          goods: !si.expense && (bookedByReceipt || si.defaultGoods),
           vatPct: si.vatPct === null ? null : num(si.vatPct),
           currency: si.currency,
           orderId: si.orderId,

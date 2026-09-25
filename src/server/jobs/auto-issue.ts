@@ -2,7 +2,7 @@ import 'server-only';
 import { db } from '../db';
 import { audit } from '../audit';
 import { afterIssue } from '../fiscal';
-import { issuePending, pendingForCompany } from '../services/rentals';
+import { issuePending, pendingForCompany, tryLockInstallment } from '../services/rentals';
 import type { Actor } from '../services/items';
 import { fromISO, toISO, today } from '@/domain/dates';
 
@@ -84,8 +84,7 @@ export async function autoIssueCompany(companyId: string, opts: { day?: string; 
     try {
       const r = await db.$transaction(
         async (tx) => {
-          const [lock] = await tx.$queryRaw<Array<{ ok: boolean }>>`SELECT pg_try_advisory_xact_lock(hashtext(${`auto-issue:${companyId}:${p.contractId}:${p.period}`})) AS ok`;
-          if (!lock?.ok) return null;
+          if (!(await tryLockInstallment(tx, companyId, p.contractId, p.period))) return null;
           return issuePending(tx, actor, [{ contractId: p.contractId, period: p.period }]);
         },
         { maxWait: 10_000, timeout: 60_000 },

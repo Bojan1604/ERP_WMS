@@ -3,6 +3,7 @@ import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import { getCompany, getLookups } from '@/server/queries/lookups';
 import { supplierOptions } from '@/server/queries/purchasing';
+import { goodsInvoiceContext } from '@/server/services/supplier-invoices';
 import { today } from '@/domain/dates';
 import { num } from '@/domain/money';
 import { PageHeader } from '@/components/ui/misc';
@@ -24,6 +25,9 @@ export default async function NewSupplierInvoicePage({ searchParams }: { searchP
   ]);
   const supplierId = receipt?.supplierId ?? order?.supplierId ?? null;
   const net = receipt ? num(receipt.total) : order ? num(order.total) : 0;
+  const links = { orderId: order?.id ?? receipt?.orderId ?? null, receiptId: receipt?.id ?? null };
+  // zadano „račun za robu s primke": iznos s dokumenta i nijedan drugi povezani račun već nije račun za tu robu
+  const goods = links.orderId || links.receiptId ? (await goodsInvoiceContext(db, user.companyId, { id: null, ...links, netAmount: net })).defaultGoods : false;
   return (
     <>
       <PageHeader
@@ -53,8 +57,9 @@ export default async function NewSupplierInvoicePage({ searchParams }: { searchP
           note: null,
           paidDate: null,
           book: true,
-          orderId: order?.id ?? receipt?.orderId ?? null,
-          receiptId: receipt?.id ?? null,
+          goods,
+          orderId: links.orderId,
+          receiptId: links.receiptId,
         }}
         links={{
           order: order ? { value: order.id, label: order.number } : null,

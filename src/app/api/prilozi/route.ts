@@ -28,6 +28,9 @@ export async function GET(req: Request) {
   }
 }
 
+/** Najveće tijelo zahtjeva: najveći dopušteni skup datoteka bilo koje vrste zapisa + zaglavlja multiparta. */
+const MAX_BODY_BYTES = Math.max(...Object.values(ATTACHMENT_ENTITIES).map((r) => r.maxBytes * r.max)) + 256 * 1024;
+
 /**
  * Prijenos priloga: multipart s poljima `entity`, `entityId` i jednom ili više
  * datoteka `file`. Slike se prije slanja smanjuju u pregledniku.
@@ -36,6 +39,10 @@ export async function POST(req: Request) {
   try {
     const user = await requireUser();
     if (isExternalRole(user.role)) throw new AuthError('Nemate pravo dodavati priloge.', 403);
+    // veličina tijela se provjerava prije čitanja (formData() bi cijeli zahtjev učitao u memoriju)
+    const length = Number(req.headers.get('content-length'));
+    if (!Number.isFinite(length) || length <= 0) return Response.json({ ok: false, error: 'Nedostaje veličina zahtjeva.' }, { status: 411 });
+    if (length > MAX_BODY_BYTES) return Response.json({ ok: false, error: 'Prilozi su preveliki za jedan prijenos.' }, { status: 413 });
     const form = await req.formData();
     const entity = String(form.get('entity') ?? '');
     const entityId = String(form.get('entityId') ?? '');
@@ -45,6 +52,7 @@ export async function POST(req: Request) {
 
     const files = form.getAll('file').filter((f): f is File => typeof f === 'object' && f !== null && 'arrayBuffer' in f);
     if (!files.length) return Response.json({ ok: false, error: 'Niste odabrali datoteku.' }, { status: 400 });
+    if (files.length > rule.max) return Response.json({ ok: false, error: `Najviše ${rule.max} priloga odjednom.` }, { status: 413 });
     // veličina se provjerava prije čitanja sadržaja
     const big = files.find((f) => f.size > rule.maxBytes);
     if (big) return Response.json({ ok: false, error: `Datoteka „${big.name}" je veća od ${rule.maxBytes / 1024 / 1024} MB.` }, { status: 413 });

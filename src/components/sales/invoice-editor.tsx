@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { BadgeEuro, Boxes, Info, PenLine, Save, Send, Wrench } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, Badge, Notice } from '@/components/ui/misc';
@@ -10,7 +10,7 @@ import { useAction } from '@/components/ui/action';
 import { useToast } from '@/components/ui/toast';
 import { eur } from '@/lib/format';
 import { deviceLineKey, documentTotals, groupLines, unifyDevicePrices } from '@/domain/invoice';
-import { customerVat } from '@/domain/tax';
+import { customerVat, mixedSupplyError, supplyKindOf } from '@/domain/tax';
 import { addDays } from '@/domain/dates';
 import { r2 } from '@/domain/money';
 import { PAYMENT_METHOD_LABEL, PAYMENT_METHODS, type PaymentMethodCode } from '@/domain/fiscal';
@@ -88,7 +88,24 @@ export function InvoiceEditor({
 
   const partner = partners.find((p) => p.id === v.partnerId) ?? null;
   const term = partner?.paymentTermDays ?? company.paymentTermDays;
-  const treatment = partner ? customerVat(partner, company) : null;
+  // porezni tretman prema vrsti isporuke: prodaja = roba, najam i servis = usluga (strani kupac)
+  const supply = supplyKindOf(v.type, v.lines);
+  const vatKind = supply === 'MIXED' ? 'SALE' : supply;
+  const treatment = partner ? customerVat(partner, company, vatKind) : null;
+  const mixedError = partner ? mixedSupplyError(partner, company, v.taxCategory, supply) : null;
+  // promjena vrste isporuke: automatski tretman se preračunava, ručno promijenjen ostaje
+  const autoVat = useRef(treatment);
+  useEffect(() => {
+    const prev = autoVat.current;
+    autoVat.current = treatment;
+    if (!prev || !treatment || (prev.category === treatment.category && prev.exemptReason === treatment.exemptReason && prev.rate === treatment.rate)) return;
+    setV((cur) =>
+      cur.taxCategory === prev.category && (cur.taxExemptReason ?? '') === (prev.exemptReason ?? '') && cur.vatRate === prev.rate
+        ? { ...cur, taxCategory: treatment.category, taxExemptReason: treatment.exemptReason ?? '', vatRate: treatment.rate }
+        : cur,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [treatment?.category, treatment?.exemptReason, treatment?.rate]);
   const rentUsed = v.type === 'RENT' || v.lines.some((l) => l.lineType === 'RENT');
   const rentMonths = rentMonthsFor(v.contractId ?? null, contracts, v.rent!);
   const totals = useMemo(
@@ -107,7 +124,7 @@ export function InvoiceEditor({
   const choosePartner = (id: string | null) => {
     const p = partners.find((x) => x.id === id);
     if (!p) return set({ partnerId: null });
-    const t = customerVat(p, company);
+    const t = customerVat(p, company, vatKind);
     set({
       partnerId: p.id,
       vatRate: t.rate,
@@ -300,6 +317,11 @@ export function InvoiceEditor({
             Porezni tretman: <Badge tone={treatment.category === 'S' ? 'brand' : 'info'}>{treatment.label}</Badge>
             {(treatment.rate !== v.vatRate || treatment.category !== v.taxCategory) && <Badge tone="warn">ručno promijenjeno</Badge>}
           </p>
+        )}
+        {mixedError && (
+          <div className="mt-3">
+            <Notice tone="warn">{mixedError}</Notice>
+          </div>
         )}
       </Card>
 

@@ -61,7 +61,7 @@ export default async function PartnerPage({ params, searchParams }: { params: Pr
         actions={
           <>
             {counts.devices > 0 && <ClientSheetButton partnerId={id} />}
-            <SendEmailButton kind="partner" id={id} defaultTo={partner.email} defaultSubject={company.name} label="Pošalji e-mail" />
+            {canEdit && <SendEmailButton kind="partner" id={id} defaultTo={partner.email} defaultSubject={company.name} label="Pošalji e-mail" />}
             {canSales && counts.open > 0 ? (
               <div className="rounded-lg bg-bad-soft px-3 py-1.5 text-right">
                 <p className="text-xs text-bad-strong">Otvoreno ({counts.openCount})</p>

@@ -124,15 +124,39 @@ export const revenueSql = (companyId: string) =>
     AND NOT (i."kind" = 'STORNO' AND EXISTS (SELECT 1 FROM "Invoice" r WHERE r.id = i."refInvoiceId" AND r."kind" = 'ADVANCE'))`;
 
 /**
- * Važeće prodajne stavke uređaja: izdani, nestornirani računi; vrsta stavke je
- * prodaja (na miješanom računu stavka nosi vlastitu vrstu). Traži aliase i, l, p.
+ * Stavke prihoda za izvještaje po stavkama (klijent, model, uređaj, kategorija) — izvedena
+ * tablica s aliasom po izboru (`FROM (${revenueLinesSql(…)}) l`). Stupci:
+ * "invoiceId", "partnerId", "date", "docKind", "modelId", "itemId", "type" (vrsta stavke),
+ * "lineKind", qty, cost, net, "isCredit".
+ *
+ * - `net` je stavka NAKON popusta na cijeli račun (popust se raspoređuje razmjerno, kao
+ *   `lineShareOfNet`), pa zbroj stavki računa = osnovica računa (netTotal).
+ * - Knjižna odobrenja ulaze kao negativni iznosi raspoređeni na stavke izvornog računa
+ *   (razmjerno), s datumom i partnerom odobrenja; količina i nabavna 0.
+ * - `withStorno`: računi i storna (negativni) kao u „Prihod po mjesecima" — zbroj po razdoblju
+ *   odgovara prihodu. Bez toga: samo važeći (nestornirani) računi — za komade i prosječne cijene.
+ * Uvjeti firme, izdanosti, isključenih partnera, razdoblja i partnera su već unutra.
  */
-export const saleLineSql = (companyId: string) =>
-  Prisma.sql`i."companyId" = ${companyId} AND i."status" = 'ISSUED' AND i."kind" = 'INVOICE' AND COALESCE(l."lineType", i."type") = 'SALE' AND i."stornoed" = false AND p."excluded" = false`;
-
-/** Važeće stavke najma (rate): kao prodajne, ali vrsta stavke je najam. */
-export const rentLineSql = (companyId: string) =>
-  Prisma.sql`i."companyId" = ${companyId} AND i."status" = 'ISSUED' AND i."kind" = 'INVOICE' AND COALESCE(l."lineType", i."type") = 'RENT' AND i."stornoed" = false AND p."excluded" = false`;
+export function revenueLinesSql(companyId: string, f: Pick<ReportFilters, 'year' | 'from' | 'to' | 'partnerIds'>, opts: { withStorno?: boolean } = {}) {
+  const linesNet = (doc: string) => Prisma.sql`(SELECT SUM(x."netAmount") FROM "InvoiceLine" x WHERE x."invoiceId" = ${Prisma.raw(doc)}.id)`;
+  const docs = opts.withStorno
+    ? Prisma.sql`i."kind" IN ('INVOICE','STORNO') AND NOT (i."kind" = 'STORNO' AND EXISTS (SELECT 1 FROM "Invoice" r WHERE r.id = i."refInvoiceId" AND r."kind" = 'ADVANCE'))`
+    : Prisma.sql`i."kind" = 'INVOICE' AND i."stornoed" = false`;
+  return Prisma.sql`
+    SELECT i.id AS "invoiceId", i."partnerId", i."date", i."kind"::text AS "docKind", l."modelId", l."itemId", COALESCE(l."lineType", i."type")::text AS "type",
+           l."kind"::text AS "lineKind", l."qty", l."cost", false AS "isCredit",
+           CASE WHEN i."discountPct" = 0 AND i."discountAmount" = 0 THEN l."netAmount"
+                ELSE COALESCE(l."netAmount" * i."netTotal" / NULLIF(${linesNet('i')}, 0), 0) END AS net
+    FROM "InvoiceLine" l JOIN "Invoice" i ON i.id = l."invoiceId" JOIN "Partner" p ON p.id = i."partnerId"
+    WHERE i."companyId" = ${companyId} AND i."status" = 'ISSUED' AND ${docs} AND p."excluded" = false
+      ${periodSql('i."date"', f)} ${inIds('i."partnerId"', f.partnerIds)}
+    UNION ALL
+    SELECT c.id, c."partnerId", c."date", 'CREDIT_NOTE', l."modelId", l."itemId", COALESCE(l."lineType", r."type")::text,
+           l."kind"::text, 0, 0, true, COALESCE(c."netTotal" * l."netAmount" / NULLIF(${linesNet('r')}, 0), 0)
+    FROM "Invoice" c JOIN "Partner" p ON p.id = c."partnerId" JOIN "Invoice" r ON r.id = c."refInvoiceId" JOIN "InvoiceLine" l ON l."invoiceId" = r.id
+    WHERE c."companyId" = ${companyId} AND c."status" = 'ISSUED' AND c."kind" = 'CREDIT_NOTE' AND p."excluded" = false
+      ${periodSql('c."date"', f)} ${inIds('c."partnerId"', f.partnerIds)}`;
+}
 
 export const opt = (cond: boolean, sql: Prisma.Sql) => (cond ? sql : Prisma.empty);
 

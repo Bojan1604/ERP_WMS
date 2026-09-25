@@ -183,10 +183,12 @@ export async function dashboardData(companyId: string, perms: PermissionMap) {
       serviceOpen,
       receivables: receivables ? { amount: num(receivables._sum.openAmount), count: receivables._count } : null,
       overdue: overdue ? { amount: num(overdue._sum.openAmount), count: overdue._count } : null,
-      stock: stock ? { value: num(stock._sum.cost), count: stock._count } : null,
+      // vrijednost zalihe je nabavna — samo uz pravo na nabavne cijene
+      stock: stock ? { value: costs ? num(stock._sum.cost) : null, count: stock._count } : null,
       rent: rentMonthly ? { monthly: num(rentMonthly._sum.monthly), contracts: activeContracts ?? 0 } : null,
     },
-    months: money ? months.map((m) => ({ ...m, profit: costs ? m.SALE - m.cost : null })) : null,
+    // bruto dobit kao KPI i izvještaj „Profit po mjesecima": sav prihod − nabavna vrijednost prodanog
+    months: money ? months.map((m) => ({ ...m, profit: costs ? m.SALE + m.RENT + m.SERVICE - m.cost : null })) : null,
     byStatus,
     stale: stale ? { count: stale[0]?.total ?? 0, value: costs ? num(stale[0]?.value) : null, rows: stale.map((r) => ({ id: r.id, serial: r.serial, model: r.model, since: toISO(r.since), cost: costs ? num(r.cost) : null })) } : null,
     returns: returns

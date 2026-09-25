@@ -9,6 +9,7 @@ import { env } from './env';
 import { AuthError } from './errors';
 import { SESSION_COOKIE } from '@/lib/session-cookie';
 import { can, isExternalRole, resolvePermissions, type Level, type Module, type PermissionMap, type RoleCode } from '@/domain/permissions';
+import { parseTrustProxy, pickClientIp } from '@/domain/client-ip';
 
 export interface SessionUser {
   id: string;
@@ -50,7 +51,7 @@ export async function createSession(userId: string) {
       userId,
       tokenHash: hash(token),
       expiresAt,
-      ip: h.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null,
+      ip: pickClientIp(h.get('x-forwarded-for'), parseTrustProxy(process.env.TRUST_PROXY)),
       userAgent: h.get('user-agent')?.slice(0, 300) ?? null,
     },
   });

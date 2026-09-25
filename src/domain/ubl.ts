@@ -17,7 +17,7 @@
  */
 import { CHARGE_KINDS, documentTotals, lineNet, type ChargeInput } from './invoice';
 import { r2 } from './money';
-import { VAT_ON_PAYMENT_NOTE, VAT_ON_PAYMENT_UBL } from './tax';
+import { NOT_REGISTERED_REASON, VAT_ON_PAYMENT_NOTE, VAT_ON_PAYMENT_UBL } from './tax';
 
 export const CIUS_ID = 'urn:cen.eu:en16931:2017#compliant#urn:mfin.gov.hr:cius-2025:1.0#conformant#urn:mfin.gov.hr:ext-2025:1.0';
 export const HREXT_NS = 'urn:mfin.gov.hr:schema:xsd:HRExtensionAggregateComponents-1';
@@ -170,7 +170,8 @@ export function ublTreatment(input: Pick<UblInput, 'taxCategory' | 'exemptReason
   const notRegistered = input.seller.vatRegistered === false;
   if (notRegistered) {
     cat = 'E';
-    reason ||= 'Nije u sustavu PDV-a — čl. 90. st. 2. Zakona o PDV-u';
+    // jedna osnova kao na ispisu (čl. 90. st. 2.) — i za starije račune s drugim stavkom čl. 90.
+    if (!reason || /čl\.\s*90\./.test(reason)) reason = NOT_REGISTERED_REASON;
   }
   if (cat === 'K' || cat === 'G') cat = 'E';
   if (!['S', 'AE', 'E', 'Z', 'O'].includes(cat)) cat = 'S';

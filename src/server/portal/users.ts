@@ -20,16 +20,19 @@ async function loadPortalUser(tx: Tx, actor: Actor, id: string) {
   return u;
 }
 
-async function assertEmailFree(tx: Tx, email: string, exceptId?: string) {
-  const other = await tx.portalUser.findUnique({ where: { email }, select: { id: true } });
-  assert(!other || other.id === exceptId, 'Ta e-adresa već ima pristup portalu.');
+async function assertEmailFree(tx: Tx, companyId: string, email: string, exceptId?: string) {
+  // adresa je jedinstvena u cijelom sustavu — za tuđu firmu poruka ne otkriva da adresa postoji
+  const other = await tx.portalUser.findUnique({ where: { email }, select: { id: true, companyId: true } });
+  if (!other || other.id === exceptId) return;
+  assert(other.companyId !== companyId, 'Ta e-adresa već ima pristup portalu.');
+  assert(false, 'Ova e-adresa ne može se koristiti za pristup portalu — upišite drugu.');
 }
 
 export async function createPortalUser(tx: Tx, actor: Actor, input: { partnerId: string; name: string | null; email: string }) {
   const partner = await tx.partner.findFirst({ where: { id: input.partnerId, companyId: actor.companyId }, select: { id: true, name: true } });
   assert(partner, 'Partner ne postoji.');
   const email = input.email.trim().toLowerCase();
-  await assertEmailFree(tx, email);
+  await assertEmailFree(tx, actor.companyId, email);
   const password = newPortalPassword();
   const u = await tx.portalUser.create({
     data: { companyId: actor.companyId, partnerId: partner.id, email, name: input.name?.trim() || null, passwordHash: await hashPassword(password) },
@@ -42,7 +45,7 @@ export async function createPortalUser(tx: Tx, actor: Actor, input: { partnerId:
 export async function updatePortalUser(tx: Tx, actor: Actor, id: string, input: { name: string | null; email: string }) {
   const u = await loadPortalUser(tx, actor, id);
   const email = input.email.trim().toLowerCase();
-  await assertEmailFree(tx, email, u.id);
+  await assertEmailFree(tx, actor.companyId, email, u.id);
   await tx.portalUser.update({ where: { id: u.id }, data: { email, name: input.name?.trim() || null } });
   // promjena adrese za prijavu odjavljuje postojeće sesije
   if (email !== u.email) await tx.portalSession.updateMany({ where: { portalUserId: u.id, revokedAt: null }, data: { revokedAt: new Date() } });

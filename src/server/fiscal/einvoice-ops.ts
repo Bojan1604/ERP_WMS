@@ -8,6 +8,7 @@ import { providerStatus, type EInvoiceStatusCode } from '@/domain/sales-lines';
 import { decryptSecret } from './crypto';
 import { providerFor, type EInvoiceProvider } from './einvoice';
 import { readMeta, type InvoiceFiscalMeta } from './issue';
+import { CLAIM_STALE_MS, claimSend, ownsClaim, releaseClaim } from './claim';
 import { invoiceUbl } from './ubl-source';
 import { withInvoicePdf } from '../pdf/einvoice';
 
@@ -67,11 +68,25 @@ async function ublOf(companyId: string, invoiceId: string) {
   return u;
 }
 
-async function setStatus(invoiceId: string, meta: InvoiceFiscalMeta, status: EInvoiceStatusCode | null, extra: Prisma.InvoiceUpdateInput = {}) {
-  await db.invoice.update({
-    where: { id: invoiceId },
+/**
+ * Upis stanja eRačuna samo ako vrijedi uvjet `guard` (npr. oznaka zauzimanja je još
+ * naša, račun se u međuvremenu nije promijenio) — istodobno slanje ili druga radnja
+ * ne smiju se međusobno prepisati. Vraća je li upisano.
+ */
+async function setStatus(invoiceId: string, guard: Prisma.InvoiceWhereInput, meta: InvoiceFiscalMeta, status: EInvoiceStatusCode | null, extra: Prisma.InvoiceUpdateManyMutationInput = {}) {
+  const r = await db.invoice.updateMany({
+    where: { id: invoiceId, ...guard },
     data: { eInvoice: meta as Prisma.InputJsonValue, eInvoiceStatus: status, eInvoiceStatusAt: new Date(), ...extra },
   });
+  return r.count > 0;
+}
+
+/** Oznaka „upravo se šalje" (claimSend) koja još nije zastarjela. */
+function sendingNow(v: unknown, now = Date.now()): boolean {
+  const s = (readMeta(v) as { sending?: { at?: string } }).sending;
+  if (!s) return false;
+  const at = Date.parse(s.at ?? '');
+  return !Number.isFinite(at) || now - at < CLAIM_STALE_MS;
 }
 
 /** „Provjeri eRačun": UBL ide posredniku na provjeru (document/validate), ništa se ne šalje. */
@@ -109,7 +124,9 @@ export async function refreshEInvoiceStatus(invoiceId: string, actor: Actor): Pr
       data = r.status;
     }
     const st = providerStatus(data);
-    await setStatus(inv.id, { ...meta, statusText: st.text, checkedAt: new Date().toISOString() }, st.code);
+    // upis samo dok je trag slanja isti (u međuvremenu nije poništen ni zamijenjen)
+    const saved = await setStatus(inv.id, { eInvoice: { path: ['id'], equals: meta.id } }, { ...meta, statusText: st.text, checkedAt: new Date().toISOString() }, st.code);
+    if (!saved) return { ok: false, message: 'Trag slanja eRačuna se u međuvremenu promijenio — osvježite stranicu.' };
     await audit(db, actor, { entity: 'invoice', entityId: inv.id, action: 'einvoice-status', summary: `eRačun ${inv.number}: stanje „${st.text}"` });
     return { ok: true, message: `Stanje kod posrednika: ${st.text}` };
   } catch (e) {
@@ -134,14 +151,36 @@ export async function reportWithoutSending(invoiceId: string, actor: Actor, type
     if (type === 'I' && (inv.partner.country || 'HR').toUpperCase() === 'HR') return { ok: false, message: 'eIzvještavanje (tip I) je za strane kupce.' };
     const p = providerOf(inv.company);
     if (!p.reportDocument) return { ok: false, message: `Posrednik (${p.code}) ne nudi prijavu dokumenta bez slanja.` };
-    const u = await ublOf(actor.companyId, inv.id);
-    // IR: PDF računa ugrađen u UBL (postavka „prilaži PDF") — kupcu se račun dostavlja PDF-om
-    const xml = type === 'IR' ? await withInvoicePdf(u.xml, actor.companyId, inv.id, inv.company.eInvoiceAttachPdf) : u.xml;
-    const r = await p.reportDocument(xml, type, { number: inv.number ?? '', buyerOib: inv.partner.oib, sellerOib: inv.company.oib });
+    // zauzimanje kao kod slanja: istodobno „Pošalji eRačun", naknadna dostava ili druga prijava ne prolaze
+    const claim = await claimSend(inv.id, actor.companyId, 'einvoice');
+    if (!claim) {
+      const now = await db.invoice.findUnique({ where: { id: inv.id }, select: { fiscalStatus: true, eInvoice: true } });
+      if (now?.fiscalStatus === 'SENT') return { ok: false, message: `Račun je već poslan ili prijavljen (${readMeta(now.eInvoice).id ?? '—'}).` };
+      return { ok: false, message: 'eRačun se upravo šalje — pričekajte i osvježite stranicu.' };
+    }
+    const cur = claim.meta;
+    if (cur.id) {
+      await releaseClaim(inv.id, claim.token, cur);
+      return { ok: false, message: `Dokument je već kod posrednika (${cur.id}).` };
+    }
+    let r: Awaited<ReturnType<NonNullable<EInvoiceProvider['reportDocument']>>>;
+    let u: Awaited<ReturnType<typeof ublOf>>;
+    try {
+      u = await ublOf(actor.companyId, inv.id);
+      // IR: PDF računa ugrađen u UBL (postavka „prilaži PDF") — kupcu se račun dostavlja PDF-om
+      const xml = type === 'IR' ? await withInvoicePdf(u.xml, actor.companyId, inv.id, inv.company.eInvoiceAttachPdf) : u.xml;
+      r = await p.reportDocument(xml, type, { number: inv.number ?? '', buyerOib: inv.partner.oib, sellerOib: inv.company.oib });
+    } catch (e) {
+      await releaseClaim(inv.id, claim.token, cur);
+      throw e;
+    }
     await log(inv.companyId, inv.id, r.ok, { request: `${p.code === 'demo' ? '[DEMO — nije poslano] ' : ''}reportdocument ${type} ${u.fileName}\n${u.xml}`, response: r.raw ?? null, error: r.ok ? null : r.error });
-    if (!r.ok || !r.id) return { ok: false, message: `Prijava nije uspjela: ${r.error ?? 'posrednik nije vratio id'}` };
+    if (!r.ok || !r.id) {
+      await releaseClaim(inv.id, claim.token, cur);
+      return { ok: false, message: `Prijava nije uspjela: ${r.error ?? 'posrednik nije vratio id'}` };
+    }
     const next: InvoiceFiscalMeta = {
-      ...meta,
+      ...cur,
       provider: inv.company.eInvoiceProvider,
       env: inv.company.fiscalEnv,
       id: r.id,
@@ -152,12 +191,17 @@ export async function reportWithoutSending(invoiceId: string, actor: Actor, type
       reportType: type,
       statusText: type === 'IR' ? 'fiskalizirano bez slanja (IR)' : 'prijavljeno u eIzvještavanje (tip I)',
     };
-    await setStatus(inv.id, next, type === 'IR' ? 'FISCALIZED' : 'REPORTED', {
+    // upis samo uz našu oznaku i dok račun nije upisan kao poslan (ne prepisuje istodobno slanje)
+    const saved = await setStatus(inv.id, { fiscalStatus: { not: 'SENT' }, ...ownsClaim(claim.token) }, next, type === 'IR' ? 'FISCALIZED' : 'REPORTED', {
       fiscalStatus: 'SENT',
       fiscalizedAt: new Date(),
       fiscalError: null,
       ...(type === 'I' ? { eReportedAt: new Date() } : {}),
     });
+    if (!saved) {
+      await log(inv.companyId, inv.id, false, { request: `reportdocument ${type}`, error: `Posrednik je vratio ${r.id}, ali račun je u međuvremenu upisan kao poslan — provjerite duplikat kod posrednika.` });
+      return { ok: false, message: `Posrednik je vratio ${r.id}, ali račun je u međuvremenu poslan drugim putem — provjerite duplikat kod posrednika.` };
+    }
     await audit(db, actor, {
       entity: 'invoice',
       entityId: inv.id,
@@ -196,13 +240,18 @@ export async function resetEInvoiceTrace(invoiceId: string, actor: Actor): Promi
     const inv = await load(invoiceId, actor);
     const meta = readMeta(inv.eInvoice);
     if (!meta.id && !inv.eInvoiceStatus) return { ok: false, message: 'Račun nema traga slanja.' };
-    const { id: _id, sentAt: _s, statusText: _t, checkedAt: _c, reportType: _r, error: _e, ...rest } = meta;
+    // slanje ili prijava u tijeku: poništenje bi obrisalo trag koji to slanje upravo upisuje
+    if (sendingNow(inv.eInvoice)) return { ok: false, message: 'eRačun se upravo šalje — pričekajte da slanje završi pa pokušajte ponovno.' };
+    const { id: _id, sentAt: _s, statusText: _t, checkedAt: _c, reportType: _r, error: _e, ...all } = meta;
+    const { sending: _x, ...rest } = all as InvoiceFiscalMeta & { sending?: unknown };
     const einvoiceRoute = meta.route === 'EINVOICE';
-    await setStatus(inv.id, { ...rest, status: einvoiceRoute ? 'UNKNOWN' : undefined }, null, {
+    // usporedi-i-upiši: račun se od čitanja nije mijenjao (npr. slanje nije u međuvremenu zauzelo ni upisalo ishod)
+    const saved = await setStatus(inv.id, { updatedAt: inv.updatedAt }, { ...rest, status: einvoiceRoute ? 'UNKNOWN' : undefined }, null, {
       eInvoiceStatusAt: null,
       eReportedAt: null,
       ...(inv.zki ? {} : { fiscalStatus: einvoiceRoute ? 'FAILED' : 'NOT_REQUIRED', fiscalizedAt: null, fiscalError: einvoiceRoute ? 'Trag slanja eRačuna poništen — pošaljite ga ponovno ručno.' : null }),
     });
+    if (!saved) return { ok: false, message: 'Račun se u međuvremenu promijenio (slanje ili prijava) — osvježite stranicu i pokušajte ponovno.' };
     await log(inv.companyId, inv.id, true, { request: 'reset', response: `Trag slanja poništen (bio: ${meta.id ?? '—'})` });
     await audit(db, actor, { entity: 'invoice', entityId: inv.id, action: 'einvoice-reset', summary: `eRačun ${inv.number}: trag slanja poništen (${meta.id ?? '—'})` });
     return { ok: true, message: 'Trag slanja je poništen. Dokument kod posrednika ostaje kakav jest.' };

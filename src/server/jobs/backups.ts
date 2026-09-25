@@ -111,14 +111,43 @@ export async function openBackup(companyId: string, name: string): Promise<Reada
   return Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
 }
 
-/** Kopija kao objekt (za vraćanje). */
-export async function readBackup(companyId: string, name: string): Promise<unknown> {
+/** Najveća raspakirana kopija koja se vraća u program (MB; BACKUP_RESTORE_MAX_MB, zadano 256). */
+export const restoreMaxBytes = () => {
+  const mb = Number(process.env.BACKUP_RESTORE_MAX_MB);
+  return (Number.isFinite(mb) && mb > 0 ? mb : 256) * 1024 * 1024;
+};
+
+/**
+ * Kopija kao objekt (za vraćanje). Vraćanje treba cijeli objekt u memoriji, pa se
+ * raspakiravanje prekida čim prijeđe granicu (inače bi velika firma srušila proces
+ * zbog nedostatka memorije) — s jasnom porukom umjesto pada.
+ */
+export async function readBackup(companyId: string, name: string, maxBytes = restoreMaxBytes()): Promise<unknown> {
   const f = fileOf(companyId, name);
   if (!(await stat(f).catch(() => null))) throw new DomainError('Kopija ne postoji.');
   const chunks: Buffer[] = [];
-  for await (const c of createReadStream(f).pipe(createGunzip())) chunks.push(c as Buffer);
+  let size = 0;
+  const src = createReadStream(f);
+  const gunzip = createGunzip();
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    for await (const c of src.pipe(gunzip)) {
+      size += (c as Buffer).length;
+      if (size > maxBytes) {
+        throw new DomainError(
+          `Kopija je prevelika za vraćanje u programu (više od ${Math.round(maxBytes / 1024 / 1024)} MB raspakirano). Za tako veliku firmu koristite kopiju cijele baze (deploy/backup.sh i restore.sh) ili povećajte BACKUP_RESTORE_MAX_MB.`,
+        );
+      }
+      chunks.push(c as Buffer);
+    }
+  } catch (e) {
+    if (e instanceof DomainError) throw e;
+    throw new DomainError('Kopija je oštećena (nije ispravan gzip).');
+  } finally {
+    src.destroy();
+    gunzip.destroy();
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks, size).toString('utf8'));
   } catch {
     throw new DomainError('Kopija je oštećena (nije ispravan JSON).');
   }

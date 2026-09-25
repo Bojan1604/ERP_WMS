@@ -36,6 +36,8 @@ services:
       MDM_AGENT_DIR: /data/agents
       # automatske sigurnosne kopije iz programa (Postavke → Podaci) — na trajnom volumenu
       BACKUP_DIR: /app/storage/backups
+      # prijava: adresa klijenta je zadnji unos X-Forwarded-For koji dodaje Caddy (jedan posrednik)
+      TRUST_PROXY: "1"
       NODE_ENV: production
     volumes:
       # datoteke programa izvan baze: MDM (aplikacije, snimke, zapisnici) i storage/ (kopije);

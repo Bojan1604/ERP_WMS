@@ -35,10 +35,12 @@ export default async function ContractPage({ params, searchParams }: Props) {
   const items = await contractItems(c.id);
   const devices = items.map(toDevice);
   const canEdit = can(user.perms, 'rentals', 'edit');
-  const [pending, files, lookups] = await Promise.all([
+  const [pending, files, lookups, returnedSkipped] = await Promise.all([
     contractPending(c, devices),
     listAttachments(db, user.companyId, 'contract', [c.id]),
     canEdit && !c._count.invoices ? getLookups(user.companyId) : null,
+    // preskočena razdoblja skinutih uređaja — i njih „Vrati u izdavanje" vraća
+    db.returnedContractItem.findMany({ where: { contractId: c.id, skipped: { isEmpty: false } }, select: { skipped: true } }),
   ]);
   const editable = c.status === 'ACTIVE' || c.status === 'PAUSED';
   const base = `/najam/ugovori/${c.id}`;
@@ -110,6 +112,7 @@ export default async function ContractPage({ params, searchParams }: Props) {
         <OverviewTab
           contract={c}
           devices={devices}
+          returnedSkipped={returnedSkipped.map((r) => r.skipped)}
           pending={pending}
           canEdit={canEdit && editable}
           canIssue={can(user.perms, 'sales', 'edit')}

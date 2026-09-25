@@ -93,7 +93,7 @@ export function FiscalCard({ f, canEdit, canSeeLog }: { f: FiscalCardData; canEd
             Ponovi fiskalizaciju
           </ActionButton>
         )}
-        {f.providerSet && !f.zki && (f.canSendEInvoice || f.foreign) && !atProvider && (
+        {canEdit && f.providerSet && !f.zki && (f.canSendEInvoice || f.foreign) && !atProvider && (
           <ActionButton action={validateEInvoiceAction} input={{ invoiceId: f.id }} size="sm" icon={<FileCheck2 className="size-3.5" />}>
             Provjeri eRačun
           </ActionButton>

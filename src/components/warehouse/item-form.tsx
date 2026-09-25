@@ -15,7 +15,8 @@ export interface ItemFormValues {
   modelId: string;
   warehouseId: string | null;
   supplier: { value: string; label: string } | null;
-  cost: number;
+  /** null kad korisnik nema pravo na nabavne cijene (ne šalje se u preglednik). */
+  cost: number | null;
   rentPrice: number | null;
   marginPct: number | null;
   warrantyMonths: number | null;
@@ -34,12 +35,12 @@ export interface ItemFormValues {
 const dec = (v: number | null) => (v === null || v === undefined ? '' : v.toFixed(2).replace('.', ','));
 
 /** Odabir računa s pretragom na poslužitelju (ručna veza uređaja s računom). */
-function InvoiceField({ initial }: { initial: ComboOption | null }) {
+function InvoiceField({ itemId, initial }: { itemId: string; initial: ComboOption | null }) {
   const [v, setV] = useState<string | null>(initial?.value ?? null);
   const onSearch = useCallback(async (q: string): Promise<ComboOption[]> => {
-    const r = await searchInvoicesForItem({ q });
+    const r = await searchInvoicesForItem({ q, itemId });
     return r.ok ? (r.data ?? []) : [];
-  }, []);
+  }, [itemId]);
   return <Combobox name="invoiceId" options={initial ? [initial] : []} value={v} onChange={setV} onSearch={onSearch} placeholder="— bez računa —" allowEmpty />;
 }
 
@@ -135,11 +136,11 @@ export function ItemForm({
             <Field label="Datum uvoza">
               <Input name="importDate" type="date" defaultValue={item.importDate ?? ''} />
             </Field>
-            <Field label="Datum izlaza" hint="Datum izdavanja kupcu">
+            <Field label="Datum izlaza" hint="Datum izdavanja kupcu (i početak jamstva)" error={fields.issueDate}>
               <Input name="issueDate" type="date" defaultValue={item.issueDate ?? ''} />
             </Field>
-            <Field label="Račun" hint="Ručna veza s računom">
-              <InvoiceField initial={item.invoice} />
+            <Field label="Račun" hint="Samo prodan uređaj i izdan račun na kojem je stavka" error={fields.invoiceId}>
+              <InvoiceField itemId={item.id} initial={item.invoice} />
             </Field>
             <Field label="Klijent" hint={partnerLocked ?? undefined} error={fields.partnerId}>
               {partnerLocked ? (

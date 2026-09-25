@@ -286,8 +286,9 @@ export async function reportLatestPayment(invoiceId: string, actor: Actor): Prom
     });
     const meta = readMeta(inv?.eInvoice);
     const pay = inv?.payments[0];
-    // eIzvještavanje o naplati može se isključiti u postavkama (Company.eReportingEnabled)
-    if (!inv || !pay || !meta.id || meta.status !== 'SENT' || !inv.company.eReportingEnabled) return null;
+    // eIzvještavanje o naplati može se isključiti u postavkama (Company.eReportingEnabled);
+    // račun stranom kupcu prijavljen u eIzvještavanje (tip I) nije eRačun — naplata se ne prijavljuje
+    if (!inv || !pay || !meta.id || meta.status !== 'SENT' || meta.reportType === 'I' || !inv.company.eReportingEnabled) return null;
     const provider = providerFor(meta.provider ?? inv.company.eInvoiceProvider, decryptSecret(inv.company.eInvoiceApiKey), meta.env ?? inv.company.fiscalEnv);
     if (!provider) return null;
     const report = {

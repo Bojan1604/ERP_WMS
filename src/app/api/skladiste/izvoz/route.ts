@@ -21,17 +21,20 @@ export async function GET(req: Request) {
     return new Response(e instanceof Error ? e.message : 'Greška', { status });
   }
   const sp = Object.fromEntries(new URL(req.url).searchParams.entries());
+  const costs = canSeeCost(user.perms);
   const [rows, company] = await Promise.all([
-    exportItems(user.companyId, parseItemFilters(sp)),
+    exportItems(user.companyId, parseItemFilters(sp, { canSeeCost: costs })),
     db.company.findUniqueOrThrow({ where: { id: user.companyId }, select: { name: true, defaultMarginPct: true, defaultWarrantyMonths: true } }),
   ]);
   type Row = (typeof rows)[number];
   const d = (v: Date | null) => (v ? formatDate(v) : '');
   const n = (v: { toNumber(): number } | null | undefined) => (v === null || v === undefined ? null : num(v));
-  const costs = canSeeCost(user.perms);
   const margin = num(company.defaultMarginPct);
-  const suggested = (r: Row) =>
-    suggestedSalePrice({ modelPrice: n(r.model.salePrice), cost: num(r.cost), itemMargin: n(r.marginPct), modelMargin: n(r.model.marginPct), companyMargin: margin }).price;
+  // preporučena iz marže je izvedena iz nabavne — bez prava `costs` samo cijena modela
+  const suggested = (r: Row) => {
+    const s = suggestedSalePrice({ modelPrice: n(r.model.salePrice), cost: num(r.cost), itemMargin: n(r.marginPct), modelMargin: n(r.model.marginPct), companyMargin: margin });
+    return costs || s.source === 'model' ? s.price : null;
+  };
   const warranty = (r: Row) => {
     const start = r.warrantyStart ?? r.invoice?.date ?? r.issueDate;
     return warrantyDaysLeft(start ? toISO(start) : null, r.warrantyMonths ?? r.model.warrantyMonths ?? company.defaultWarrantyMonths);

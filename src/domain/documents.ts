@@ -75,7 +75,8 @@ export const MAIL_KIND_ACCESS: Record<MailKind, { module: Module; level: 'view' 
   proforma: { module: 'sales', level: 'edit' },
   delivery: { module: 'sales', level: 'edit' },
   service: { module: 'service', level: 'edit' },
-  partner: { module: 'partners', level: 'view' },
+  // slobodna poruka (primatelj, naslov, tekst) s adrese firme — samo uz pravo uređivanja partnera
+  partner: { module: 'partners', level: 'edit' },
   // kao označavanje „poslano knjigovođi" na stranici Knjigovođa
   'accountant-zip': { module: 'reports', level: 'ops' },
 };

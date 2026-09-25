@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import bcrypt from 'bcryptjs';
-import { Prisma } from '@prisma/client';
+import { Prisma, type Role } from '@prisma/client';
 import type { Tx } from '../db';
 import { audit } from '../audit';
 import { AuthError, DomainError, assert } from '../errors';
@@ -91,9 +91,12 @@ export async function deleteEverything(tx: Tx, actor: Actor): Promise<DeleteCoun
   for (const t of ['PriceAgreement', 'PortalUser', 'Partner', 'Service', 'ExpenseCategory', 'DeviceModel', 'Category', 'ItemStatus', 'Warehouse'] as const) {
     counts[t] = (counts[t] ?? 0) + (await del(tx, t, c));
   }
-  // ostali korisnici ERP-a: kome je ovo trenutna firma, a ima pristup drugoj — prelazi u nju; ostali se brišu
+  // ostali korisnici ERP-a: kome je ovo trenutna firma, a ima pristup drugoj — prelazi u nju; ostali se brišu.
+  // Korisnik s pravom opasne zone koji nije administrator ne briše administratore (ostaju s pristupom firmi).
+  const me = await tx.user.findUnique({ where: { id: actor.id }, select: { role: true } });
+  const keep: Role[] = me?.role === 'ADMIN' ? ['DISTRIBUTOR', 'CLIENT'] : ['DISTRIBUTOR', 'CLIENT', 'ADMIN'];
   const others = await tx.user.findMany({
-    where: { id: { not: actor.id }, role: { notIn: ['DISTRIBUTOR', 'CLIENT'] }, OR: [{ companyId: c }, { companies: { some: { companyId: c } } }] },
+    where: { id: { not: actor.id }, role: { notIn: keep }, OR: [{ companyId: c }, { companies: { some: { companyId: c } } }] },
     select: { id: true, companyId: true, companies: { where: { companyId: { not: c } }, select: { companyId: true }, take: 1 } },
   });
   let removed = 0;
@@ -105,7 +108,7 @@ export async function deleteEverything(tx: Tx, actor: Actor): Promise<DeleteCoun
       removed++;
     }
   }
-  await tx.userCompany.deleteMany({ where: { companyId: c, userId: { not: actor.id } } });
+  await tx.userCompany.deleteMany({ where: { companyId: c, userId: { in: others.map((u) => u.id) } } });
   counts.User = removed;
   await bootstrapCompany(tx, c);
   await audit(tx, actor, {
@@ -118,18 +121,50 @@ export async function deleteEverything(tx: Tx, actor: Actor): Promise<DeleteCoun
 
 /**
  * „Vrati demo podatke" — samo za demo firmu (Company.isDemo): pokreće isti
- * postupak kao `npm run db:seed` (briše i ponovno stvara demo firmu s
- * korisnicima admin@demo.hr … — svi se moraju ponovno prijaviti).
+ * postupak kao `npm run db:seed` za TU firmu (id u SEED_DEMO_COMPANY_ID): briše je
+ * i ponovno stvara s korisnicima admin@demo.hr … — svi se moraju ponovno prijaviti.
  */
-export async function resetDemo(): Promise<void> {
+export async function resetDemo(companyId: string): Promise<void> {
   const root = process.cwd();
   const tsx = path.join(root, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx');
   try {
-    await promisify(execFile)(tsx, ['--conditions=react-server', path.join(root, 'prisma', 'seed.ts')], { cwd: root, timeout: 10 * 60_000, env: process.env, maxBuffer: 8 * 1024 * 1024 });
+    await promisify(execFile)(tsx, ['--conditions=react-server', path.join(root, 'prisma', 'seed.ts')], {
+      cwd: root, timeout: 10 * 60_000, env: { ...process.env, SEED_DEMO_COMPANY_ID: companyId }, maxBuffer: 8 * 1024 * 1024,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message.split('\n').filter(Boolean).slice(-1)[0] : String(e);
     throw new DomainError(`Vraćanje demo podataka nije uspjelo: ${msg}`);
   }
+}
+
+/**
+ * Brisanje demo firme (seed): samo firma s oznakom isDemo. Korisnici kojima je ona
+ * trenutna firma, a imaju pristup drugoj (npr. administrator koji je u nju prešao),
+ * vraćaju se u drugu firmu; brišu se samo korisnici bez ijedne druge firme.
+ * Vraća ključeve MDM datoteka za brisanje s diska nakon transakcije.
+ */
+export async function removeDemoCompany(tx: Tx, companyId: string): Promise<{ mdmFiles: string[]; removedUsers: number }> {
+  const c = await tx.company.findUnique({ where: { id: companyId }, select: { isDemo: true } });
+  assert(c?.isDemo, 'Brisati se smije samo demo firma.');
+  const home = await tx.user.findMany({
+    where: { companyId },
+    select: { id: true, companies: { where: { companyId: { not: companyId } }, select: { companyId: true }, take: 1 } },
+  });
+  let removedUsers = 0;
+  for (const u of home) {
+    if (u.companies.length) {
+      await tx.user.update({ where: { id: u.id }, data: { companyId: u.companies[0].companyId } });
+      await tx.session.updateMany({ where: { userId: u.id, revokedAt: null }, data: { revokedAt: new Date() } });
+    } else {
+      await tx.user.delete({ where: { id: u.id } });
+      removedUsers++;
+    }
+  }
+  await tx.userCompany.deleteMany({ where: { companyId } });
+  for (const t of TRANSACTION_TABLES) await del(tx, t, companyId);
+  const mdm = await wipeMdmData(tx, companyId);
+  await tx.company.delete({ where: { id: companyId } });
+  return { mdmFiles: mdm.storageKeys, removedUsers };
 }
 
 /** Demo firma je samo ona s oznakom isDemo (postavlja je `npm run db:seed`). */

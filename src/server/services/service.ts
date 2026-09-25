@@ -427,7 +427,18 @@ export async function replaceDevice(
 export async function deleteServiceOrder(tx: Tx, actor: Actor, id: string) {
   const o = await loadOrder(tx, actor, id);
   assert(o.status !== 'REPLACED', `Nalog ${o.number} zatvoren je zamjenom uređaja — ne može se obrisati.`);
-  if (o.itemId && o.status !== 'WRITTEN_OFF') {
+  // otpis je trag zašto je uređaj otpisan; račun iz naloga bi izgubio izvor
+  assert(o.status !== 'WRITTEN_OFF', `Nalog ${o.number} zatvoren je otpisom — ne može se obrisati.`);
+  if (o.invoiceId) {
+    const inv = await tx.invoice.findFirst({ where: { id: o.invoiceId, companyId: actor.companyId }, select: { number: true, status: true } });
+    assert(
+      !inv,
+      inv?.status === 'DRAFT'
+        ? `Za nalog ${o.number} postoji nacrt računa — prvo obrišite nacrt, pa tek onda nalog.`
+        : `Za nalog ${o.number} izdan je račun ${inv?.number ?? ''} — nalog se ne može obrisati.`,
+    );
+  }
+  if (o.itemId) {
     // uređaj u servisu mora imati nalog (otvoren ili popravljen, čeka povrat) — ako je ovo jedini, ne briše se
     const [item, other] = await Promise.all([
       tx.item.findFirst({ where: { id: o.itemId, companyId: actor.companyId }, select: { serial: true, state: true } }),

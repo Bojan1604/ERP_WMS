@@ -2,7 +2,7 @@ import 'server-only';
 import type { Tx } from '../db';
 import { assert } from '../errors';
 import { audit } from '../audit';
-import { changeItemStatus, type Actor } from './items';
+import { changeItemStatus, itemEvents, type Actor } from './items';
 import { periodLabel } from '@/domain/dates';
 import { r2 } from '@/domain/money';
 
@@ -14,12 +14,15 @@ import { r2 } from '@/domain/money';
  * Brisanje ugovora (C5) — samo dok za njega ne postoji nijedan račun (ni nacrt).
  * Uređaji na ugovoru: `warehouseId` = ugovor je otvoren greškom, uređaji se vraćaju
  * na to skladište; bez njega su uređaji kod klijenta i idu u povrat („U dolasku").
+ * Uređaji već u povratu („U dolasku") uz skladište idu na skladište, bez njega
+ * ostaju u povratu (zaprimaju se na skladištu i bez ugovora). Ručni iznosi najma
+ * tih uređaja od početka ugovora brišu se s njim.
  * Prilozi ugovora brišu se s njim; ponude gube vezu (SetNull).
  */
 export async function deleteContract(tx: Tx, actor: Actor, id: string, opts: { warehouseId?: string | null } = {}) {
   const c = await tx.contract.findFirst({
     where: { id, companyId: actor.companyId },
-    select: { id: true, number: true, partner: { select: { name: true } }, _count: { select: { invoices: true } } },
+    select: { id: true, number: true, startDate: true, partner: { select: { name: true } }, _count: { select: { invoices: true } } },
   });
   assert(c, 'Ugovor ne postoji.');
   assert(
@@ -28,22 +31,36 @@ export async function deleteContract(tx: Tx, actor: Actor, id: string, opts: { w
   );
   const onContract = await tx.contractItem.findMany({ where: { contractId: id }, select: { itemId: true, item: { select: { state: true } } } });
   const rented = onContract.filter((r) => r.item.state === 'RENTED').map((r) => r.itemId);
+  const returning = onContract.filter((r) => r.item.state === 'RETURNING').map((r) => r.itemId);
   let moved = '';
-  if (rented.length && opts.warehouseId) {
+  if ((rented.length || returning.length) && opts.warehouseId) {
     const wh = await tx.warehouse.findFirst({ where: { id: opts.warehouseId, companyId: actor.companyId }, select: { id: true, name: true } });
     assert(wh, 'Skladište ne postoji.');
-    await changeItemStatus(tx, actor, rented, {
+    await changeItemStatus(tx, actor, [...rented, ...returning], {
       kind: 'IN_STOCK',
       data: { warehouseId: wh.id },
       event: { type: 'CONTRACT', message: `Vraćen na skladište ${wh.name} — ugovor ${c.number} obrisan`, refType: 'contract', refId: id },
     });
-    moved = ` — ${rented.length} uređaja vraćeno na skladište ${wh.name}`;
+    moved = ` — ${rented.length + returning.length} uređaja vraćeno na skladište ${wh.name}`;
   } else if (rented.length) {
     await changeItemStatus(tx, actor, rented, {
       kind: 'RETURNING',
       event: { type: 'RETURNING', message: `Najavljen povrat — ugovor ${c.number} obrisan`, refType: 'contract', refId: id },
     });
     moved = ` — ${rented.length} uređaja najavljeno za povrat`;
+  }
+  if (returning.length && !opts.warehouseId) {
+    await itemEvents(tx, actor, returning, { type: 'CONTRACT', message: `Ugovor ${c.number} obrisan — povrat se zaprima na skladištu`, refType: 'contract', refId: id });
+  }
+  // ručni iznosi najma uređaja ugovora (i skinutih) od početka ugovora
+  const returnedIds = await tx.returnedContractItem.findMany({ where: { contractId: id }, select: { itemId: true } });
+  const itemIds = [...new Set([...onContract.map((r) => r.itemId), ...returnedIds.map((r) => r.itemId)])];
+  if (itemIds.length) {
+    const y = c.startDate.getUTCFullYear();
+    const m = c.startDate.getUTCMonth() + 1;
+    await tx.rentOverride.deleteMany({
+      where: { companyId: actor.companyId, itemId: { in: itemIds }, OR: [{ year: { gt: y } }, { year: y, month: { gte: m } }] },
+    });
   }
   await tx.attachment.deleteMany({ where: { companyId: actor.companyId, entity: 'contract', entityId: id } });
   // uređaji na ugovoru i snimke skinutih brišu se s ugovorom (Cascade)
@@ -54,7 +71,7 @@ export async function deleteContract(tx: Tx, actor: Actor, id: string, opts: { w
     action: 'delete',
     summary: `Ugovor ${c.number} (${c.partner.name}) obrisan${moved}`,
   });
-  return { number: c.number, returned: rented.length };
+  return { number: c.number, returned: opts.warehouseId ? rented.length + returning.length : rented.length };
 }
 
 /**

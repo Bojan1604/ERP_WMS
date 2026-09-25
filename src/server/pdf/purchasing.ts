@@ -9,8 +9,8 @@ import { amt, documentDefinition, fmtDate, GREY, itemsTable, pdfFileName, sums }
 
 const ORDER_STATUS: Record<string, string> = { DRAFT: 'Nacrt', ORDERED: 'Naručena', PARTIAL: 'Djelomično zaprimljena', RECEIVED: 'Zaprimljena', CANCELLED: 'Otkazana' };
 
-/** Narudžbenica dobavljaču (kao /nabava/narudzbenice/[id]/ispis). */
-export async function renderOrderDefinition(companyId: string, id: string) {
+/** Narudžbenica dobavljaču (kao /nabava/narudzbenice/[id]/ispis); nabavne cijene samo uz pravo `costs`. */
+export async function renderOrderDefinition(companyId: string, id: string, showCost: boolean) {
   const [order, c] = await Promise.all([getOrder(companyId, id), loadPdfCompany(companyId)]);
   if (!order) throw new DomainError('Narudžbenica ne postoji.');
   const def = documentDefinition({
@@ -27,19 +27,18 @@ export async function renderOrderDefinition(companyId: string, id: string) {
     ],
     body: [
       itemsTable({
-        widths: [26, 60, '*', 44, 64, 70],
-        head: ['R. br.', 'Šifra', 'Naziv', 'Kol.', 'Jed. cijena', 'Iznos'],
-        right: [3, 4, 5],
+        widths: showCost ? [26, 60, '*', 44, 64, 70] : [26, 70, '*', 50],
+        head: ['R. br.', 'Šifra', 'Naziv', 'Kol.', ...(showCost ? ['Jed. cijena', 'Iznos'] : [])],
+        right: showCost ? [3, 4, 5] : [3],
         rows: order.lines.map((l, i) => [
           { text: `${i + 1}.`, color: GREY },
           { text: l.model.code ?? '', fontSize: 7.5 },
           [l.model.brand, l.model.name].filter(Boolean).join(' '),
           `${l.qty} kom`,
-          { text: amt(num(l.unitCost)), noWrap: true },
-          { text: amt(r2(l.qty * num(l.unitCost))), noWrap: true },
+          ...(showCost ? [{ text: amt(num(l.unitCost)), noWrap: true }, { text: amt(r2(l.qty * num(l.unitCost))), noWrap: true }] : []),
         ]) as TableCell[][],
       }),
-      sums([{ k: 'Ukupno bez PDV-a (EUR)', v: amt(num(order.total)), strong: true }], [order.note]),
+      sums(showCost ? [{ k: 'Ukupno bez PDV-a (EUR)', v: amt(num(order.total)), strong: true }] : [], [order.note]),
     ],
     signatures: ['Naručio', 'Odobrio'],
     footer: `Molimo potvrdu narudžbe i rok isporuke. Na računu navedite broj narudžbenice ${order.number}.`,

@@ -3,14 +3,14 @@ import type { Prisma } from '@prisma/client';
 import { db } from '../db';
 import { toISO } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
-import { warrantyEnd } from '@/domain/pricing';
 import { paramStr } from '@/lib/list-params';
+import { deviceWarrantyEnd } from './service';
 
 /** Pogledi popisa uređaja kod klijenta (C3): u najmu (na ugovoru), prodani (bez ugovora), svi. */
 export const SHEET_VIEWS = ['najam', 'prodano', 'sve'] as const;
 export type SheetView = (typeof SHEET_VIEWS)[number];
 
-/** Najviše redaka na jednom popisu (dokument za ispis nema straničenja). */
+/** Najviše redaka na stranici (dokument za ispis nema straničenja); izvoz nema ograničenja. */
 export const SHEET_MAX = 5000;
 
 type Params = Record<string, string | string[] | undefined>;
@@ -24,31 +24,40 @@ export function readSheetParams(params: Params | URLSearchParams) {
  * Popis uređaja klijenta („ClientSheet"): po partneru (uređaji kod njega) ili
  * po ugovoru (uređaji na ugovoru). Mjesečni najam s ugovora, prodajna cijena
  * za kupljene; nabavne cijene se ne čitaju. Uvjeti ugovora za podnožje.
+ * Zbrojevi se računaju u bazi (ne iz prikazanih redaka); `limit: null` = svi retci (izvoz).
  */
-export async function clientSheet(companyId: string, partnerId: string, opts: { view: SheetView; contractId?: string | null }) {
+export async function clientSheet(
+  companyId: string,
+  partnerId: string,
+  opts: { view: SheetView; contractId?: string | null; limit?: number | null },
+) {
+  const limit = opts.limit === undefined ? SHEET_MAX : opts.limit;
   const [partner, contract] = await Promise.all([
     db.partner.findFirst({ where: { id: partnerId, companyId } }),
     opts.contractId ? db.contract.findFirst({ where: { id: opts.contractId, companyId, partnerId }, select: { id: true, number: true } }) : null,
   ]);
   if (!partner || (opts.contractId && !contract)) return null;
   const base: Prisma.ItemWhereInput = contract ? { companyId, contractItem: { is: { contractId: contract.id } } } : { companyId, partnerId };
+  // prodano = kupljeni uređaji (status prodan), ne svaki uređaj kod klijenta bez ugovora (servis, rezervacija…)
   const viewWhere = (v: SheetView): Prisma.ItemWhereInput =>
-    contract || v === 'sve' ? base : v === 'najam' ? { ...base, contractItem: { isNot: null } } : { ...base, contractItem: { is: null } };
+    contract || v === 'sve' ? base : v === 'najam' ? { ...base, contractItem: { isNot: null } } : { ...base, state: 'SOLD', contractItem: { is: null } };
   // popis ugovora ima samo uređaje u najmu
   const where = viewWhere(contract ? 'najam' : opts.view);
-  const [rent, sold, all, items] = await Promise.all([
+  const [rent, sold, all, monthlySum, salesSum, items] = await Promise.all([
     db.item.count({ where: viewWhere('najam') }),
     contract ? Promise.resolve(0) : db.item.count({ where: viewWhere('prodano') }),
     db.item.count({ where: base }),
+    db.contractItem.aggregate({ where: { item: where }, _sum: { monthly: true } }),
+    db.item.aggregate({ where: { AND: [where, { contractItem: { is: null } }] }, _sum: { salePrice: true } }),
     db.item.findMany({
       where,
       orderBy: [{ model: { name: 'asc' } }, { serial: 'asc' }],
-      take: SHEET_MAX,
+      ...(limit ? { take: limit } : {}),
       select: {
         id: true, serial: true, issueDate: true, warrantyStart: true, warrantyMonths: true, salePrice: true,
         status: { select: { name: true, color: true } },
         category: { select: { name: true } },
-        model: { select: { brand: true, name: true, category: { select: { name: true } } } },
+        model: { select: { brand: true, name: true, warrantyMonths: true, category: { select: { name: true } } } },
         contractItem: { select: { monthly: true, contractId: true } },
       },
     }),
@@ -73,7 +82,7 @@ export async function clientSheet(companyId: string, partnerId: string, opts: { 
     category: i.category?.name ?? i.model.category?.name ?? null,
     status: i.status,
     since: i.issueDate ? toISO(i.issueDate) : null,
-    warrantyEnd: warrantyEnd(i.warrantyStart ? toISO(i.warrantyStart) : null, i.warrantyMonths),
+    warrantyEnd: deviceWarrantyEnd(i),
     contractId: i.contractItem?.contractId ?? null,
     contract: i.contractItem ? (numberBy.get(i.contractItem.contractId) ?? null) : null,
     monthly: i.contractItem ? num(i.contractItem.monthly) : null,
@@ -84,9 +93,9 @@ export async function clientSheet(companyId: string, partnerId: string, opts: { 
     contract,
     counts: { najam: rent, prodano: sold, sve: all },
     rows,
-    truncated: rows.length >= SHEET_MAX,
-    monthly: r2(rows.reduce((a, r) => a + (r.monthly ?? 0), 0)),
-    sales: r2(rows.reduce((a, r) => a + (r.monthly === null ? (r.price ?? 0) : 0), 0)),
+    truncated: !!limit && rows.length >= limit,
+    monthly: r2(num(monthlySum._sum.monthly)),
+    sales: r2(num(salesSum._sum.salePrice)),
     contracts: terms.map((c) => ({ ...c, startDate: toISO(c.startDate), endDate: c.endDate ? toISO(c.endDate) : null, ...(sumBy.get(c.id) ?? { monthly: 0, devices: 0 }) })),
   };
 }

@@ -79,7 +79,8 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
         oib,
         permissions,
         canDanger: input.role !== 'ADMIN' && !!input.canDanger,
-        requireApproval: input.role === 'ADMIN' ? null : (input.requireApproval ?? null),
+        // odobrenja statusa postavlja samo administrator (inače korisnik prati postavku firme)
+        requireApproval: input.role === 'ADMIN' || !actorIsAdmin ? null : (input.requireApproval ?? null),
         passwordHash: await hashPassword(input.password),
         // pristup firmi u kojoj je otvoren (više firmi: popis firmi korisnika)
         companies: { create: { companyId: actor.companyId } },
@@ -118,7 +119,7 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
       oib,
       permissions,
       ...(input.canDanger !== undefined && actorIsAdmin ? { canDanger: input.role !== 'ADMIN' && input.canDanger } : {}),
-      ...(input.requireApproval !== undefined ? { requireApproval: input.role === 'ADMIN' ? null : input.requireApproval } : {}),
+      ...(input.requireApproval !== undefined && actorIsAdmin ? { requireApproval: input.role === 'ADMIN' ? null : input.requireApproval } : {}),
       ...(input.password ? { passwordHash: await hashPassword(input.password) } : {}),
     },
   });
@@ -132,7 +133,7 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
   if (JSON.stringify(before.permissions ?? {}) !== JSON.stringify(permissions)) changes.permissions = { from: before.permissions, to: permissions };
   if (input.password) changes.password = { from: '•••', to: 'nova lozinka' };
   if (input.canDanger !== undefined && actorIsAdmin && before.canDanger !== (input.role !== 'ADMIN' && input.canDanger)) changes.canDanger = { from: before.canDanger, to: input.canDanger };
-  if (input.requireApproval !== undefined && (before.requireApproval ?? null) !== (input.role === 'ADMIN' ? null : input.requireApproval)) {
+  if (input.requireApproval !== undefined && actorIsAdmin && (before.requireApproval ?? null) !== (input.role === 'ADMIN' ? null : input.requireApproval)) {
     changes.requireApproval = { from: before.requireApproval, to: input.requireApproval };
   }
 

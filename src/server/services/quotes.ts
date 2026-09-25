@@ -245,8 +245,10 @@ export async function convertQuote(tx: Tx, actor: Actor, id: string, picks: Reco
     }
   }
 
-  const vat = customerVat(q.partner, { vatRegistered: q.company.vatRegistered, vatRate: num(q.company.vatRate), country: q.company.country });
   const onlyRent = lines.every((l) => l.lineType === 'RENT');
+  // tretman prema vrsti isporuke (najam = usluga) i tekstovima oslobođenja firme; miješani račun
+  // stranom kupcu odbija createDraft
+  const vat = customerVat(q.partner, { ...q.company, vatRate: num(q.company.vatRate) }, onlyRent ? 'RENT' : 'SALE');
   const inv = await createDraft(tx, actor, {
     // sve stavke najam → račun za najam; inače prodaja s mogućim stavkama najma (miješani račun)
     type: onlyRent ? 'RENT' : 'SALE',

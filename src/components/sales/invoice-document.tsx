@@ -2,7 +2,7 @@ import { DocumentShell, DocTable, DocTotals, type DocCompany, type DocParty } fr
 import { CHARGE_KINDS, INVOICE_KIND_LABEL, groupLines, type ChargeInput } from '@/domain/invoice';
 import { formatDate } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
-import { VAT_ON_PAYMENT_NOTE } from '@/domain/tax';
+import { taxNotes, VAT_ON_PAYMENT_NOTE } from '@/domain/tax';
 import { amount, decimal, eur } from '@/lib/format';
 import { PAYMENT_METHOD_LABEL, type PaymentMethodCode } from '@/domain/fiscal';
 
@@ -162,8 +162,11 @@ export function InvoiceDocument({
         </table>
         <DocTotals rows={totals} />
       </div>
-      {inv.taxCategory !== 'S' && inv.taxExemptReason && <p className="mt-3 text-[11px]">{inv.taxExemptReason}</p>}
-      {company.vatRegistered === false && <p className="mt-3 text-[11px]">Izdavatelj nije u sustavu PDV-a (čl. 90. st. 2. Zakona o PDV-u).</p>}
+      {taxNotes(inv, company.vatRegistered).map((t) => (
+        <p key={t} className="mt-3 text-[11px]">
+          {t}
+        </p>
+      ))}
       {company.vatOnPayment && <p className="mt-3 text-[11px]">{VAT_ON_PAYMENT_NOTE}</p>}
       {inv.note && <p className="mt-3 whitespace-pre-line">{inv.note}</p>}
       {inv.status === 'ISSUED' && inv.zki && (

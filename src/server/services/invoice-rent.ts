@@ -23,10 +23,12 @@ export interface InvoiceRentTerms {
 
 /** Postojeći ugovor za račun: firma, isti klijent i ugovor na koji se smiju dodavati uređaji. */
 export async function checkInvoiceContract(tx: Tx, actor: Actor, contractId: string, partnerId: string) {
-  const c = await tx.contract.findFirst({ where: { id: contractId, companyId: actor.companyId }, select: { id: true, number: true, partnerId: true, status: true } });
+  const c = await tx.contract.findFirst({ where: { id: contractId, companyId: actor.companyId }, select: { id: true, number: true, partnerId: true, status: true, billing: true } });
   assert(c, 'Ugovor ne postoji.');
   assert(c.partnerId === partnerId, `Ugovor ${c.number} pripada drugom klijentu.`);
   assert(c.status === 'ACTIVE' || c.status === 'PAUSED', `Ugovor ${c.number} je raskinut ili istekao — odaberite drugi ili „+ Novi ugovor".`);
+  // jednokratna naplata pokriva cijelo trajanje ugovora — uređaji se na takav ugovor dodaju u modulu Najam
+  assert(c.billing !== 'ONCE', `Ugovor ${c.number} ima jednokratnu naplatu — uređaje na njega dodajte u modulu Najam ili odaberite „+ Novi ugovor".`);
   return c;
 }
 

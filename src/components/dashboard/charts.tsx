@@ -70,7 +70,7 @@ export function DonutChart({ data, className }: { data: Array<{ label: string; v
 
 const M = { top: 10, right: 8, bottom: 22, left: 52 };
 
-/** Stupci prihoda po mjesecima i krivulja profita (dobit od prodaje) preko njih. */
+/** Stupci prihoda po mjesecima i krivulja bruto dobiti (prihod − nabavna vrijednost prodanog) preko njih. */
 export function RevenueProfitChart({
   data,
   width: W = 800,

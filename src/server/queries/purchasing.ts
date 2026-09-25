@@ -3,6 +3,7 @@ import type { OrderStatus, Prisma } from '@prisma/client';
 import { db } from '../db';
 import { num, r2 } from '@/domain/money';
 import { addDays, fromISO, toISO } from '@/domain/dates';
+import { goodsInvoiceContext } from '../services/supplier-invoices';
 
 type Params = Record<string, string | string[] | undefined>;
 const str = (v: string | string[] | undefined) => (typeof v === 'string' && v.trim() ? v.trim() : null);
@@ -308,13 +309,9 @@ export async function getSupplierInvoice(companyId: string, id: string) {
     orderBy: { createdAt: 'asc' },
     select: { id: true, fileName: true, mime: true, size: true },
   });
-  // trošak robe knjižen primkom (povezana primka ili primke povezane narudžbenice) — račun ga ne knjiži ponovno
-  const receiptIds = [
-    ...(si.receiptId ? [si.receiptId] : []),
-    ...(si.orderId ? (await db.goodsReceipt.findMany({ where: { companyId, orderId: si.orderId, status: 'POSTED' }, select: { id: true } })).map((r) => r.id) : []),
-  ];
-  const receiptExpenses = receiptIds.length ? await db.expense.count({ where: { companyId, receiptId: { in: receiptIds } } }) : 0;
-  return { ...si, attachments, receiptExpenses };
+  // trošak robe knjižen primkom (povezana primka ili primke povezane narudžbenice) i zadana odluka „račun za robu"
+  const ctx = await goodsInvoiceContext(db, companyId, { id: si.id, orderId: si.orderId, receiptId: si.receiptId, netAmount: num(si.netAmount) });
+  return { ...si, attachments, receiptExpenses: ctx.receiptExpenses, defaultGoods: ctx.defaultGoods };
 }
 
 /**

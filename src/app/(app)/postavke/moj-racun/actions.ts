@@ -28,8 +28,8 @@ export const changePasswordAction = userAction(
   },
 );
 
-export const startTotpAction = userAction(z.object({}), async (_i, user) => {
-  const r = await transaction((tx) => startTotpSetup(tx, user));
+export const startTotpAction = userAction(z.object({ password: z.string().min(1, 'Upišite lozinku') }), async ({ password }, user) => {
+  const r = await transaction((tx) => startTotpSetup(tx, user, password));
   return { data: { secret: r.secret, qr: r.qr }, revalidate: [] };
 });
 

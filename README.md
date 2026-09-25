@@ -109,7 +109,15 @@ docker compose exec app npx tsx --conditions=react-server scripts/prvi-admin.ts
 bash backup.sh | restore.sh | update.sh | obrisi-bazu.sh
 ```
 
-Ne pokrećite `db:seed` na produkciji — on briše i ponovno stvara demo firmu.
+Ne pokrećite `db:seed` na produkciji — on briše i ponovno stvara demo firmu (samo firmu s oznakom demo).
+
+**Prijava i posrednik (`TRUST_PROXY`).** Pokušaji prijave (djelatnici i portal) ograničeni su u bazi
+(tablica `LoginAttempt`): 5 neuspjeha po e-adresi u minuti i 20 pokušaja s iste IP adrese u 10 minuta,
+za sve procese programa. IP adresa se uzima iz `X-Forwarded-For`, ali samo unos koji je dodao naš
+posrednik: `TRUST_PROXY=1` (zadano, Caddy iz `deploy/` dodaje adresu klijenta na kraj popisa) uzima
+zadnji unos, `2` pretposljednji (npr. Cloudflare → Caddy), a `none` znači da ispred programa nema
+posrednika — zaglavlju se tada ne vjeruje (sve se broji pod „nepoznata adresa", ostaje ograničenje po e-adresi).
+Prvi unos zaglavlja upisuje klijent sam, pa se nikad ne koristi.
 
 **Podaci na poslužitelju** (Docker volumeni, preživljavaju `docker compose up -d --build`):
 

@@ -5,10 +5,10 @@
  * Sami iznosi rata računaju se isključivo u `@/domain/billing`.
  */
 import {
-  BILLING_LABEL, deviceCharges, installmentDate,
+  BILLING_LABEL, deviceCharges, installmentDate, scheduledCharges,
   type BillingCode, type ContractDevice, type ContractTerms, type PlanPeriodInput,
 } from '@/domain/billing';
-import { addMonths, MONTHS_HR, type ISODate, type Period } from '@/domain/dates';
+import { addDays, addMonths, MONTHS_HR, type ISODate, type Period } from '@/domain/dates';
 import { parseNumber } from '@/domain/money';
 
 export const BILLING_CODES: BillingCode[] = ['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL', 'ONCE'];
@@ -121,19 +121,49 @@ export const BULK_SEASON_OPTIONS: { value: BulkSeason; label: string }[] = [
 export const SUMMER_SEASON = { from: 4, to: 10 } as const;
 
 /**
+ * Prvi dan od kojeg skupna izmjena uvjeta smije vrijediti za uređaj: nikad prije
+ * tekućeg mjeseca i nikad unutar razdoblja koje je već fakturirano ili izdano
+ * izvan programa (`covered` + `skipped`) — godišnja rata izdana u siječnju
+ * pokriva cijelu godinu, pa nova mjesečna naplata kreće tek sljedeće godine.
+ * Rate starih uvjeta koje počinju prije tog dana ostaju cijele (i neizdane).
+ */
+export function bulkCutoff(terms: ContractTerms, device: ContractDevice, covered: ReadonlySet<Period>, now: ISODate): ISODate {
+  const c: ContractTerms = { ...terms, status: 'ACTIVE' };
+  const d: ContractDevice = { ...device, status: null, paused: [] };
+  const from = [c.startDate, c.firstBillingDate || c.startDate, ...(device.plan ?? []).map((p) => p.from || '')].filter(Boolean).sort()[0];
+  const done = new Set([...covered, ...(device.skipped ?? [])]);
+  const endOf = (p: Period, months: number) => addMonths(`${p}-01`, Math.max(1, months));
+  const later = (a: ISODate, b: ISODate) => (a > b ? a : b);
+  let cut = `${now.slice(0, 7)}-01`;
+  const charges = scheduledCharges(c, d, from.slice(0, 7), addMonths(now, 120).slice(0, 7));
+  const scheduled = new Set(charges.map((ch) => ch.period));
+  // fakturirano razdoblje kojeg više nema u planu pokriva barem svoj mjesec
+  for (const p of done) if (!scheduled.has(p)) cut = later(cut, endOf(p, 1));
+  for (const ch of charges) {
+    if (ch.period < cut.slice(0, 7) || done.has(ch.period)) cut = later(cut, endOf(ch.period, ch.months));
+  }
+  return cut;
+}
+
+/**
  * Skupna izmjena naplate i/ili sezone na planu jednog uređaja. Plan bez
- * razdoblja dobiva jedno razdoblje od početka naplate ugovora (`base`); izmjena
- * vrijedi za sva razdoblja plana. „Kao na ugovoru" briše sezonu (a kod plana s
- * jednim razdobljem i vlastitu naplatu); razdoblje koje više ništa ne mijenja
- * vraća uređaj na uvjete ugovora (prazan plan).
+ * razdoblja dobiva jedno razdoblje od početka naplate ugovora (`base`).
+ * Bez `from` (ili kad je `from` na početku plana) izmjena vrijedi za cijeli plan;
+ * inače se plan dijeli: razdoblja prije `from` ostaju kakva jesu, a nova pravila
+ * vrijede od `from` (vidi `bulkCutoff`) — prošla i fakturirana razdoblja se ne otvaraju.
+ * „Kao na ugovoru" briše sezonu (a kod plana s jednim razdobljem i vlastitu
+ * naplatu); razdoblje koje više ništa ne mijenja vraća uređaj na uvjete ugovora (prazan plan).
  */
 export function applyBulkTerms(
   plan: PlanPeriodInput[] | null | undefined,
   base: ISODate,
   patch: { billing?: BillingCode | null; season?: BulkSeason | null },
+  from?: ISODate | null,
 ): PlanPeriodInput[] {
-  const rows: PlanPeriodInput[] = (plan?.length ? plan : [{ from: base }]).map((p) => ({ ...p }));
-  for (const p of rows) {
+  const start = (p: PlanPeriodInput) => p.from || base;
+  const src = (plan?.length ? plan : [{ from: base }]).map((p) => ({ ...p })).sort((a, b) => start(a).localeCompare(start(b)));
+  const cut = from && from > start(src[0]) ? from : null;
+  const apply = (p: PlanPeriodInput, single: boolean) => {
     if (patch.billing) p.billing = patch.billing;
     if (patch.season === 'summer') {
       p.seasonFrom = SUMMER_SEASON.from;
@@ -144,8 +174,33 @@ export function applyBulkTerms(
     } else if (patch.season === 'contract') {
       delete p.seasonFrom;
       delete p.seasonTo;
-      if (rows.length === 1 && !patch.billing) delete p.billing;
+      if (single && !patch.billing) delete p.billing;
     }
+    return p;
+  };
+  if (!cut) {
+    for (const p of src) apply(p, src.length === 1);
+  }
+  const same = (a: PlanPeriodInput, b: PlanPeriodInput) =>
+    (a.billing ?? null) === (b.billing ?? null) &&
+    (a.price ?? null) === (b.price ?? null) &&
+    (a.seasonFrom ?? null) === (b.seasonFrom ?? null) &&
+    (a.seasonTo ?? null) === (b.seasonTo ?? null);
+  const rows: PlanPeriodInput[] = cut ? [] : src;
+  if (cut) {
+    src.forEach((p, i) => {
+      const next = src[i + 1];
+      const nextEnd = next ? addDays(start(next), -1) : '';
+      const end = p.to && (!nextEnd || p.to < nextEnd) ? p.to : nextEnd;
+      if (start(p) >= cut) rows.push(apply(p, false));
+      else if (end && end < cut) rows.push(p);
+      else {
+        // razdoblje preko granice: staro do dana prije, novo od granice (ako se išta mijenja)
+        const tail = apply({ ...p, from: cut }, false);
+        if (same(tail, p)) rows.push(p);
+        else rows.push({ ...p, from: start(p), to: addDays(cut, -1) }, tail);
+      }
+    });
   }
   const only = rows.length === 1 ? rows[0] : null;
   const trivial =

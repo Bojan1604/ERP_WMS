@@ -1,8 +1,9 @@
 import 'server-only';
 import type { Contract, ContractItem, Prisma, ReturnedContractItem } from '@prisma/client';
 import type { Tx } from '../db';
-import { periodsInPause, type ContractDevice, type ContractTerms, type PlanPeriodInput } from '@/domain/billing';
-import { fromISO, toISO } from '@/domain/dates';
+import { pendingInstallments, periodsInPause, type ContractDevice, type ContractTerms, type PlanPeriodInput } from '@/domain/billing';
+import { addMonths, fromISO, periodLabel, toISO, today } from '@/domain/dates';
+import { DomainError } from '../errors';
 import { num } from '@/domain/money';
 
 /**
@@ -157,4 +158,63 @@ export async function keepReturned(tx: Tx, rows: ContractItem[], endDate: string
     });
   }
   if (data.length) await tx.returnedContractItem.createMany({ data });
+}
+
+/**
+ * Razdoblje koje račun za najam pokriva. Pokrivenost se vodi po `uređaj|razdoblje`
+ * s jednim razdobljem računa (Invoice.period), pa svaki uređaj s računa mora u tom
+ * razdoblju imati još nefakturiranu ratu s istim brojem mjeseci kao na stavci —
+ * inače bi modul Najam istu ratu tražio ponovno (dvostruka naplata) ili bi rata
+ * ostala krivo označena kao izdana. Bez odabranog razdoblja uzima se najranija
+ * nefakturirana rata uređaja s računa; bez uređaja mjesec računa.
+ */
+export async function rentPeriodFor(
+  tx: Tx,
+  contractId: string,
+  devLines: Array<{ itemId: string | null; months: number | null; description: string }>,
+  chosen: string | null,
+  date: string,
+): Promise<string> {
+  if (!devLines.length) return chosen ?? date.slice(0, 7);
+  const ids = devLines.map((l) => l.itemId!);
+  const [c, items] = await Promise.all([
+    tx.contract.findUniqueOrThrow({
+      where: { id: contractId },
+      include: { items: { where: { itemId: { in: ids } } }, returnedItems: { where: { itemId: { in: ids } } } },
+    }),
+    tx.item.findMany({ where: { id: { in: ids } }, select: { id: true, serial: true } }),
+  ]);
+  const serial = new Map(items.map((i) => [i.id, i.serial]));
+  const covered = (await coveredPeriods(tx, [contractId])).get(contractId) ?? new Set<string>();
+  // sve rate do godinu dana nakon računa (ili odabranog razdoblja), bez ograničenja unatrag
+  const base = [date, today(), chosen ? `${chosen}-28` : ''].reduce((a, b) => (b > a ? b : a));
+  const rows = pendingInstallments({ ...toTerms(c), status: 'ACTIVE' }, [...c.items.map(toDevice), ...c.returnedItems.map(toReturnedDevice)], covered, addMonths(base, 12), 1200);
+  const byItem = new Map<string, Map<string, { months: number }>>();
+  for (const r of rows) for (const l of r.lines) {
+    if (!byItem.has(l.itemId)) byItem.set(l.itemId, new Map());
+    byItem.get(l.itemId)!.set(r.period, { months: l.months });
+  }
+  const firstOf = (itemId: string) => [...(byItem.get(itemId)?.keys() ?? [])].sort()[0] ?? null;
+  const firsts = ids.map(firstOf).filter((p): p is string => !!p).sort();
+  const period = chosen ?? firsts[0] ?? date.slice(0, 7);
+
+  const bad: string[] = [];
+  for (const l of devLines) {
+    const sn = serial.get(l.itemId!) ?? l.description;
+    const ch = byItem.get(l.itemId!)?.get(period);
+    if (!ch) {
+      const next = firstOf(l.itemId!);
+      if (covered.has(`${l.itemId}|${period}`)) bad.push(`${sn} — ${periodLabel(period)} je već fakturiran`);
+      else bad.push(`${sn} — ${next ? `prva nefakturirana rata je ${periodLabel(next)}` : 'nema nefakturiranih rata'}`);
+    } else if (l.months !== null && l.months !== ch.months) {
+      bad.push(`${sn} — rata za ${periodLabel(period)} pokriva ${ch.months} mj., a stavka ${l.months} mj.`);
+    }
+  }
+  if (bad.length) {
+    throw new DomainError(
+      `Račun za najam pokriva razdoblje ${periodLabel(period)}, a to ne odgovara svim uređajima: ${bad.join('; ')}. ` +
+        'Odaberite drugo razdoblje ili uređaje s različitim razdobljima naplate izdajte na zasebnim računima.',
+    );
+  }
+  return period;
 }

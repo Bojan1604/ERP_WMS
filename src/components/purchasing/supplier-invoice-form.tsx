@@ -31,11 +31,13 @@ export interface SupplierInvoiceValue {
   note: string | null;
   paidDate: string | null;
   book: boolean;
+  /** „Ovo je račun za robu s primke" (zadano s poslužitelja po pravilu iznosa). */
+  goods: boolean;
   orderId: string | null;
   receiptId: string | null;
 }
 
-type SaveInput = Omit<SupplierInvoiceValue, 'internalNo'>;
+type SaveInput = Omit<SupplierInvoiceValue, 'internalNo' | 'goods'> & { goods: boolean | null };
 
 /** Ono što se o vezi s nabavom zna unaprijed (za prikaz odabranog). */
 export interface LinkOptions {
@@ -83,6 +85,8 @@ export function SupplierInvoiceForm({
   const [vatTouched, setVatTouched] = useState(!!initial.id);
   const [totalTouched, setTotalTouched] = useState(!!initial.id && r2(initial.netAmount + initial.vatAmount) !== initial.total);
   const [localError, setLocalError] = useState<string | null>(null);
+  // kvačica „račun za robu": dok je korisnik ne dira, a veza se promijeni, odlučuje pravilo na poslužitelju
+  const [goodsTouched, setGoodsTouched] = useState(false);
   const [docs, setDocs] = useState<{ orders: ComboOption[]; receipts: Array<ComboOption & { orderId: string | null }> }>({
     orders: links?.order ? [links.order] : [],
     receipts: links?.receipt ? [{ ...links.receipt, orderId: null }] : [],
@@ -122,9 +126,11 @@ export function SupplierInvoiceForm({
     if (free && !v.supplierName?.trim()) return setLocalError('Upišite naziv dobavljača.');
     if (!v.number.trim()) return setLocalError('Upišite broj računa dobavljača.');
     setLocalError(null);
-    const { internalNo: _ignored, ...rest } = v;
+    const { internalNo: _ignored, goods, ...rest } = v;
     void _ignored;
-    run(free ? { ...rest, supplierId: null } : { ...rest, supplierName: null, supplierOib: null });
+    const sameLinks = v.orderId === initial.orderId && v.receiptId === initial.receiptId;
+    const payload = { ...rest, goods: linked && (goodsTouched || sameLinks) ? goods : null };
+    run(free ? { ...payload, supplierId: null } : { ...payload, supplierName: null, supplierOib: null });
   };
 
   return (
@@ -260,14 +266,34 @@ export function SupplierInvoiceForm({
             </Field>
           </FormGrid>
           <div className="mt-3">
-            {bookedByReceipt ? (
+            {linked && !free && (
+              <div className="mb-2">
+                <Checkbox
+                  label="Ovo je račun za robu s primke"
+                  checked={v.goods}
+                  disabled={rejected}
+                  onChange={(e) => {
+                    setGoodsTouched(true);
+                    setV({ ...v, goods: e.target.checked });
+                  }}
+                />
+                <p className="mt-1 text-xs text-fg-3">
+                  Račun za robu ne knjiži vlastiti trošak ako je primka već knjižila „Nabavu robe" (trošak se ne zbraja dvaput). Zadano uključeno
+                  kad je osnovica jednaka vrijednosti primke ili narudžbenice (±1 % ili 1 €) i to je prvi povezani račun. Isključite za prijevoz,
+                  dodatne troškove ili drugi račun iste narudžbenice — oni se knjiže zasebno.
+                </p>
+              </div>
+            )}
+            {bookedByReceipt && linked && v.goods ? (
               <p className="text-sm text-fg-2">Trošak robe knjižen je primkom — račun ga ne knjiži ponovno.</p>
             ) : (
               <>
                 <Checkbox label="Knjiži kao trošak" checked={v.book} disabled={rejected} onChange={(e) => setV({ ...v, book: e.target.checked })} />
                 <p className="mt-1 text-xs text-fg-3">
                   {linked
-                    ? 'Ako povezana primka ima knjižen trošak nabave, račun ne knjiži vlastiti trošak (trošak se ne zbraja dvaput).'
+                    ? v.goods
+                      ? 'Ako povezana primka ima knjižen trošak nabave, račun za robu ne knjiži vlastiti trošak (trošak se ne zbraja dvaput).'
+                      : 'Račun nije račun za robu s primke — knjiži se kao zaseban trošak.'
                     : 'Za račun robe koja je zaprimljena primkom povežite primku ili narudžbenicu — trošak je tada već knjižen primkom.'}
                 </p>
               </>
