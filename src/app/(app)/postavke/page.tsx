@@ -11,7 +11,8 @@ import { can } from '@/domain/permissions';
 import { num } from '@/domain/money';
 import { PageHeader } from '@/components/ui/misc';
 import { CompanyForm } from '@/components/settings/company-form';
-import { runAutoIssueAction, saveCompanyAction, saveCompanyDocsAction, setCounterAction } from './actions';
+import { CompanyColorsCard } from '@/components/settings/company-colors';
+import { runAutoIssueAction, saveCompanyAction, saveCompanyColorsAction, saveCompanyDocsAction, setCounterAction } from './actions';
 
 type Params = Record<string, string | string[] | undefined>;
 const SERIES = ['INVOICE', 'QUOTE', 'PROFORMA', 'CONTRACT', 'ORDER', 'RECEIPT', 'SERVICE', 'TRANSFER', 'SUPPLIER_INVOICE', 'STOCKTAKE'] as const;
@@ -75,6 +76,9 @@ export default async function CompanySettingsPage({ searchParams }: { searchPara
           statusChangeNeedsApproval: c.statusChangeNeedsApproval,
         }}
       />
+      <div className="mt-4" id="boje">
+        <CompanyColorsCard canEdit={canEdit} save={saveCompanyColorsAction} value={{ brandColor: c.brandColor, menuColor: c.menuColor }} />
+      </div>
       <h2 className="mt-6 mb-3 text-md font-semibold">Dokumenti, porez i eRačun</h2>
       <CompanyDocsForm
         canEdit={canEdit}

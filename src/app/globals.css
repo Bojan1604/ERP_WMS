@@ -61,6 +61,8 @@
   --color-nav-2: #1f2c28;
   --color-nav-fg: #c9d4cf;
   --color-nav-fg-2: #86958f;
+  /* naglašeni tekst na izborniku (naslov, stavka pod mišem); boje firme: src/domain/brand-colors.ts */
+  --color-nav-fg-strong: #ffffff;
 
   --shadow-panel: 0 1px 2px rgb(20 30 25 / 0.05), 0 0 0 1px rgb(20 30 25 / 0.04);
   --shadow-pop: 0 12px 32px rgb(20 30 25 / 0.16), 0 0 0 1px rgb(20 30 25 / 0.06);

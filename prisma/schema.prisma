@@ -254,6 +254,10 @@ model Company {
   phone    String?
   web      String?
   logo     String? // data URL, mali PNG/SVG za ispis dokumenata
+  /// Boja naglaska firme (#rrggbb; null = zadana tirkizna) — gumbi, poveznice, oznake (src/domain/brand-colors.ts).
+  brandColor String?
+  /// Boja lijevog izbornika (#rrggbb; null = zadana).
+  menuColor  String?
   currency String  @default("EUR")
 
   vatRegistered             Boolean @default(true)

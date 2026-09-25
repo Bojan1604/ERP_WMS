@@ -25,3 +25,8 @@ export const getCompany = cache(async (companyId: string) =>
 );
 
 export const modelLabel = (m: { brand?: string | null; name: string }) => [m.brand, m.name].filter(Boolean).join(' ');
+
+/** Boje firme (naglasak, izbornik) za okvir aplikacije i portala — jednom po zahtjevu. */
+export const getCompanyColors = cache(async (companyId: string) =>
+  db.company.findUnique({ where: { id: companyId }, select: { brandColor: true, menuColor: true } }).then((c) => c ?? { brandColor: null, menuColor: null }),
+);

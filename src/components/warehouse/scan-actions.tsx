@@ -58,7 +58,7 @@ export function ScanActions({
   const none = (states: StateKind[]) => targets.every((t) => !states.includes(t.state));
   const meta = { count: ids.length, onContract: targets.filter((t) => t.onContract).length, cost: sumCost(targets) };
   const base = { open: true, onClose: () => setWhich(null), itemIds: ids, onDone };
-  const btn = tone === 'dark' ? 'border-0 bg-white/10 text-white hover:bg-white/20' : '';
+  const btn = tone === 'dark' ? 'border-0 bg-nav-fg-strong/10 text-nav-fg-strong hover:bg-nav-fg-strong/20' : '';
   const n = ids.length > 1 ? ` (${ids.length})` : '';
 
   return (

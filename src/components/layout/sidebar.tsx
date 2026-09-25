@@ -45,7 +45,7 @@ export function Sidebar({ perms, isAdmin, canDanger = isAdmin, company, badges, 
                     onClick={() => setOpen(false)}
                     className={cn(
                       'flex h-8 items-center gap-2.5 rounded-md px-2.5 text-base transition-colors',
-                      on ? 'bg-brand text-white' : 'text-nav-fg hover:bg-nav-2 hover:text-white',
+                      on ? 'bg-brand text-white' : 'text-nav-fg hover:bg-nav-2 hover:text-nav-fg-strong',
                     )}
                   >
                     <Icon icon={i.icon} active={on} />
@@ -69,7 +69,7 @@ export function Sidebar({ perms, isAdmin, canDanger = isAdmin, company, badges, 
         <Warehouse className="size-4.5" />
       </div>
       <div className="min-w-0">
-        <p className="truncate text-md font-semibold text-white">ERP · WMS</p>
+        <p className="truncate text-md font-semibold text-nav-fg-strong">ERP · WMS</p>
         <p className="truncate text-xs text-nav-fg-2">{company}</p>
       </div>
     </div>
@@ -77,7 +77,7 @@ export function Sidebar({ perms, isAdmin, canDanger = isAdmin, company, badges, 
 
   return (
     <>
-      <button type="button" onClick={() => setOpen(true)} className="no-print fixed left-3 top-3 z-40 grid size-9 place-items-center rounded-md bg-nav text-white lg:hidden" aria-label="Izbornik">
+      <button type="button" onClick={() => setOpen(true)} className="no-print fixed left-3 top-3 z-40 grid size-9 place-items-center rounded-md bg-nav text-nav-fg-strong lg:hidden" aria-label="Izbornik">
         <Menu className="size-4.5" />
       </button>
       <aside className="no-print hidden w-60 shrink-0 flex-col bg-nav lg:flex">

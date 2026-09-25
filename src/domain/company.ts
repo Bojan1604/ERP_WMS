@@ -3,6 +3,8 @@
  * za postavke preuzete iz uvezene datoteke (sigurnosna kopija, stara verzija).
  */
 
+import { DEFAULT_BRAND_COLOR, DEFAULT_MENU_COLOR, normalizeHex, storedColor } from './brand-colors';
+
 /** Najveći logo (bajtovi slike). */
 export const MAX_LOGO_BYTES = 300 * 1024;
 
@@ -47,6 +49,7 @@ export interface CompanySettingsInput {
   legalFooter?: string | null; kpdRent?: string | null; kpdSale?: string | null; kpdService?: string | null; accountantEmail?: string | null;
   vatOnPayment?: boolean; eInvoiceAttachPdf?: boolean; eReportingEnabled?: boolean; autoBackup?: boolean;
   backupKeep?: number; backupReminderDays?: number; paymentModel?: string; eInvoicePaymentMeans?: string;
+  brandColor?: string | null; menuColor?: string | null;
 }
 
 /**
@@ -92,6 +95,15 @@ export function sanitizeCompanySettings(raw: Record<string, unknown>): { company
     const v = raw[k];
     if (typeof v === 'string') (out as Record<string, unknown>)[k] = v.slice(0, 1000);
     else if (v === null && k !== 'proformaTitle') (out as Record<string, unknown>)[k] = null;
+  }
+  // boje firme (#rrggbb); zadana boja = null
+  for (const [k, fallback] of [['brandColor', DEFAULT_BRAND_COLOR], ['menuColor', DEFAULT_MENU_COLOR]] as const) {
+    const v = raw[k];
+    if (v === null) out[k] = null;
+    else if (v !== undefined) {
+      if (normalizeHex(v)) out[k] = storedColor(v, fallback);
+      else notes.push(`Boja firme ${k} „${String(v).slice(0, 20)}" nije ispravna — ostaje zadana.`);
+    }
   }
   if (typeof raw.paymentModel === 'string' && isPaymentModel(raw.paymentModel)) out.paymentModel = raw.paymentModel;
   if (raw.eInvoicePaymentMeans === '30' || raw.eInvoicePaymentMeans === '58') out.eInvoicePaymentMeans = raw.eInvoicePaymentMeans;

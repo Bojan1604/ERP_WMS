@@ -25,6 +25,8 @@ export interface PlanCompany {
   quoteValidDays?: number; defaultMarginPct?: number; defaultWarrantyMonths?: number; rentFallbackPct?: number;
   invoicePremises?: string; invoiceDevice?: string; invoiceSeparator?: string; invoiceFooter?: string | null;
   statusChangeNeedsApproval?: boolean;
+  /** Boje firme (#rrggbb) iz sigurnosne kopije. */
+  brandColor?: string | null; menuColor?: string | null;
 }
 
 export interface PlanWarehouse { key: Key; name: string; address: string | null; active: boolean; sort: number }

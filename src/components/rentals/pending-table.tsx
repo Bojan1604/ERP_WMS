@@ -58,7 +58,7 @@ export function PendingTable({ rows, showContract = true, canIssue, canEdit }: {
       {picked.length > 0 && (
         <div className="no-print sticky top-0 z-20 mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-nav px-3 py-2 text-nav-fg shadow-[var(--shadow-pop)] max-sm:fixed max-sm:inset-x-2 max-sm:top-auto max-sm:bottom-[calc(5.25rem+env(safe-area-inset-bottom))] max-sm:z-30 max-sm:mb-0">
           <span className="mr-1 text-sm">
-            Označeno: <b className="text-white">{picked.length}</b> · <b className="text-white">{eur(total)}</b>
+            Označeno: <b className="text-nav-fg-strong">{picked.length}</b> · <b className="text-nav-fg-strong">{eur(total)}</b>
           </span>
           {canIssue && (
             <>
@@ -75,7 +75,7 @@ export function PendingTable({ rows, showContract = true, canIssue, canEdit }: {
               Ne izdaji — već izdano
             </Button>
           )}
-          <button type="button" onClick={() => setSel(new Set())} className="ml-auto text-sm text-nav-fg-2 hover:text-white">
+          <button type="button" onClick={() => setSel(new Set())} className="ml-auto text-sm text-nav-fg-2 hover:text-nav-fg-strong">
             Poništi odabir
           </button>
         </div>

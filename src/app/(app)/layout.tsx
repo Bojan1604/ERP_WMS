@@ -1,3 +1,4 @@
+import type { Viewport } from 'next';
 import { redirect } from 'next/navigation';
 import { getUser } from '@/server/auth';
 import { db } from '@/server/db';
@@ -9,6 +10,16 @@ import { ResponsiveTables } from '@/components/layout/responsive-tables';
 import { ToastProvider } from '@/components/ui/toast';
 import { portalNewCount } from '@/server/portal/count';
 import { currentBuildId, onlineUsers } from '@/server/queries/presence';
+import { getCompanyColors } from '@/server/queries/lookups';
+import { CompanyColorsStyle } from '@/components/layout/company-colors';
+import { deriveTheme } from '@/domain/brand-colors';
+
+/** Boja preglednika (theme-color) prati boju izbornika firme. */
+export async function generateViewport(): Promise<Viewport> {
+  const user = await getUser();
+  if (!user) return {};
+  return { themeColor: deriveTheme(await getCompanyColors(user.companyId)).light.nav };
+}
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await getUser();
@@ -27,15 +38,17 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       ]);
 
   // zaglavlje: firme za prebacivanje (više firmi), tko je prijavljen, izdanje programa (obavijest o novoj verziji)
-  const [access, online, buildId] = await Promise.all([
+  const [access, online, buildId, colors] = await Promise.all([
     user.mdmOrgId ? [] : db.userCompany.findMany({ where: { userId: user.id }, select: { company: { select: { id: true, name: true } } } }),
     user.mdmOrgId ? [] : onlineUsers(c),
     currentBuildId(),
+    getCompanyColors(c),
   ]);
   const companies = [{ id: c, name: user.companyName }, ...access.map((a) => a.company).filter((x) => x.id !== c)].sort((a, b) => a.name.localeCompare(b.name, 'hr'));
 
   return (
     <ToastProvider>
+      <CompanyColorsStyle colors={colors} />
       <div className="flex h-dvh overflow-hidden">
         <Sidebar
           perms={user.perms}

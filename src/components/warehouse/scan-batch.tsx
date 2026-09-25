@@ -165,7 +165,7 @@ export function ScanBatch({
       {/* ljepljiva traka iznad donje navigacije mobitela */}
       <div className="no-print sticky bottom-[calc(5.25rem+env(safe-area-inset-bottom))] z-30 mt-3 rounded-lg bg-nav px-3 py-2.5 text-nav-fg shadow-[var(--shadow-pop)] lg:bottom-3" data-batch-bar>
         <p className="mb-2 text-sm">
-          Radnja za <b className="text-white">{devices.length}</b> pronađenih
+          Radnja za <b className="text-nav-fg-strong">{devices.length}</b> pronađenih
           {unknown.length > 0 && <> · {unknown.length} nepoznatih</>}
           <span className="text-nav-fg-2 sm:hidden"> · povucite →</span>
         </p>

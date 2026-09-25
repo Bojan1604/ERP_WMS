@@ -103,10 +103,10 @@ export function SelectionBar({ children }: { children: (ids: string[], clear: ()
   return (
     <div className={cn('no-print sticky top-0 z-20 mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-nav px-3 py-2 text-nav-fg shadow-[var(--shadow-pop)]')}>
       <span className="mr-1 text-sm">
-        Označeno: <b className="text-white">{selected.size}</b>
+        Označeno: <b className="text-nav-fg-strong">{selected.size}</b>
       </span>
       {children([...selected], clear)}
-      <button type="button" onClick={clear} className="ml-auto text-sm text-nav-fg-2 hover:text-white">
+      <button type="button" onClick={clear} className="ml-auto text-sm text-nav-fg-2 hover:text-nav-fg-strong">
         Poništi odabir
       </button>
     </div>

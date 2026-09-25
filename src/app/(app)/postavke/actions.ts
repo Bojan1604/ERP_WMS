@@ -7,6 +7,7 @@ import { transaction } from '@/server/db';
 import { zBool, zInt, zMoney, zOptText, zReq, zText } from '@/server/zod';
 import { saveCompany, saveCompanyDocs, setCounterStart } from '@/server/services/settings';
 import { autoIssueCompany } from '@/server/jobs/auto-issue';
+import { companyColorsSchema, saveCompanyColors } from '@/server/services/company-colors';
 
 const schema = z.object({
   name: zReq('Naziv firme'),
@@ -43,6 +44,12 @@ const schema = z.object({
 export const saveCompanyAction = action({ module: 'settings', level: 'edit' }, schema, async (input, user) => {
   await transaction((tx) => saveCompany(tx, user, input));
   return { message: 'Postavke spremljene.' };
+});
+
+/** Boje firme (naglasak, lijevi izbornik) — osvježava cijelu aplikaciju (zadano `revalidate`). */
+export const saveCompanyColorsAction = action({ module: 'settings', level: 'edit' }, companyColorsSchema, async (input, user) => {
+  const saved = await transaction((tx) => saveCompanyColors(tx, user, input));
+  return { message: !saved.brandColor && !saved.menuColor ? 'Vraćene zadane boje.' : 'Boje firme spremljene.' };
 });
 
 // ---------------------------------------------------------------- dokumenti, porez, eRačun, najam (F9)
