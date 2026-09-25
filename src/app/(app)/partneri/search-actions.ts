@@ -20,7 +20,9 @@ export const searchPartnerOptions = userAction(
     const note = can(user.perms, 'sales') || can(user.perms, 'partners');
     return { data: rows.map((p) => toPartnerOption(note ? p : { ...p, note: null })), revalidate: [] };
   },
-  (user) => {
-    if (EXTERNAL_ROLES.includes(user.role) || !PARTNER_MODULES.some((m) => can(user.perms, m))) throw new AuthError('Nemate pravo na popis partnera.', 403);
-  },
+  guardPartnerSearch,
 );
+
+function guardPartnerSearch(user: { role: Parameters<typeof EXTERNAL_ROLES.includes>[0]; perms: Parameters<typeof can>[0] }) {
+  if (EXTERNAL_ROLES.includes(user.role) || !PARTNER_MODULES.some((m) => can(user.perms, m))) throw new AuthError('Nemate pravo na popis partnera.', 403);
+}
