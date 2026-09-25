@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { CalendarClock, Download, Plus, Receipt, RotateCcw } from 'lucide-react';
+import { CalendarClock, Plus, Receipt, RotateCcw } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import { can } from '@/domain/permissions';
@@ -17,6 +17,7 @@ import { FISCAL_STATUS_LABEL, FISCAL_STATUS_TONE } from '@/domain/fiscal';
 import { KIND_SHORT, PayBadge, PAY_TONE, rowTone, SortHeader, TYPE_LABEL } from '@/components/sales/list-bits';
 import { amount, date, eur, integer } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { ExportButtons } from '@/components/ui/export-buttons';
 
 export const metadata = { title: 'Računi' };
 
@@ -55,9 +56,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
         subtitle={f.year === 'sve' ? 'Sve godine' : `Godina ${f.year}`}
         actions={
           <>
-            <LinkButton href={`/api/prodaja/racuni/csv?${csv}`} icon={<Download className="size-4" />}>
-              Izvoz CSV
-            </LinkButton>
+            <ExportButtons href={`/api/prodaja/racuni/csv?${csv}`} />
             {edit && (
               <LinkButton href={`${BASE}/novi`} variant="primary" icon={<Plus className="size-4" />}>
                 Novi račun

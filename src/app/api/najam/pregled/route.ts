@@ -2,7 +2,8 @@ import { requireAccess } from '@/server/auth';
 import { toError } from '@/server/action';
 import { loadOverview, readFilters } from '@/app/(app)/najam/pregled/data';
 import { MONTHS_SHORT } from '@/domain/dates';
-import { csvResponse, toCsv, type CsvColumn } from '@/lib/csv';
+import type { CsvColumn } from '@/lib/csv';
+import { csvOrXlsx } from '@/server/xlsx';
 
 /** Izvoz mreže najma (svi redci filtra, bez straničenja). */
 export async function GET(req: Request) {
@@ -22,7 +23,7 @@ export async function GET(req: Request) {
       ...MONTHS_SHORT.map((m, i): CsvColumn<Row> => ({ label: m, value: (r) => r.cells[i].v })),
       { label: 'Ukupno', value: (r) => r.total },
     ];
-    return csvResponse(toCsv(rows, cols), `najam-${f.year}.csv`);
+    return await csvOrXlsx(req, rows, cols, `najam-${f.year}`, `Najam ${f.year}`);
   } catch (e) {
     const err = toError(e);
     return new Response(err.ok === false ? err.error : 'Greška', { status: 403 });

@@ -1,12 +1,12 @@
-import { requireAccess } from '@/server/auth';
+import { requireUser } from '@/server/auth';
 import { db, transaction } from '@/server/db';
 import { audit } from '@/server/audit';
 import { toError } from '@/server/action';
 import { AuthError } from '@/server/errors';
-import { can } from '@/domain/permissions';
+import { can, isExternalRole } from '@/domain/permissions';
 import { ATTACHMENT_MIMES as INLINE_MIME } from '@/domain/attachments';
 import { isMine } from '@/server/queries/approvals';
-import { ATTACHMENT_ENTITIES, deleteAttachment, isAttachmentEntity, readAttachment } from '@/server/services/attachments';
+import { ATTACHMENT_ENTITIES, canAttachment, deleteAttachment, isAttachmentEntity, isProtectedAttachment, readAttachment } from '@/server/services/attachments';
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -14,13 +14,14 @@ type Ctx = { params: Promise<{ id: string }> };
 export async function GET(req: Request, { params }: Ctx) {
   let user;
   try {
-    user = await requireAccess('warehouse', 'view');
+    user = await requireUser();
+    if (isExternalRole(user.role)) throw new AuthError('Nemate pravo pristupa.', 403);
   } catch (e) {
     return new Response(e instanceof Error ? e.message : 'Greška', { status: e instanceof AuthError ? e.status : 500 });
   }
   const { id } = await params;
   const a = await readAttachment(db, user.companyId, id);
-  if (!a || !isAttachmentEntity(a.entity) || !can(user.perms, ATTACHMENT_ENTITIES[a.entity].module, 'view')) {
+  if (!a || !isAttachmentEntity(a.entity) || !canAttachment(user.perms, a.entity, 'view')) {
     return new Response('Prilog ne postoji.', { status: 404 });
   }
   // slike uz zahtjev za zaprimanje: samo tko smije rješavati zahtjeve ili onaj tko ga je poslao
@@ -50,15 +51,16 @@ export async function GET(req: Request, { params }: Ctx) {
 
 export async function DELETE(_req: Request, { params }: Ctx) {
   try {
-    const user = await requireAccess('warehouse', 'view');
+    const user = await requireUser();
+    if (isExternalRole(user.role)) throw new AuthError('Nemate pravo brisati priloge.', 403);
     const { id } = await params;
     const res = await transaction(async (tx) => {
-      const a = await tx.attachment.findFirst({ where: { id, companyId: user.companyId }, select: { entity: true } });
+      const a = await tx.attachment.findFirst({ where: { id, companyId: user.companyId }, select: { entity: true, mime: true } });
       if (!a || !isAttachmentEntity(a.entity)) throw new AuthError('Prilog ne postoji.', 403);
-      const rule = ATTACHMENT_ENTITIES[a.entity];
-      if (!can(user.perms, rule.module, rule.remove)) throw new AuthError('Nemate pravo brisati priloge.', 403);
+      if (!canAttachment(user.perms, a.entity, 'remove')) throw new AuthError('Nemate pravo brisati priloge.', 403);
+      if (isProtectedAttachment(a)) throw new AuthError('Izvorni XML eRačuna se ne može obrisati.', 403);
       const del = await deleteAttachment(tx, user, id);
-      await audit(tx, user, { entity: 'attachment', entityId: id, action: 'delete', summary: `Obrisan prilog ${del.fileName}`, diff: { entity: del.entity, entityId: del.entityId } });
+      await audit(tx, user, { entity: 'attachment', entityId: id, action: 'delete', summary: `Obrisan prilog ${del.fileName}${isAttachmentEntity(del.entity) ? ` (${ATTACHMENT_ENTITIES[del.entity].label})` : ''}`, diff: { entity: del.entity, entityId: del.entityId } });
       return del;
     });
     return Response.json({ ok: true, data: { id: res.id } });

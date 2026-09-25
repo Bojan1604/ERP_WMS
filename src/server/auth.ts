@@ -22,7 +22,14 @@ export interface SessionUser {
   mdmOrgId: string | null;
   /** Naziv vanjske organizacije (prikazuje se umjesto firme vlasnika). */
   mdmOrgName: string | null;
+  /** Smije u opasnu zonu (User.canDanger; administrator uvijek — vidi `canUseDanger`). */
+  canDanger?: boolean;
+  /** Promjena statusa na odobrenje: null = prati postavku firme (User.requireApproval). */
+  requireApproval?: boolean | null;
 }
+
+/** Zadnja aktivnost se upisuje najviše jednom u minuti po korisniku. */
+const SEEN_EVERY_MS = 60_000;
 
 const hash = (t: string) => createHash('sha256').update(t).digest('hex');
 
@@ -77,6 +84,10 @@ export const getUser = cache(async (): Promise<SessionUser | null> => {
   // vanjski korisnik bez (aktivne) organizacije nema pristup ničemu
   // klijent ugašenog distributera također gubi pristup
   if (external && (!u.mdmOrgId || !u.mdmOrg?.active || u.mdmOrg.parent?.active === false)) return null;
+  // „tko je prijavljen": zadnja aktivnost, bez čekanja i bez rušenja zahtjeva ako upis ne uspije
+  if (!u.lastSeenAt || Date.now() - u.lastSeenAt.getTime() > SEEN_EVERY_MS) {
+    void db.user.update({ where: { id: u.id }, data: { lastSeenAt: new Date() }, select: { id: true } }).catch(() => undefined);
+  }
   return {
     id: u.id,
     name: u.name,
@@ -87,6 +98,8 @@ export const getUser = cache(async (): Promise<SessionUser | null> => {
     perms: resolvePermissions(u.role, u.permissions as Record<string, Level>),
     mdmOrgId: external ? u.mdmOrgId : null,
     mdmOrgName: external ? (u.mdmOrg?.name ?? null) : null,
+    canDanger: u.role === 'ADMIN' || u.canDanger,
+    requireApproval: u.requireApproval,
   };
 });
 

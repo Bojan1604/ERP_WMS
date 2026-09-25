@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '../db';
 import { plain } from '../plain';
 import { isAttachmentEntity } from '../services/attachments';
-import { ATTACHMENT_MAX_BYTES, checkAttachmentBytes, safeFileName } from '@/domain/attachments';
+import { ATTACHMENT_MAX_FILE_BYTES, checkAttachmentBytes, safeFileName } from '@/domain/attachments';
 import { sanitizeCompanySettings } from '@/domain/company';
 import { computeInvoiceTotals, emptyPlan, normalizeItemState, Warnings, type ImportPlan, type PlanAttachment, type PlanCounter } from './plan';
 
@@ -86,7 +86,7 @@ function rowJson(r: Row): string {
 /** Tok JSON-a cijele firme. */
 export async function exportCompanyStream(companyId: string): Promise<ReadableStream<Uint8Array>> {
   const company = await db.company.findUniqueOrThrow({ where: { id: companyId } });
-  const { fiscalCert: _c, fiscalCertPassword: _p, eInvoiceApiKey: _k, ...safe } = company;
+  const { fiscalCert: _c, fiscalCertPassword: _p, eInvoiceApiKey: _k, smtpPassword: _s, ...safe } = company;
   const enc = new TextEncoder();
   const list = tables(companyId);
   let started = false;
@@ -315,7 +315,7 @@ export function backupToPlan(raw: Row): ImportPlan {
 export function backupAttachments(rows: Row[], w: Warnings): PlanAttachment[] {
   const out: PlanAttachment[] = [];
   // base64 duljina najvećeg dopuštenog priloga (+ razmaci/prijelomi koje dekoder preskače)
-  const maxB64 = Math.ceil(ATTACHMENT_MAX_BYTES / 3) * 4 + 1024;
+  const maxB64 = Math.ceil(ATTACHMENT_MAX_FILE_BYTES / 3) * 4 + 1024;
   for (const r of rows) {
     const label = s(r.fileName) ?? s(r.id) ?? 'prilog';
     const entity = s(r.entity) ?? '';
@@ -324,7 +324,7 @@ export function backupAttachments(rows: Row[], w: Warnings): PlanAttachment[] {
     let bytes: Buffer | null = null;
     if (!isAttachmentEntity(entity) || !entityKey) error = `nepoznata vrsta zapisa „${entity}"`;
     else if (typeof r.data !== 'string' || !r.data) error = 'nema sadržaja';
-    else if (r.data.length > maxB64) error = `veći od ${ATTACHMENT_MAX_BYTES / 1024 / 1024} MB`;
+    else if (r.data.length > maxB64) error = `veći od ${ATTACHMENT_MAX_FILE_BYTES / 1024 / 1024} MB`;
     else bytes = Buffer.from(r.data, 'base64');
     const check = bytes ? checkAttachmentBytes(bytes) : null;
     if (check && 'error' in check) error = check.error;

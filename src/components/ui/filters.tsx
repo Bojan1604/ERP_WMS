@@ -2,7 +2,7 @@
 
 import { Children, isValidElement, useEffect, useRef, useState, useTransition, type ReactNode } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Loader2, Search, SlidersHorizontal, X } from 'lucide-react';
+import { Check, ChevronDown, Loader2, Search, SlidersHorizontal, X } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { controlClass, type Option } from './field';
 
@@ -54,7 +54,7 @@ export function FilterBar({ children, className }: { children: ReactNode; classN
   const pinnedSet = new Set(items.filter(isPinned));
   if (!pinnedSet.size && items.length) pinnedSet.add(items[0]);
   const restCount = items.length - pinnedSet.size;
-  const active = [...params.keys()].filter((k) => !['page', 'q', 'sort', 'tab'].includes(k)).length;
+  const active = [...params.keys()].filter((k) => !['page', 'q', 'sort', 'dir', 'tab', 'format'].includes(k)).length;
   // redoslijed na računalu ostaje kao u kodu; na mobitelu (order) prvo stoje stalni filtri, pa gumb, pa ostali
   return (
     <div className={cn('no-print mb-3 flex flex-wrap items-center gap-2', className)}>
@@ -168,6 +168,147 @@ export function SegmentFilter({ name, options }: { name: string; options: Option
           {o.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+/**
+ * Višestruki odabir u jednom parametru URL-a (`?status=a,b,c`). Poslužitelj ga
+ * čita s `parseMulti(sp, name, dopušteno)` iz `@/lib/list-params`. U `FilterBar`
+ * na mobitelu je iza gumba „Filtri" (kao SelectFilter).
+ */
+export function MultiSelectFilter({
+  name,
+  label,
+  options,
+  className,
+  searchable,
+}: {
+  name: string;
+  /** Naziv filtra na gumbu (npr. „Partner"). */
+  label: string;
+  options: Option[];
+  className?: string;
+  /** Polje za pretragu opcija; zadano kad ih je više od 8. */
+  searchable?: boolean;
+}) {
+  const { params, set, pending } = useQueryParams();
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const box = useRef<HTMLDivElement>(null);
+  const selected = (params.get(name) ?? '').split(',').map((v) => v.trim()).filter(Boolean);
+  const chosen = new Set(selected);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => box.current && !box.current.contains(e.target as Node) && setOpen(false);
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    document.addEventListener('mousedown', close);
+    document.addEventListener('keydown', esc);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('keydown', esc);
+    };
+  }, [open]);
+
+  const apply = (next: Set<string>) => {
+    // redoslijed kao u opcijama — isti odabir daje isti URL
+    const ordered = options.map((o) => o.value).filter((v) => next.has(v));
+    set({ [name]: ordered.length ? ordered.join(',') : null });
+  };
+  const toggle = (v: string) => {
+    const next = new Set(chosen);
+    if (next.has(v)) next.delete(v);
+    else next.add(v);
+    apply(next);
+  };
+  const withSearch = searchable ?? options.length > 8;
+  const t = q.trim().toLowerCase();
+  const list = t ? options.filter((o) => o.label.toLowerCase().includes(t)) : options;
+  const summary =
+    selected.length === 0
+      ? label
+      : selected.length === 1
+        ? `${label}: ${options.find((o) => o.value === selected[0])?.label ?? selected[0]}`
+        : `${label} (${selected.length})`;
+
+  return (
+    <div ref={box} className={cn('relative', className)}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className={cn(controlClass, 'flex h-8 w-auto max-w-64 items-center gap-1.5 pr-2 text-left', selected.length > 0 && 'border-brand text-brand')}
+      >
+        <span className="truncate">{summary}</span>
+        {pending ? <Loader2 className="size-3.5 shrink-0 animate-spin" /> : <ChevronDown className="size-3.5 shrink-0 text-fg-3" />}
+      </button>
+      {open && (
+        <div className="absolute left-0 z-50 mt-1 w-64 overflow-hidden rounded-lg bg-panel shadow-[var(--shadow-pop)] max-sm:w-[calc(100vw-2rem)]">
+          {withSearch && (
+            <input
+              autoFocus
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Traži…"
+              className="h-9 w-full border-b border-line bg-panel px-3 text-base focus:outline-none"
+            />
+          )}
+          <ul className="max-h-72 overflow-y-auto scroll-slim py-1" role="listbox" aria-multiselectable>
+            {list.map((o) => {
+              const on = chosen.has(o.value);
+              return (
+                <li key={o.value}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={on}
+                    onClick={() => toggle(o.value)}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-muted"
+                  >
+                    <span className={cn('flex size-4 shrink-0 items-center justify-center rounded border', on ? 'border-brand bg-brand text-white' : 'border-line-strong')}>
+                      {on && <Check className="size-3" />}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{o.label}</span>
+                  </button>
+                </li>
+              );
+            })}
+            {!list.length && <li className="px-3 py-2 text-sm text-fg-3">Nema rezultata.</li>}
+          </ul>
+          {selected.length > 0 && (
+            <div className="border-t border-line px-3 py-1.5">
+              <button type="button" onClick={() => apply(new Set())} className="text-sm text-brand hover:underline">
+                Očisti odabir
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Raspon datuma (`?od=YYYY-MM-DD&do=YYYY-MM-DD`, oba neobavezna). Poslužitelj ga
+ * čita s `parseDateRange(sp)` iz `@/lib/list-params`. `label` je obavezan
+ * (FilterBar po njemu razlikuje filtar od tražilice).
+ */
+export function DateRangeFilter({ label, from = 'od', to = 'do' }: { label: string; from?: string; to?: string }) {
+  const { params, set } = useQueryParams();
+  const a = params.get(from) ?? '';
+  const b = params.get(to) ?? '';
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 text-sm text-fg-3">
+      <span>{label}</span>
+      <input type="date" aria-label={`${label} od`} value={a} max={b || undefined} onChange={(e) => set({ [from]: e.target.value || null })} className={cn(controlClass, 'h-8 w-36')} />
+      <span>–</span>
+      <input type="date" aria-label={`${label} do`} value={b} min={a || undefined} onChange={(e) => set({ [to]: e.target.value || null })} className={cn(controlClass, 'h-8 w-36')} />
+      {(a || b) && (
+        <button type="button" onClick={() => set({ [from]: null, [to]: null })} className="text-fg-3 hover:text-fg" aria-label="Očisti raspon">
+          <X className="size-3.5" />
+        </button>
+      )}
     </div>
   );
 }

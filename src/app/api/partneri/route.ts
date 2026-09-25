@@ -2,7 +2,7 @@ import { requireAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import { AuthError } from '@/server/errors';
 import { partnerListSelect, partnerStats, partnerWhere } from '@/server/queries/partners';
-import { csvResponse, toCsv } from '@/lib/csv';
+import { csvOrXlsx } from '@/server/xlsx';
 import { today } from '@/domain/dates';
 
 /** Izvoz popisa partnera (s istim filtrima kao na ekranu). */
@@ -26,7 +26,10 @@ export async function GET(req: Request) {
     const part = await partnerStats(user.companyId, rows.slice(i, i + 2000).map((r) => r.id));
     for (const [k, v] of part) stats.set(k, v);
   }
-  const csv = toCsv(rows, [
+  return csvOrXlsx(
+    req,
+    rows,
+    [
     { label: 'Naziv', value: (r) => r.name },
     { label: 'OIB', value: (r) => r.oib },
     { label: 'PDV ID', value: (r) => r.vatId },
@@ -45,6 +48,8 @@ export async function GET(req: Request) {
     { label: 'Otvoreno', value: (r) => stats.get(r.id)?.open ?? 0 },
     { label: 'Uređaja', value: (r) => stats.get(r.id)?.devices ?? 0 },
     { label: 'Aktivnih ugovora', value: (r) => stats.get(r.id)?.contracts ?? 0 },
-  ]);
-  return csvResponse(csv, `partneri-${today()}.csv`);
+  ],
+    `partneri-${today()}`,
+    'Partneri',
+  );
 }

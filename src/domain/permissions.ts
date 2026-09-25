@@ -20,11 +20,31 @@ export const MODULES = {
   settings: 'Postavke i šifrarnici',
   users: 'Korisnici',
   mdm: 'MDM — upravljanje uređajima',
+  /** Vidi nabavne cijene, maržu i profit (ekrani, izvozi, izvještaji). Samo razina „view". */
+  costs: 'Nabavne cijene i marže',
+  /** Dnevnik promjena (/postavke/dnevnik). Samo razina „view". */
+  log: 'Dnevnik promjena',
 } as const;
+// Napomena: zasebno pravo za ugovore nije uvedeno — ugovori ostaju pod „rentals" (najam i ugovori).
 
 export type Module = keyof typeof MODULES;
 
 const RANK: Record<Level, number> = { none: 0, view: 1, ops: 2, edit: 3 };
+
+/** Razine koje modul razlikuje (ostali: sve četiri). Viša razina od dopuštene svodi se na najvišu dopuštenu. */
+export const MODULE_LEVELS: Partial<Record<Module, readonly Level[]>> = {
+  costs: ['none', 'view'],
+  log: ['none', 'view'],
+};
+
+export const levelsOf = (m: Module): readonly Level[] => MODULE_LEVELS[m] ?? ['none', 'view', 'ops', 'edit'];
+
+/** Razina svedena na dopuštene za modul (npr. „edit" na costs → „view"). */
+function clampLevel(m: Module, l: Level): Level {
+  const allowed = levelsOf(m);
+  if (allowed.includes(l)) return l;
+  return [...allowed].reverse().find((a) => RANK[a] <= RANK[l]) ?? 'none';
+}
 
 export const ROLE_LABEL: Record<RoleCode, string> = {
   ADMIN: 'Administrator',
@@ -40,7 +60,7 @@ export const ROLE_LABEL: Record<RoleCode, string> = {
 export const EXTERNAL_ROLES: RoleCode[] = ['DISTRIBUTOR', 'CLIENT'];
 export const isExternalRole = (r: RoleCode) => EXTERNAL_ROLES.includes(r);
 
-const all = (level: Level) => Object.fromEntries(Object.keys(MODULES).map((m) => [m, level])) as Record<Module, Level>;
+const all = (level: Level) => Object.fromEntries(Object.keys(MODULES).map((m) => [m, clampLevel(m as Module, level)])) as Record<Module, Level>;
 
 export const ROLE_DEFAULTS: Record<RoleCode, Record<Module, Level>> = {
   ADMIN: all('edit'),
@@ -65,8 +85,10 @@ export const ROLE_DEFAULTS: Record<RoleCode, Record<Module, Level>> = {
     partners: 'view',
     mdm: 'view',
   },
+  // knjigovođa knjiži ulazne račune i troškove, pa vidi i nabavne cijene; dnevnik promjena ne
   ACCOUNTANT: {
     ...all('view'),
+    log: 'none',
     warehouse: 'view',
     expenses: 'edit',
     purchasing: 'edit',
@@ -93,10 +115,16 @@ export function resolvePermissions(role: RoleCode, overrides: Partial<Record<str
     return base;
   }
   for (const [k, v] of Object.entries(overrides ?? {})) {
-    if (k in base && v && v in RANK) base[k as Module] = v;
+    if (k in base && v && v in RANK) base[k as Module] = clampLevel(k as Module, v);
   }
   return base;
 }
+
+/** Smije li korisnik vidjeti nabavne cijene, maržu i profit. Ekrani i izvozi ih bez toga skrivaju. */
+export const canSeeCost = (perms: PermissionMap) => can(perms, 'costs', 'view');
+
+/** Smije li korisnik u opasnu zonu (brisanje prometa/podataka): administrator uvijek, ostali uz User.canDanger. */
+export const canUseDanger = (u: { role: RoleCode; canDanger?: boolean | null }) => u.role === 'ADMIN' || !!u.canDanger;
 
 export function can(perms: PermissionMap, module: Module, level: Exclude<Level, 'none'> = 'view'): boolean {
   return RANK[perms[module] ?? 'none'] >= RANK[level];

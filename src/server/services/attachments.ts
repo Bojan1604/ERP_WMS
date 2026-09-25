@@ -3,9 +3,9 @@ import { z } from 'zod';
 import type { Tx } from '../db';
 import { assert } from '../errors';
 import type { Actor } from './items';
-import type { Level, Module } from '@/domain/permissions';
+import { can, type Level, type Module, type PermissionMap } from '@/domain/permissions';
 import {
-  ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_PER_ENTITY, ATTACHMENT_MAX_PER_REQUEST, safeFileName, sniffMime,
+  ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_DOC_BYTES, ATTACHMENT_MAX_PER_ENTITY, ATTACHMENT_MAX_PER_REQUEST, safeFileName, sniffMime,
 } from '@/domain/attachments';
 
 /**
@@ -13,11 +13,25 @@ import {
  * pa ide u istu transakciju i sigurnosnu kopiju kao i sam zapis.
  */
 
-/** Koje vrste zapisa primaju priloge i koje pravo treba za dodavanje/brisanje. */
+/**
+ * Koje vrste zapisa primaju priloge: modul i razina za pregled/dodavanje/brisanje,
+ * najveći broj priloga po zapisu i najveća veličina jedne datoteke. `label` je
+ * naziv zapisa u dnevniku („Prilog uz ugovor…").
+ */
 export const ATTACHMENT_ENTITIES = {
-  item: { module: 'warehouse', add: 'ops', remove: 'edit', max: ATTACHMENT_MAX_PER_ENTITY },
-  request: { module: 'warehouse', add: 'edit', remove: 'edit', max: ATTACHMENT_MAX_PER_REQUEST },
-} as const satisfies Record<string, { module: Module; add: Exclude<Level, 'none'>; remove: Exclude<Level, 'none'>; max: number }>;
+  item: { module: 'warehouse', view: 'view', add: 'ops', remove: 'edit', max: ATTACHMENT_MAX_PER_ENTITY, maxBytes: ATTACHMENT_MAX_BYTES, label: 'uređaj' },
+  request: { module: 'warehouse', view: 'view', add: 'edit', remove: 'edit', max: ATTACHMENT_MAX_PER_REQUEST, maxBytes: ATTACHMENT_MAX_BYTES, label: 'zahtjev' },
+  contract: { module: 'rentals', view: 'view', add: 'edit', remove: 'edit', max: ATTACHMENT_MAX_PER_ENTITY, maxBytes: ATTACHMENT_MAX_DOC_BYTES, label: 'ugovor' },
+  invoice: { module: 'sales', view: 'view', add: 'edit', remove: 'edit', max: ATTACHMENT_MAX_PER_ENTITY, maxBytes: ATTACHMENT_MAX_DOC_BYTES, label: 'račun' },
+  supplierInvoice: { module: 'purchasing', view: 'view', add: 'edit', remove: 'edit', max: ATTACHMENT_MAX_PER_ENTITY, maxBytes: ATTACHMENT_MAX_DOC_BYTES, label: 'ulazni račun' },
+  purchaseOrder: { module: 'purchasing', view: 'view', add: 'edit', remove: 'edit', max: ATTACHMENT_MAX_PER_ENTITY, maxBytes: ATTACHMENT_MAX_DOC_BYTES, label: 'narudžbenicu' },
+  receipt: { module: 'purchasing', view: 'view', add: 'edit', remove: 'edit', max: ATTACHMENT_MAX_PER_ENTITY, maxBytes: ATTACHMENT_MAX_DOC_BYTES, label: 'primku' },
+  expense: { module: 'expenses', view: 'view', add: 'edit', remove: 'edit', max: ATTACHMENT_MAX_PER_ENTITY, maxBytes: ATTACHMENT_MAX_DOC_BYTES, label: 'trošak' },
+  serviceOrder: { module: 'service', view: 'view', add: 'edit', remove: 'edit', max: ATTACHMENT_MAX_PER_ENTITY, maxBytes: ATTACHMENT_MAX_DOC_BYTES, label: 'servisni nalog' },
+} as const satisfies Record<
+  string,
+  { module: Module; view: Exclude<Level, 'none'>; add: Exclude<Level, 'none'>; remove: Exclude<Level, 'none'>; max: number; maxBytes: number; label: string }
+>;
 
 export type AttachmentEntity = keyof typeof ATTACHMENT_ENTITIES;
 
@@ -25,12 +39,46 @@ export const isAttachmentEntity = (e: string): e is AttachmentEntity => Object.h
 
 /** Postoji li zapis u firmi (id iz obrasca nikad bez te provjere). */
 async function ensureEntity(tx: Tx, companyId: string, entity: AttachmentEntity, entityId: string) {
-  const found =
-    entity === 'item'
-      ? await tx.item.findFirst({ where: { id: entityId, companyId }, select: { id: true } })
-      : await tx.approvalRequest.findFirst({ where: { id: entityId, companyId }, select: { id: true } });
+  const where = { id: entityId, companyId };
+  const select = { id: true } as const;
+  let found: { id: string } | null;
+  switch (entity) {
+    case 'item':
+      found = await tx.item.findFirst({ where, select });
+      break;
+    case 'request':
+      found = await tx.approvalRequest.findFirst({ where, select });
+      break;
+    case 'contract':
+      found = await tx.contract.findFirst({ where, select });
+      break;
+    case 'invoice':
+      found = await tx.invoice.findFirst({ where, select });
+      break;
+    case 'supplierInvoice':
+      found = await tx.supplierInvoice.findFirst({ where, select });
+      break;
+    case 'purchaseOrder':
+      found = await tx.purchaseOrder.findFirst({ where, select });
+      break;
+    case 'receipt':
+      found = await tx.goodsReceipt.findFirst({ where, select });
+      break;
+    case 'expense':
+      found = await tx.expense.findFirst({ where, select });
+      break;
+    case 'serviceOrder':
+      found = await tx.serviceOrder.findFirst({ where, select });
+      break;
+  }
   assert(found, 'Zapis kojem se dodaje prilog ne postoji.');
 }
+
+/**
+ * Izvorni dokumenti koje korisnik ne smije obrisati kroz priloge: XML preuzetog
+ * eRačuna (ulazni račun) — on je zakonski izvornik.
+ */
+export const isProtectedAttachment = (a: { entity: string; mime: string }) => a.entity === 'supplierInvoice' && a.mime === 'application/xml';
 
 export interface NewAttachment {
   entity: AttachmentEntity;
@@ -46,11 +94,11 @@ export async function addAttachments(tx: Tx, actor: Actor, entity: AttachmentEnt
   if (!files.length) return [];
   await ensureEntity(tx, actor.companyId, entity, entityId);
   const have = await tx.attachment.count({ where: { companyId: actor.companyId, entity, entityId } });
-  const max = ATTACHMENT_ENTITIES[entity].max;
+  const { max, maxBytes } = ATTACHMENT_ENTITIES[entity];
   assert(have + files.length <= max, `Najviše ${max} priloga po zapisu${have ? ` (već ih ima ${have})` : ''}.`);
   const rows = files.map((f) => {
     assert(f.data.byteLength > 0, 'Prazna datoteka.');
-    assert(f.data.byteLength <= ATTACHMENT_MAX_BYTES, `Datoteka „${f.fileName ?? ''}" je veća od ${ATTACHMENT_MAX_BYTES / 1024 / 1024} MB.`);
+    assert(f.data.byteLength <= maxBytes, `Datoteka „${f.fileName ?? ''}" je veća od ${maxBytes / 1024 / 1024} MB.`);
     const mime = sniffMime(f.data);
     assert(mime, `Datoteka „${f.fileName ?? ''}" nije slika (JPEG, PNG, WebP) ni PDF.`);
     return {
@@ -72,10 +120,11 @@ export async function addAttachments(tx: Tx, actor: Actor, entity: AttachmentEnt
 
 export const addAttachment = (tx: Tx, actor: Actor, a: NewAttachment) => addAttachments(tx, actor, a.entity, a.entityId, [a]).then((r) => r[0]);
 
-/** Brisanje priloga; vraća obrisani zapis (za dnevnik) — provjera prava je na pozivatelju. */
+/** Brisanje priloga; vraća obrisani zapis (za dnevnik) — provjera prava je na pozivatelju (`canAttachment`). */
 export async function deleteAttachment(tx: Tx, actor: Actor, id: string) {
   const a = await tx.attachment.findFirst({ where: { id, companyId: actor.companyId }, select: attachmentMeta });
   assert(a, 'Prilog ne postoji.');
+  assert(!isProtectedAttachment(a), 'Izvorni XML eRačuna se ne može obrisati.');
   await tx.attachment.delete({ where: { id: a.id } });
   return a;
 }
@@ -88,6 +137,16 @@ export function listAttachments(tx: Pick<Tx, 'attachment'>, companyId: string, e
     orderBy: { createdAt: 'asc' },
     select: attachmentMeta,
   });
+}
+
+/**
+ * Broj priloga po zapisu — za oznaku (spajalica, „PDF") u popisima.
+ * Jedan groupBy za cijelu stranicu popisa.
+ */
+export async function attachmentCounts(tx: Pick<Tx, 'attachment'>, companyId: string, entity: AttachmentEntity, entityIds: string[]): Promise<Map<string, number>> {
+  if (!entityIds.length) return new Map();
+  const rows = await tx.attachment.groupBy({ by: ['entityId'], where: { companyId, entity, entityId: { in: entityIds } }, _count: { _all: true } });
+  return new Map(rows.map((r) => [r.entityId, r._count._all]));
 }
 
 /** Prilog sa sadržajem — samo unutar firme. */
@@ -114,6 +173,12 @@ export async function copyAttachment(tx: Tx, actor: Actor, id: string, entity: A
 /** Id za zapis stvoren izravnim SQL-om (Prisma cuid() radi samo kroz klijent). */
 function cuidLike() {
   return `c${Date.now().toString(36)}${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+}
+
+/** Smije li korisnik s pravima `perms` pregledati/dodati/brisati priloge vrste `entity`. */
+export function canAttachment(perms: PermissionMap, entity: AttachmentEntity, what: 'view' | 'add' | 'remove') {
+  const rule = ATTACHMENT_ENTITIES[entity];
+  return can(perms, rule.module, rule[what]);
 }
 
 // ---------------------------------------------------------------- slike uz server akciju (FormData)

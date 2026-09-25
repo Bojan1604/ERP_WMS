@@ -6,7 +6,7 @@ import { FormError, useAction, type ServerAction } from '@/components/ui/action'
 import { Button } from '@/components/ui/button';
 import { Checkbox, Field, FormGrid, Input, Select } from '@/components/ui/field';
 import { Card } from '@/components/ui/misc';
-import { LEVEL_LABEL, MODULES, ROLE_DEFAULTS, ROLE_LABEL, isExternalRole, type Level, type Module, type RoleCode } from '@/domain/permissions';
+import { LEVEL_LABEL, MODULES, ROLE_DEFAULTS, ROLE_LABEL, isExternalRole, levelsOf, type Level, type Module, type RoleCode } from '@/domain/permissions';
 import { cn } from '@/lib/cn';
 import { isValidOib } from '@/domain/tax';
 
@@ -138,7 +138,7 @@ export function UserForm({ value, save, isSelf }: { value: UserValue; save: Serv
             </thead>
             <tbody>
               {(Object.keys(MODULES) as Module[]).map((m) => {
-                const cur = admin ? 'edit' : perms[m];
+                const cur = admin ? levelsOf(m)[levelsOf(m).length - 1] : perms[m];
                 const over = !admin && cur !== defaults[m];
                 return (
                   <tr key={m} className={cn(over && '[&>td]:bg-warn-soft/60')}>
@@ -146,7 +146,13 @@ export function UserForm({ value, save, isSelf }: { value: UserValue; save: Serv
                       {MODULES[m]}
                       {over && <span className="ml-2 text-xs font-normal text-warn">iznimka</span>}
                     </td>
-                    {LEVELS.map((l) => (
+                    {LEVELS.map((l) =>
+                      !levelsOf(m).includes(l) ? (
+                        // modul ne razlikuje ovu razinu (npr. nabavne cijene: samo vidi / ne vidi)
+                        <td key={l} className="text-center text-fg-4" aria-hidden>
+                          —
+                        </td>
+                      ) : (
                       <td key={l} className="text-center">
                         <label className="inline-flex cursor-pointer items-center justify-center p-1 max-sm:px-0">
                           <input
@@ -162,7 +168,8 @@ export function UserForm({ value, save, isSelf }: { value: UserValue; save: Serv
                         </label>
                         {defaults[m] === l && !admin && <span className="block text-[10px] leading-none text-fg-4">zadano</span>}
                       </td>
-                    ))}
+                      ),
+                    )}
                     <td className="text-sm text-fg-3 max-sm:col-span-4">{LEVEL_LABEL[defaults[m]]}</td>
                   </tr>
                 );
@@ -172,6 +179,7 @@ export function UserForm({ value, save, isSelf }: { value: UserValue; save: Serv
         </div>
         <p className="px-4 py-2.5 text-xs text-fg-3">
           „Operativno" u skladištu daje pregled, označavanje i izlaz iz skladišta bez uređivanja; promjena statusa ide na odobrenje.
+          „Nabavne cijene i marže" određuje vide li se nabavne cijene, marža i profit na ekranima i u izvozima.
         </p>
       </Card>
 

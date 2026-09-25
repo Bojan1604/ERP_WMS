@@ -4,10 +4,10 @@ import { modelLabel } from '@/server/queries/lookups';
 import { daysBetween, toISO, today } from '@/domain/dates';
 import { num } from '@/domain/money';
 import { SERVICE_STATUS } from '@/components/service/labels';
-import { csvResponse, toCsv } from '@/lib/csv';
+import { csvOrXlsx } from '@/server/xlsx';
 import { date } from '@/lib/format';
 
-/** Servisni nalozi u CSV-u — isti filtri kao popis. */
+/** Servisni nalozi u CSV-u ili Excelu — isti filtri kao popis. */
 export async function GET(req: Request) {
   let user;
   try {
@@ -18,7 +18,10 @@ export async function GET(req: Request) {
   const sp = Object.fromEntries(new URL(req.url).searchParams);
   const { rows } = await listServiceOrders(user.companyId, sp, { skip: 0, take: 20_000 });
   const t = today();
-  const csv = toCsv(rows, [
+  return csvOrXlsx(
+    req,
+    rows,
+    [
     { label: 'Broj', value: (r) => r.number },
     { label: 'Serijski broj', value: (r) => r.serial },
     { label: 'Model', value: (r) => (r.item ? modelLabel(r.item.model) : '') },
@@ -31,6 +34,8 @@ export async function GET(req: Request) {
     { label: 'Trošak', value: (r) => num(r.cost) },
     { label: 'Jamstvo', value: (r) => (r.underWarranty ? 'da' : 'ne') },
     { label: 'Zamjenski', value: (r) => r.replacement?.serial },
-  ]);
-  return csvResponse(csv, `servis-${t}.csv`);
+  ],
+    `servis-${t}`,
+    'Servis',
+  );
 }

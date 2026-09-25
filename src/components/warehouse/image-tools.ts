@@ -30,15 +30,20 @@ async function decode(file: Blob): Promise<{ source: CanvasImageSource; width: n
 
 const baseName = (name: string) => name.replace(/\.[a-z0-9]{1,5}$/i, '') || 'slika';
 
-/** Slika → JPEG najviše 1600 px; PDF ostaje kakav jest. Baca grešku ako je rezultat prevelik. */
-export async function prepareUpload(file: File): Promise<File> {
+/**
+ * Slika → JPEG najviše `maxSide` px (zadano 1600); PDF ostaje kakav jest. Baca grešku
+ * ako je rezultat veći od `maxBytes` (zadano 2 MB; prilozi uz dokumente 10 MB).
+ */
+export async function prepareUpload(file: File, opts: { maxBytes?: number; maxSide?: number } = {}): Promise<File> {
+  const maxBytes = opts.maxBytes ?? ATTACHMENT_MAX_BYTES;
+  const mb = `${Math.round(maxBytes / 1024 / 1024)} MB`;
   if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) {
-    if (file.size > ATTACHMENT_MAX_BYTES) throw new Error(`PDF „${file.name}" je veći od 2 MB.`);
+    if (file.size > maxBytes) throw new Error(`PDF „${file.name}" je veći od ${mb}.`);
     return file;
   }
   const img = await decode(file);
   try {
-    const { width, height } = fitWithin(img.width, img.height, IMAGE_MAX_SIDE);
+    const { width, height } = fitWithin(img.width, img.height, opts.maxSide ?? IMAGE_MAX_SIDE);
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
@@ -49,9 +54,9 @@ export async function prepareUpload(file: File): Promise<File> {
     ctx.drawImage(img.source, 0, 0, width, height);
     for (const q of [0.85, 0.7, 0.55]) {
       const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/jpeg', q));
-      if (blob && blob.size <= ATTACHMENT_MAX_BYTES) return new File([blob], `${baseName(file.name)}.jpg`, { type: 'image/jpeg' });
+      if (blob && blob.size <= maxBytes) return new File([blob], `${baseName(file.name)}.jpg`, { type: 'image/jpeg' });
     }
-    throw new Error(`Slika „${file.name}" je i nakon smanjivanja veća od 2 MB.`);
+    throw new Error(`Slika „${file.name}" je i nakon smanjivanja veća od ${mb}.`);
   } finally {
     img.close();
   }

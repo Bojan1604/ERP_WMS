@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Download, FileSignature, Plus } from 'lucide-react';
+import { FileSignature, Plus } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { can } from '@/domain/permissions';
 import { getPartnerOptions } from '@/server/queries/lookups';
@@ -12,6 +12,7 @@ import { LinkButton } from '@/components/ui/button';
 import { ContractStatusBadge, billingText } from '@/components/rentals/badges';
 import { seasonLabel } from '@/domain/plan';
 import { date, eur, integer } from '@/lib/format';
+import { ExportButtons } from '@/components/ui/export-buttons';
 
 export const metadata = { title: 'Ugovori o najmu' };
 
@@ -34,9 +35,7 @@ export default async function ContractsPage({ searchParams }: { searchParams: SP
         subtitle={`${integer(total)} ugovora · ${integer(summary.devices)} uređaja · mjesečno ${eur(summary.monthly)}`}
         actions={
           <>
-            <LinkButton href={`/api/najam/ugovori${qs ? `?${qs}` : ''}`} icon={<Download className="size-4" />}>
-              CSV
-            </LinkButton>
+            <ExportButtons href={`/api/najam/ugovori${qs ? `?${qs}` : ''}`} />
             {can(user.perms, 'rentals', 'edit') && (
               <LinkButton href="/najam/ugovori/novi" variant="primary" icon={<Plus className="size-4" />}>
                 Novi ugovor

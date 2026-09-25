@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { Download } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { getCompany, getLookups } from '@/server/queries/lookups';
 import { expensePartners, expensesForYear, expenseYears, parseExpenseFilters } from '@/server/queries/expenses';
@@ -8,7 +7,6 @@ import { MONTHS_HR } from '@/domain/dates';
 import { num } from '@/domain/money';
 import { Card, PageHeader, Stat, TableWrap } from '@/components/ui/misc';
 import { FilterBar, SearchFilter, SegmentFilter, SelectFilter } from '@/components/ui/filters';
-import { buttonClass } from '@/components/ui/button';
 import { ExpensesTable, NewExpenseButton } from '@/components/expenses/expenses-table';
 import { CategoriesDialog } from '@/components/expenses/categories-dialog';
 import { CategorySummary, MonthSummary } from '@/components/expenses/summaries';
@@ -16,6 +14,7 @@ import { EXPENSE_SOURCE } from '@/components/expenses/labels';
 import { cn } from '@/lib/cn';
 import { eur } from '@/lib/format';
 import { deleteExpenseAction, expensesPaidAction, saveCategoryAction, saveExpenseAction, saveOccurrenceAction } from './actions';
+import { ExportButtons } from '@/components/ui/export-buttons';
 
 type Params = Record<string, string | string[] | undefined>;
 const FILTERS = ['month', 'category', 'partner', 'q', 'paid', 'source'];
@@ -60,9 +59,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
         subtitle={`Godina ${f.year}.${f.month ? ` · ${MONTHS_HR[f.month - 1]}` : ''} — iznosi bez PDV-a osim gdje piše drukčije`}
         actions={
           <>
-            <a href={`/api/troskovi?${qs}`} className={buttonClass('secondary')}>
-              <Download className="size-4" /> Izvoz CSV
-            </a>
+            <ExportButtons href={`/api/troskovi?${qs}`} />
             {canEdit && <CategoriesDialog categories={lookups.expenseCategories} action={saveCategoryAction} />}
             {canEdit && <NewExpenseButton options={options} actions={actions} />}
           </>

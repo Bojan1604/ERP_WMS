@@ -2,10 +2,10 @@ import { requireAccess } from '@/server/auth';
 import { expensesForYear, parseExpenseFilters } from '@/server/queries/expenses';
 import { FREQUENCY_LABEL, type FrequencyCode } from '@/domain/expenses';
 import { EXPENSE_SOURCE } from '@/components/expenses/labels';
-import { csvResponse, toCsv } from '@/lib/csv';
+import { csvOrXlsx } from '@/server/xlsx';
 import { date } from '@/lib/format';
 
-/** Troškovi godine (s ratama ponavljajućih troškova) u CSV-u — isti filtri kao popis. */
+/** Troškovi godine (s ratama ponavljajućih troškova) u CSV-u ili Excelu — isti filtri kao popis. */
 export async function GET(req: Request) {
   let user;
   try {
@@ -15,7 +15,10 @@ export async function GET(req: Request) {
   }
   const f = parseExpenseFilters(Object.fromEntries(new URL(req.url).searchParams));
   const { rows } = await expensesForYear(user.companyId, f);
-  const csv = toCsv(rows, [
+  return csvOrXlsx(
+    req,
+    rows,
+    [
     { label: 'Datum', value: (r) => date(r.date) },
     { label: 'Kategorija', value: (r) => r.category },
     { label: 'Opis', value: (r) => r.description },
@@ -27,6 +30,8 @@ export async function GET(req: Request) {
     { label: 'Izvor', value: (r) => EXPENSE_SOURCE[r.source].label },
     { label: 'Dokument', value: (r) => r.receiptNumber ?? r.supplierInvoiceNo },
     { label: 'Ponavljanje', value: (r) => (r.frequency ? FREQUENCY_LABEL[r.frequency as FrequencyCode] : '') },
-  ]);
-  return csvResponse(csv, `troskovi-${f.year}${f.month ? `-${String(f.month).padStart(2, '0')}` : ''}.csv`);
+  ],
+    `troskovi-${f.year}${f.month ? `-${String(f.month).padStart(2, '0')}` : ''}`,
+    'Troškovi',
+  );
 }

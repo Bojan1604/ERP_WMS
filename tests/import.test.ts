@@ -360,8 +360,8 @@ test('kopija: prilozi se provjeravaju po sadržaju, nepoznata vrsta zapisa i HTM
     attachments: [
       { id: 'a1', entity: 'item', entityId: 'i1', fileName: '../../naljepnica.html', mime: 'text/html', size: 999999, data: png },
       { id: 'a2', entity: 'item', entityId: 'i1', fileName: 'x.png', mime: 'image/png', size: 10, data: html },
-      { id: 'a3', entity: 'invoice', entityId: 'inv1', fileName: 'y.png', mime: 'image/png', size: 12, data: png },
-      { id: 'a4', entity: 'item', entityId: 'i1', fileName: 'z.png', mime: 'image/png', size: 0, data: 'A'.repeat(4 * 1024 * 1024) },
+      { id: 'a3', entity: 'nepoznato', entityId: 'inv1', fileName: 'y.png', mime: 'image/png', size: 12, data: png },
+      { id: 'a4', entity: 'item', entityId: 'i1', fileName: 'z.png', mime: 'image/png', size: 0, data: 'A'.repeat(14 * 1024 * 1024) },
       { id: 'a5', entity: 'item', entityId: 'i1', fileName: 'bez.png' },
     ],
   });
@@ -371,7 +371,7 @@ test('kopija: prilozi se provjeravaju po sadržaju, nepoznata vrsta zapisa i HTM
   assert.equal(a.size, 12); // stvarna veličina
   assert.equal(a.fileName, 'naljepnica.png'); // bez putanje, nastavak prema vrsti
   assert.equal(plan.warningCounts['attachment-invalid'], 4);
-  assert.ok(plan.warnings.some((w) => /nepoznata vrsta zapisa „invoice"/.test(w.message)));
+  assert.ok(plan.warnings.some((w) => /nepoznata vrsta zapisa „nepoznato"/.test(w.message)));
   assert.ok(plan.warnings.some((w) => /nije slika/.test(w.message)));
 });
 

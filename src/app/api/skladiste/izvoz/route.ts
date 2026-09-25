@@ -2,11 +2,11 @@ import { requireAccess } from '@/server/auth';
 import { AuthError } from '@/server/errors';
 import { exportItems, parseItemFilters } from '@/server/queries/warehouse';
 import { modelLabel } from '@/server/queries/lookups';
-import { csvResponse, toCsv } from '@/lib/csv';
+import { csvOrXlsx } from '@/server/xlsx';
 import { num } from '@/domain/money';
 import { formatDate, today } from '@/domain/dates';
 
-/** CSV filtriranih uređaja (isti filtri kao popis skladišta). */
+/** CSV/Excel filtriranih uređaja (isti filtri kao popis skladišta). */
 export async function GET(req: Request) {
   let user;
   try {
@@ -19,7 +19,10 @@ export async function GET(req: Request) {
   const rows = await exportItems(user.companyId, parseItemFilters(sp));
   type Row = (typeof rows)[number];
   const d = (v: Date | null) => (v ? formatDate(v) : '');
-  const csv = toCsv<Row>(rows, [
+  return csvOrXlsx<Row>(
+    req,
+    rows,
+    [
     { label: 'Serijski broj', value: (r) => r.serial },
     { label: 'Razlikovna napomena', value: (r) => r.dupNote },
     { label: 'Model', value: (r) => modelLabel(r.model) },
@@ -33,6 +36,8 @@ export async function GET(req: Request) {
     { label: 'Datum uvoza', value: (r) => d(r.importDate) },
     { label: 'Datum izdavanja', value: (r) => d(r.issueDate) },
     { label: 'Napomena', value: (r) => r.note },
-  ]);
-  return csvResponse(csv, `skladiste-${today()}.csv`);
+  ],
+    `skladiste-${today()}`,
+    'Uređaji',
+  );
 }

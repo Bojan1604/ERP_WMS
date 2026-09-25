@@ -1,14 +1,14 @@
-import { Download, Table2 } from 'lucide-react';
+import { Table2 } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { can } from '@/domain/permissions';
 import { getLookups, getPartnerOptions } from '@/server/queries/lookups';
 import { FilterBar, SearchFilter, SelectFilter, ToggleFilter } from '@/components/ui/filters';
 import { Pagination, readPage } from '@/components/ui/pagination';
 import { Empty, PageHeader, TableWrap } from '@/components/ui/misc';
-import { LinkButton } from '@/components/ui/button';
 import { OverviewGrid } from '@/components/rentals/overview-grid';
 import { today } from '@/domain/dates';
 import { loadOverview, readFilters } from './data';
+import { ExportButtons } from '@/components/ui/export-buttons';
 
 export const metadata = { title: 'Pregled najma' };
 
@@ -34,9 +34,7 @@ export default async function RentOverviewPage({ searchParams }: { searchParams:
         title="Pregled najma"
         subtitle={`Iznosi naplate po mjesecima za ${f.year}. — ručni upis ima prednost pred izračunom s ugovora`}
         actions={
-          <LinkButton href={`/api/najam/pregled${qs ? `?${qs}` : ''}`} icon={<Download className="size-4" />}>
-            CSV
-          </LinkButton>
+          <ExportButtons href={`/api/najam/pregled${qs ? `?${qs}` : ''}`} />
         }
       />
       <FilterBar>

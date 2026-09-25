@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Download, PackagePlus, Boxes, ScanLine, ClipboardCheck } from 'lucide-react';
+import { PackagePlus, Boxes, ScanLine, ClipboardCheck } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import { getLookups, modelLabel } from '@/server/queries/lookups';
@@ -10,13 +10,14 @@ import { PageHeader, Badge, COLOR_TONE, TableWrap, Empty } from '@/components/ui
 import { FilterBar, SearchFilter, SelectFilter } from '@/components/ui/filters';
 import { Pagination, readPage } from '@/components/ui/pagination';
 import { SelectionProvider, SelectAll, SelectRow, SelectableTr } from '@/components/ui/selection';
-import { LinkButton, buttonClass } from '@/components/ui/button';
+import { LinkButton } from '@/components/ui/button';
 import { ComboFilter } from '@/components/warehouse/pickers';
 import { ItemBulkBar, type RowMeta } from '@/components/warehouse/item-bulk-bar';
 import { ItemCards, ScanFab } from '@/components/warehouse/item-cards';
 import { STATE_LABEL, STATE_ORDER } from '@/domain/warehouse';
 import { cn } from '@/lib/cn';
 import { date, eur, integer } from '@/lib/format';
+import { ExportButtons } from '@/components/ui/export-buttons';
 
 type Params = Record<string, string | string[] | undefined>;
 
@@ -73,10 +74,7 @@ export default async function WarehousePage({ searchParams }: { searchParams: Pr
             <LinkButton href="/skladiste/inventura" icon={<ClipboardCheck className="size-4" />} className="max-sm:hidden">
               Inventura
             </LinkButton>
-            <a href={`/api/skladiste/izvoz?${exportQs}`} className={buttonClass('secondary')}>
-              <Download className="size-4" />
-              Izvoz CSV
-            </a>
+            <ExportButtons href={`/api/skladiste/izvoz?${exportQs}`} />
             {perms.canEdit && (
               <LinkButton href="/skladiste/zaprimanje" variant="primary" icon={<PackagePlus className="size-4" />}>
                 Zaprimanje

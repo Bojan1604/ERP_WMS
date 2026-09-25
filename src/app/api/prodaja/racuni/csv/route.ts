@@ -7,11 +7,11 @@ import { invoiceOrder, invoiceWhere, readInvoiceFilters } from '@/server/queries
 import { paymentState, INVOICE_KIND_LABEL } from '@/domain/invoice';
 import { formatDate, toISO, today } from '@/domain/dates';
 import { num } from '@/domain/money';
-import { csvResponse, toCsv } from '@/lib/csv';
+import { csvOrXlsx } from '@/server/xlsx';
 
 const TYPE: Record<string, string> = { SALE: 'Prodaja', RENT: 'Najam', SERVICE: 'Usluga' };
 
-/** Izvoz filtriranog popisa računa (isti filtri kao na ekranu). */
+/** Izvoz (CSV ili Excel s ?format=xlsx) filtriranog popisa računa (isti filtri kao na ekranu). */
 export async function GET(req: NextRequest) {
   let user;
   try {
@@ -46,7 +46,10 @@ export async function GET(req: NextRequest) {
       partner: { select: { name: true, oib: true } },
     },
   });
-  const csv = toCsv(rows, [
+  return csvOrXlsx(
+    req,
+    rows,
+    [
     { label: 'Broj', value: (r) => r.number ?? 'Nacrt' },
     { label: 'Dokument', value: (r) => INVOICE_KIND_LABEL[r.kind] },
     { label: 'Vrsta', value: (r) => TYPE[r.type] },
@@ -80,6 +83,8 @@ export async function GET(req: NextRequest) {
           company.overdueDays,
         ).label,
     },
-  ]);
-  return csvResponse(csv, `racuni-${f.year === 'sve' ? 'sve' : f.year}-${today()}.csv`);
+  ],
+    `racuni-${f.year === 'sve' ? 'sve' : f.year}-${today()}`,
+    'Računi',
+  );
 }

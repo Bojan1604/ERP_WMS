@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Download, Inbox, Plus } from 'lucide-react';
+import { Inbox, Plus } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { listSupplierInvoices, supplierInvoiceYears, supplierOptions } from '@/server/queries/purchasing';
 import { getCompany } from '@/server/queries/lookups';
@@ -9,13 +9,14 @@ import { today } from '@/domain/dates';
 import { Badge, Empty, PageHeader, TableWrap } from '@/components/ui/misc';
 import { FilterBar, SearchFilter, SegmentFilter, SelectFilter } from '@/components/ui/filters';
 import { Pagination, readPage } from '@/components/ui/pagination';
-import { LinkButton, buttonClass } from '@/components/ui/button';
+import { LinkButton } from '@/components/ui/button';
 import { SelectAll, SelectRow, SelectableTr, SelectionProvider } from '@/components/ui/selection';
 import { PaidBar } from '@/components/purchasing/paid-bar';
 import { FetchEInvoicesButton } from '@/components/purchasing/inbound-actions';
 import { SupplierInvoiceSourceBadge, SupplierInvoiceStatusBadge } from '@/components/purchasing/supplier-invoice-badges';
 import { date, eur, integer } from '@/lib/format';
 import { fetchEInvoicesAction, supplierInvoicesPaidAction } from './actions';
+import { ExportButtons } from '@/components/ui/export-buttons';
 
 type Params = Record<string, string | string[] | undefined>;
 const FILTERS = ['q', 'supplier', 'year', 'paid', 'status', 'source'];
@@ -41,9 +42,7 @@ export default async function SupplierInvoicesPage({ searchParams }: { searchPar
         actions={
           <>
             {canEdit && hasProvider && <FetchEInvoicesButton action={fetchEInvoicesAction} />}
-            <a href={`/api/nabava/ulazni?${qs}`} className={buttonClass('secondary')}>
-              <Download className="size-4" /> Izvoz CSV
-            </a>
+            <ExportButtons href={`/api/nabava/ulazni?${qs}`} />
             {canEdit && (
               <LinkButton href="/nabava/ulazni/novi" variant="primary" icon={<Plus className="size-4" />}>
                 Novi ulazni račun

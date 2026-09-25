@@ -218,7 +218,7 @@ export function planCounts(p: ImportPlan): Record<string, number> {
 
 /** Prefiksi brojeva dokumenata — isti kao u server/numbering.ts. */
 export const DOC_PREFIX: Record<Exclude<Series, 'INVOICE'>, string> = {
-  QUOTE: 'PON', CONTRACT: 'UG', ORDER: 'NAR', RECEIPT: 'PRI', TRANSFER: 'MSK', SERVICE: 'RMA', SUPPLIER_INVOICE: 'URA', STOCKTAKE: 'INV',
+  QUOTE: 'PON', PROFORMA: 'PRED', CONTRACT: 'UG', ORDER: 'NAR', RECEIPT: 'PRI', TRANSFER: 'MSK', SERVICE: 'RMA', SUPPLIER_INVOICE: 'URA', STOCKTAKE: 'INV',
 };
 
 /** „UG-2024-003", „RMA-2026-0012" → { year, seq }; drugi oblici → null. */

@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Download, Printer } from 'lucide-react';
+import { Printer } from 'lucide-react';
 import { partnerContracts, partnerDevices, partnerInvoices, partnerLedger } from '@/server/queries/partners';
 import { Badge, COLOR_TONE, Empty, TableWrap, type Tone } from '@/components/ui/misc';
 import { LinkButton } from '@/components/ui/button';
@@ -11,6 +11,7 @@ import { warrantyEnd } from '@/domain/pricing';
 import { toISO, today } from '@/domain/dates';
 import { num } from '@/domain/money';
 import { cn } from '@/lib/cn';
+import { ExportButtons } from '@/components/ui/export-buttons';
 
 type Params = Record<string, string | string[] | undefined>;
 
@@ -103,9 +104,7 @@ export async function DevicesTab({ companyId, partnerId, params }: { companyId: 
             <LinkButton href={`/partneri/${partnerId}/uredaji`} icon={<Printer className="size-4" />}>
               Popis uređaja za klijenta
             </LinkButton>
-            <LinkButton href={`/api/partneri/${partnerId}/uredaji`} icon={<Download className="size-4" />}>
-              CSV
-            </LinkButton>
+            <ExportButtons href={`/api/partneri/${partnerId}/uredaji`} />
           </div>
         )}
       </div>

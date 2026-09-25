@@ -1,17 +1,16 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { Download } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import { findReport, readFilters, runReport } from '@/server/queries/reports';
 import { getLookups, getPartnerOptions, modelLabel } from '@/server/queries/lookups';
 import { today } from '@/domain/dates';
 import { PageHeader } from '@/components/ui/misc';
-import { LinkButton } from '@/components/ui/button';
 import { PrintButton } from '@/components/ui/print-button';
 import { ReportFilters } from '@/components/reports/report-filters';
 import { ReportTable } from '@/components/reports/report-table';
 import { ReportChart } from '@/components/reports/report-chart';
+import { ExportButtons } from '@/components/ui/export-buttons';
 
 type Params = Record<string, string | string[] | undefined>;
 
@@ -60,9 +59,7 @@ export default async function ReportPage({ params, searchParams }: { params: Pro
         actions={
           <>
             <PrintButton label="Ispis" />
-            <LinkButton href={`/api/izvjestaji/${def.slug}${qs ? `?${qs}` : ''}`} icon={<Download className="size-4" />}>
-              CSV
-            </LinkButton>
+            <ExportButtons href={`/api/izvjestaji/${def.slug}${qs ? `?${qs}` : ''}`} />
           </>
         }
       />

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { Download, FileText, Trash2 } from 'lucide-react';
+import { FileText, Trash2 } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { getLookups } from '@/server/queries/lookups';
 import {
@@ -18,6 +18,7 @@ import { StocktakeCounters, StocktakeSession } from '@/components/warehouse/stoc
 import { CloseStocktakeButton } from '@/components/warehouse/stocktake-dialogs';
 import { deleteStocktakeAction } from '../actions';
 import { dateTime, integer } from '@/lib/format';
+import { ExportButtons } from '@/components/ui/export-buttons';
 
 type Params = Record<string, string | string[] | undefined>;
 
@@ -85,9 +86,7 @@ export default async function StocktakePage({ params, searchParams }: { params: 
             <LinkButton href={`${base}/izvjestaj`} icon={<FileText className="size-4" />}>
               Izvještaj
             </LinkButton>
-            <LinkButton href={`/api/skladiste/inventura/${st.id}`} icon={<Download className="size-4" />}>
-              CSV
-            </LinkButton>
+            <ExportButtons href={`/api/skladiste/inventura/${st.id}`} />
             {open && canOps && (
               <CloseStocktakeButton
                 id={st.id}

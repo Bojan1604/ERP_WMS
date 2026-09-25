@@ -30,7 +30,7 @@ const ACTION_TONE: Record<string, 'ok' | 'bad' | 'info' | 'neutral' | 'warn'> = 
 const isoDay = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
 
 export default async function AuditLogPage({ searchParams }: { searchParams: Promise<Params> }) {
-  const user = await pageAccess('settings');
+  const user = await pageAccess('log');
   const params = await searchParams;
   const page = readPage(params, 100);
   const where: Prisma.AuditLogWhereInput = { companyId: user.companyId };

@@ -3,10 +3,10 @@ import { listSupplierInvoices } from '@/server/queries/purchasing';
 import { toISO } from '@/domain/dates';
 import { SUPPLIER_INVOICE_STATUS_LABEL } from '@/domain/einvoice-inbound';
 import { num } from '@/domain/money';
-import { csvResponse, toCsv } from '@/lib/csv';
+import { csvOrXlsx } from '@/server/xlsx';
 import { date } from '@/lib/format';
 
-/** Knjiga URA u CSV-u — isti filtri kao popis. */
+/** Knjiga URA u CSV-u ili Excelu — isti filtri kao popis. */
 export async function GET(req: Request) {
   let user;
   try {
@@ -16,7 +16,10 @@ export async function GET(req: Request) {
   }
   const sp = Object.fromEntries(new URL(req.url).searchParams);
   const { rows } = await listSupplierInvoices(user.companyId, sp, { skip: 0, take: 20_000 });
-  const csv = toCsv(rows, [
+  return csvOrXlsx(
+    req,
+    rows,
+    [
     { label: 'Interni broj', value: (r) => r.internalNo },
     { label: 'Broj računa', value: (r) => r.number },
     { label: 'Dobavljač', value: (r) => r.supplier.name },
@@ -30,6 +33,8 @@ export async function GET(req: Request) {
     { label: 'Knjižen trošak', value: (r) => (r.expense ? 'da' : 'ne') },
     { label: 'Status', value: (r) => SUPPLIER_INVOICE_STATUS_LABEL[r.status] },
     { label: 'Izvor', value: (r) => (r.source === 'EINVOICE' ? 'eRačun' : 'ručno') },
-  ]);
-  return csvResponse(csv, `ulazni-racuni-${toISO(new Date())}.csv`);
+  ],
+    `ulazni-racuni-${toISO(new Date())}`,
+    'Ulazni računi',
+  );
 }

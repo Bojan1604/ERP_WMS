@@ -3,7 +3,7 @@ import { toError } from '@/server/action';
 import { listContracts } from '@/server/queries/rentals';
 import { BILLING_LABEL, CONTRACT_STATUS_LABEL } from '@/domain/billing';
 import { MODE_SHORT } from '@/components/rentals/badges';
-import { csvResponse, toCsv } from '@/lib/csv';
+import { csvOrXlsx } from '@/server/xlsx';
 import { today } from '@/domain/dates';
 
 /** Izvoz popisa ugovora s istim filtrima kao na ekranu (najviše 5000). */
@@ -12,7 +12,10 @@ export async function GET(req: Request) {
     const user = await requireAccess('rentals', 'view');
     const params = Object.fromEntries(new URL(req.url).searchParams);
     const { rows } = await listContracts(user.companyId, params, { skip: 0, take: 5000 });
-    const csv = toCsv(rows, [
+    return await csvOrXlsx(
+      req,
+      rows,
+      [
       { label: 'Ugovor', value: (r) => r.number },
       { label: 'Klijent', value: (r) => r.partner.name },
       { label: 'Status', value: (r) => CONTRACT_STATUS_LABEL[r.status] },
@@ -25,8 +28,10 @@ export async function GET(req: Request) {
       { label: 'Mjesečno', value: (r) => r.monthly },
       { label: 'Sljedeća naplata', value: (r) => r.nextBilling },
       { label: 'Rata za izdati', value: (r) => r.pending },
-    ]);
-    return csvResponse(csv, `ugovori-${today()}.csv`);
+    ],
+      `ugovori-${today()}`,
+      'Ugovori',
+    );
   } catch (e) {
     const err = toError(e);
     return new Response(err.ok === false ? err.error : 'Greška', { status: 403 });

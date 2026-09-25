@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Download, Plus, Wrench } from 'lucide-react';
+import { Plus, Wrench } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { listServiceOrders, servicePartners } from '@/server/queries/service';
 import { modelLabel } from '@/server/queries/lookups';
@@ -9,10 +9,11 @@ import { num } from '@/domain/money';
 import { Badge, Empty, PageHeader, Stat, TableWrap } from '@/components/ui/misc';
 import { FilterBar, SearchFilter, SegmentFilter, SelectFilter, ToggleFilter } from '@/components/ui/filters';
 import { Pagination, readPage } from '@/components/ui/pagination';
-import { LinkButton, buttonClass } from '@/components/ui/button';
+import { LinkButton } from '@/components/ui/button';
 import { LONG_SERVICE_DAYS, SERVICE_STATUS, isOpenService } from '@/components/service/labels';
 import { cn } from '@/lib/cn';
 import { date, eur, integer } from '@/lib/format';
+import { ExportButtons } from '@/components/ui/export-buttons';
 
 type Params = Record<string, string | string[] | undefined>;
 const FILTERS = ['q', 'status', 'scope', 'partner', 'warranty', 'long'];
@@ -35,9 +36,7 @@ export default async function ServicePage({ searchParams }: { searchParams: Prom
         subtitle="Servisni nalozi, reklamacije i zamjene uređaja"
         actions={
           <>
-            <a href={`/api/servis?${qs}`} className={buttonClass('secondary')}>
-              <Download className="size-4" /> Izvoz CSV
-            </a>
+            <ExportButtons href={`/api/servis?${qs}`} />
             {canEdit && (
               <LinkButton href="/servis/novi" variant="primary" icon={<Plus className="size-4" />}>
                 Novi nalog

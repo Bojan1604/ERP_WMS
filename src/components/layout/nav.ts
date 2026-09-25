@@ -93,7 +93,7 @@ export const NAV: NavGroup[] = [
       { href: '/postavke/fiskalizacija', label: 'Fiskalizacija', icon: Stamp, module: 'settings' },
       { href: '/postavke/uvoz', label: 'Uvoz i izvoz', icon: DatabaseBackup, module: 'settings', level: 'edit', adminOnly: true },
       { href: '/postavke/korisnici', label: 'Korisnici', icon: UserCog, module: 'users' },
-      { href: '/postavke/dnevnik', label: 'Dnevnik promjena', icon: History, module: 'settings' },
+      { href: '/postavke/dnevnik', label: 'Dnevnik promjena', icon: History, module: 'log' },
     ],
   },
 ];

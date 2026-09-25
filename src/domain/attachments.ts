@@ -4,12 +4,24 @@
  * smanjivanje slike i uparivanje pročitanog koda sa serijskim brojem.
  */
 
-/** Najveća veličina jednog priloga (nakon smanjivanja na klijentu). */
+/** Najveća veličina jednog priloga uz uređaj/zahtjev (slike se smanjuju na klijentu). */
 export const ATTACHMENT_MAX_BYTES = 2 * 1024 * 1024;
+/** Najveća veličina priloga uz dokumente (ugovor, račun, ulazni račun, trošak, nalog…) — skenirani PDF. */
+export const ATTACHMENT_MAX_DOC_BYTES = 10 * 1024 * 1024;
+/** Najveći prilog bilo koje vrste (provjera pri vraćanju sigurnosne kopije). */
+export const ATTACHMENT_MAX_FILE_BYTES = Math.max(ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_DOC_BYTES);
 /** Najviše priloga po zapisu (uređaj). */
 export const ATTACHMENT_MAX_PER_ENTITY = 10;
 /** Zahtjev za zaprimanje nosi sliku naljepnice po serijskom broju, pa smije imati više. */
 export const ATTACHMENT_MAX_PER_REQUEST = 30;
+/**
+ * Dokumenti koji primaju priloge kroz zajedničku komponentu `<Attachments>`
+ * (src/components/ui/attachments.tsx). Pravila (modul, razina, veličina) su u
+ * ATTACHMENT_ENTITIES (server/services/attachments.ts); uređaj i zahtjev imaju svoje ekrane.
+ */
+export const DOC_ATTACHMENT_ENTITIES = ['contract', 'invoice', 'supplierInvoice', 'purchaseOrder', 'receipt', 'expense', 'serviceOrder'] as const;
+export type DocAttachmentEntity = (typeof DOC_ATTACHMENT_ENTITIES)[number];
+
 /** Duža stranica slike nakon smanjivanja (px). */
 export const IMAGE_MAX_SIDE = 1600;
 /** Vrijednost `accept` za odabir datoteke. */
@@ -42,7 +54,7 @@ const ascii = (b: Uint8Array, from: number, to: number) => String.fromCharCode(.
  */
 export function checkAttachmentBytes(b: Uint8Array): { mime: AttachmentMime } | { error: string } {
   if (!b.byteLength) return { error: 'prazna datoteka' };
-  if (b.byteLength > ATTACHMENT_MAX_BYTES) return { error: `veći od ${ATTACHMENT_MAX_BYTES / 1024 / 1024} MB` };
+  if (b.byteLength > ATTACHMENT_MAX_FILE_BYTES) return { error: `veći od ${ATTACHMENT_MAX_FILE_BYTES / 1024 / 1024} MB` };
   const mime = sniffMime(b);
   return mime ? { mime } : { error: 'nije slika (JPEG, PNG, WebP) ni PDF' };
 }

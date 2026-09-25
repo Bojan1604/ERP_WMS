@@ -1,12 +1,12 @@
 import { requireAccess } from '@/server/auth';
 import { AuthError } from '@/server/errors';
 import { getStocktake, stocktakeReport, type SnapRow } from '@/server/queries/stocktake';
-import { csvResponse, toCsv } from '@/lib/csv';
+import { csvOrXlsx } from '@/server/xlsx';
 import { STOCKTAKE_KIND_LABEL } from '@/domain/warehouse';
 import { dateTime } from '@/lib/format';
 
-/** CSV inventure: svi pronađeni, nedostajući i višak s razlogom. */
-export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+/** CSV/Excel inventure: svi pronađeni, nedostajući i višak s razlogom. */
+export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   let user;
   try {
     user = await requireAccess('warehouse', 'view');
@@ -24,7 +24,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     ...rep.extra.map((r) => ({ ...r, result: `Višak — ${r.kind ? STOCKTAKE_KIND_LABEL[r.kind].toLowerCase() : ''}` })),
     ...rep.found.map((r) => ({ ...r, result: 'Pronađen' })),
   ];
-  const csv = toCsv<Row>(rows, [
+  return csvOrXlsx<Row>(
+    req,
+    rows,
+    [
     { label: 'Rezultat', value: (r) => r.result },
     { label: 'Serijski broj', value: (r) => r.serial },
     { label: 'Model', value: (r) => r.model },
@@ -32,6 +35,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     { label: 'Skladište', value: (r) => r.warehouse },
     { label: 'Skenirao', value: (r) => r.by },
     { label: 'Skenirano', value: (r) => (r.at ? dateTime(r.at) : '') },
-  ]);
-  return csvResponse(csv, `inventura-${st.number}.csv`);
+  ],
+    `inventura-${st.number}`,
+    'Inventura',
+  );
 }

@@ -30,7 +30,7 @@ export const getPartnerOptions = cache(async (companyId: string, role: 'customer
 
 /** Firma bez tajni (certifikat, lozinka, API ključ) — one se čitaju samo u src/server/fiscal. */
 export const getCompany = cache(async (companyId: string) =>
-  db.company.findUniqueOrThrow({ where: { id: companyId }, omit: { fiscalCert: true, fiscalCertPassword: true, eInvoiceApiKey: true } }),
+  db.company.findUniqueOrThrow({ where: { id: companyId }, omit: { fiscalCert: true, fiscalCertPassword: true, eInvoiceApiKey: true, smtpPassword: true } }),
 );
 
 export const modelLabel = (m: { brand?: string | null; name: string }) => [m.brand, m.name].filter(Boolean).join(' ');

@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Download, Plus, Users } from 'lucide-react';
+import { Plus, Users } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { listPartners } from '@/server/queries/partners';
 import { can } from '@/domain/permissions';
@@ -8,6 +8,7 @@ import { LinkButton } from '@/components/ui/button';
 import { FilterBar, SearchFilter, SegmentFilter, ToggleFilter } from '@/components/ui/filters';
 import { Pagination, readPage } from '@/components/ui/pagination';
 import { eur, integer } from '@/lib/format';
+import { ExportButtons } from '@/components/ui/export-buttons';
 
 export const metadata = { title: 'Partneri' };
 
@@ -27,9 +28,7 @@ export default async function PartnersPage({ searchParams }: { searchParams: Pro
         subtitle="Kupci i dobavljači"
         actions={
           <>
-            <LinkButton href={`/api/partneri${qs ? `?${qs}` : ''}`} icon={<Download className="size-4" />}>
-              CSV
-            </LinkButton>
+            <ExportButtons href={`/api/partneri${qs ? `?${qs}` : ''}`} />
             {can(user.perms, 'partners', 'edit') && (
               <LinkButton href="/partneri/novi" variant="primary" icon={<Plus className="size-4" />}>
                 Novi partner

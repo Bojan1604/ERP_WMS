@@ -311,7 +311,7 @@ async function insertOther(c: RunCtx, plan: ImportPlan) {
   // prilozi, povijest uređaja, stari dnevnik
   const ENTITY_MAP: Record<string, string> = {
     item: 'items', invoice: 'invoices', contract: 'contracts', service: 'serviceOrders', serviceOrder: 'serviceOrders', expense: 'expenses',
-    supplierInvoice: 'supplierInvoices', receipt: 'receipts', transfer: 'transfers', quote: 'quotes', partner: 'partners', order: 'orders',
+    supplierInvoice: 'supplierInvoices', receipt: 'receipts', transfer: 'transfers', quote: 'quotes', partner: 'partners', order: 'orders', purchaseOrder: 'orders',
   };
   // vrsta i veličina iz sadržaja (plan je već provjeren u backupToPlan; ovo je druga crta obrane)
   const att = plan.attachments

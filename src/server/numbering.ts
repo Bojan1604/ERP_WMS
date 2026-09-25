@@ -19,6 +19,7 @@ export async function nextSeq(tx: Tx, companyId: string, series: Series, year: n
 
 const PREFIX: Record<Exclude<Series, 'INVOICE'>, string> = {
   QUOTE: 'PON',
+  PROFORMA: 'PRED',
   CONTRACT: 'UG',
   ORDER: 'NAR',
   RECEIPT: 'PRI',

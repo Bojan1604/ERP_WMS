@@ -7,9 +7,9 @@ import { STOCKTAKE_KIND_LABEL } from '@/domain/warehouse';
 import { DocTable, DocumentShell, docDate } from '@/components/doc/document';
 import { PageHeader } from '@/components/ui/misc';
 import { PrintButton } from '@/components/ui/print-button';
-import { LinkButton } from '@/components/ui/button';
 import { dateTime, integer } from '@/lib/format';
 import { PrintUnclip } from '@/components/warehouse/print-unclip';
+import { ExportButtons } from '@/components/ui/export-buttons';
 
 /** Ispis inventure: sažetak, nedostaje, višak i pronađeno (A4). */
 export default async function StocktakeReportPage({ params }: { params: Promise<{ id: string }> }) {
@@ -52,7 +52,7 @@ export default async function StocktakeReportPage({ params }: { params: Promise<
           subtitle={st.status === 'OPEN' ? 'Inventura je u tijeku — izvještaj prikazuje trenutno stanje.' : 'Stanje u trenutku zatvaranja.'}
           actions={
             <>
-              <LinkButton href={`/api/skladiste/inventura/${st.id}`}>CSV</LinkButton>
+              <ExportButtons href={`/api/skladiste/inventura/${st.id}`} />
               <PrintButton />
             </>
           }
