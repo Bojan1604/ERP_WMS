@@ -33,6 +33,8 @@ export interface PlanModel {
   key: Key; categoryKey: Key | null; brand: string | null; name: string; code: string | null; kpd: string | null;
   salePrice: number | null; rentPrice: number | null; marginPct: number | null; warrantyMonths: number | null; minStock: number;
   specs: string | null; active: boolean;
+  /** Zadane specifikacije za nove uređaje modela (procesor, ekran, OS). */
+  cpu?: string | null; screen?: string | null; os?: string | null;
 }
 export interface PlanStatus { key: Key; name: string; kind: StatusKind; color: string; system: boolean; sort: number }
 export interface PlanService { key: Key; name: string; unit: string; price: number; kpd: string | null; active: boolean }
@@ -51,6 +53,8 @@ export interface PlanItem {
   importDate: D; issueDate: D; warrantyStart: D; warrantyMonths: number | null;
   outAt: string | null; outPartnerKey: Key | null; outNote: string | null;
   writeOffDate: D; writeOffReason: string | null; note: string | null; createdAt: string | null;
+  /** Kategorija po komadu (null = kategorija modela) i specifikacije po komadu. */
+  categoryKey?: Key | null; cpu?: string | null; screen?: string | null; os?: string | null;
 }
 
 export interface PlanLine {
@@ -127,7 +131,9 @@ export interface PlanExpense {
 }
 export interface PlanAudit { at: string; userName: string | null; entity: string; entityId: string | null; action: string; summary: string; diff?: unknown }
 export interface PlanItemEvent { itemKey: Key; at: string; type: string; message: string; refType: string | null; refKey: Key | null; userName: string | null }
-export interface PlanAttachment { entity: string; entityKey: Key; fileName: string; mime: string; size: number; base64: string; createdBy: string | null; createdAt: string | null }
+/** Paket (Marže → Paketi): skupina uređaja s cijenom paketa. */
+export interface PlanPackage { key: Key; name: string; price: number | null; note: string | null; itemKeys: Key[]; createdAt: string | null }
+export interface PlanAttachment { entity: string; entityKey: Key; fileName: string; mime: string; size: number; base64: string; createdBy: string | null; createdAt: string | null; public?: boolean }
 export interface PlanUser { name: string; email: string | null; role: string; active: boolean; note?: string }
 export interface PlanCounter { series: Series; year: number; last: number }
 /** Dnevnik poslane e-pošte (sigurnosna kopija ovog programa). */
@@ -172,6 +178,7 @@ export interface ImportPlan {
   /** Samo sigurnosna kopija ovog programa (stara verzija ih nema). */
   emailLogs?: PlanEmailLog[];
   portalUsers?: PlanPortalUser[];
+  packages?: PlanPackage[];
   warnings: PlanWarning[];
   /** Broj upozorenja po šifri (i onih koja nisu zapamćena zbog ograničenja). */
   warningCounts: Record<string, number>;
@@ -211,7 +218,7 @@ export const ENTITY_LABEL: Record<string, string> = {
   rentOverrides: 'Ručni upisi najma', quotes: 'Ponude', orders: 'Narudžbenice', receipts: 'Primke', transfers: 'Međuskladišnice',
   serviceOrders: 'Servisni nalozi', supplierInvoices: 'Ulazni računi', expenses: 'Troškovi', audit: 'Dnevnik (stari zapisi)',
   itemEvents: 'Povijest uređaja', attachments: 'Prilozi', users: 'Korisnici (samo popis)',
-  emailLogs: 'Dnevnik e-pošte', portalUsers: 'Korisnici portala',
+  emailLogs: 'Dnevnik e-pošte', portalUsers: 'Korisnici portala', packages: 'Paketi',
 };
 
 export function planCounts(p: ImportPlan): Record<string, number> {
@@ -224,7 +231,7 @@ export function planCounts(p: ImportPlan): Record<string, number> {
     quotes: p.quotes.length, orders: p.orders.length, receipts: p.receipts.length, transfers: p.transfers.length,
     serviceOrders: p.serviceOrders.length, supplierInvoices: p.supplierInvoices.length, expenses: p.expenses.length,
     audit: p.audit.length, itemEvents: p.itemEvents.length, attachments: p.attachments.length, users: p.users.length,
-    emailLogs: p.emailLogs?.length ?? 0, portalUsers: p.portalUsers?.length ?? 0,
+    emailLogs: p.emailLogs?.length ?? 0, portalUsers: p.portalUsers?.length ?? 0, packages: p.packages?.length ?? 0,
   };
 }
 
@@ -348,6 +355,12 @@ export function saleShares(inv: PlanInvoice): Map<Key, number> {
  * pripada nikome, trag izlaza postoji samo dok je „izašao", prodan i
  * iznajmljen uređaj nije na skladištu.
  */
+/** Specifikacija iz stare baze (procesor, ekran, OS): prazno i crtica = nema. */
+export function cleanSpec(v: string | null | undefined): string | null {
+  const t = v?.trim();
+  return t && t !== '—' && t !== '-' ? t.slice(0, 200) : null;
+}
+
 export function normalizeItemState(it: PlanItem) {
   if (it.state === 'IN_STOCK') {
     it.partnerKey = null; it.issueDate = null; it.invoiceKey = null; it.salePrice = null; it.warrantyStart = null;

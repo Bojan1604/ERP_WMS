@@ -53,6 +53,7 @@ export async function invoiceUbl(companyId: string, id: string) {
     currency: c.currency,
     notes: [inv.description, inv.note],
     seller: { name: c.name, oib: c.oib, vatId: c.vatId, address: c.address, zip: c.zip, city: c.city, country: c.country, iban: c.iban, vatRegistered: c.vatRegistered },
+    vatOnPayment: c.vatOnPayment,
     // operater: ime i OIB korisnika koji je izdao račun (stariji računi bez OIB-a korisnika nose OIB firme)
     operator: inv.issuedBy ? { name: meta.operator?.name ?? inv.issuedBy, oib: meta.operator?.oib ?? c.oib } : null,
     buyer: {

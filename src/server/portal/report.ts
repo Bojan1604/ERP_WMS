@@ -49,7 +49,8 @@ export async function reportFault(tx: Tx, scope: PortalScope & { partnerName?: s
     setServiceStatus: false,
   });
   await tx.serviceOrder.update({ where: { id: order.id }, data: { source: 'PORTAL', portalUserId: scope.id, contact } });
-  if (photos.length) await addAttachments(tx, actor, 'serviceOrder', order.id, photos);
+  // fotografije koje je poslao klijent vidi i on na portalu
+  if (photos.length) await addAttachments(tx, actor, 'serviceOrder', order.id, photos, { public: true });
   await audit(tx, actor, {
     entity: 'service',
     entityId: order.id,

@@ -4,6 +4,7 @@ import { db } from '../db';
 import { DomainError } from '../errors';
 import { documentTotals, paymentReference } from '@/domain/invoice';
 import { hub3Text } from '@/domain/hub3';
+import { quoteDocTitle } from '@/domain/documents';
 import { toISO } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import { hub3Png } from './barcode';
@@ -26,9 +27,6 @@ export async function loadQuote(companyId: string, id: string) {
 }
 export type LoadedQuote = Awaited<ReturnType<typeof loadQuote>>;
 
-/** Naslov predračuna iz postavki firme (Predračun / Proforma / Profaktura). */
-export const proformaTitle = (c: Pick<LoadedCompany, 'proformaTitle'>) => c.proformaTitle?.trim() || 'Predračun';
-
 /** Poziv na broj predračuna iz broja (PRED-2026-0005 → 5-2026); inače znamenke broja. */
 export function proformaReference(number: string): string {
   const m = /(\d{4})-0*(\d+)$/.exec(number);
@@ -47,7 +45,7 @@ export function quoteHub3(q: LoadedQuote, c: LoadedCompany, total: number): stri
     model: c.paymentModel || 'HR00',
     reference: proformaReference(q.number),
     purpose: 'OTHR',
-    description: `${proformaTitle(c)} ${q.number}`.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D'),
+    description: `${quoteDocTitle(q, c)} ${q.number}`.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D'),
   });
 }
 
@@ -84,7 +82,7 @@ function quoteRows(q: LoadedQuote) {
 export function quoteDefinition(q: LoadedQuote, c: LoadedCompany, hub3Img: string | null = null): TDocumentDefinitions {
   const cur = currencySign(c.currency);
   const proforma = q.kind === 'PROFORMA';
-  const title = proforma ? proformaTitle(c) : 'Ponuda';
+  const title = quoteDocTitle(q, c);
   const vatRate = num(q.vatRate);
   const { lines, rows } = quoteRows(q);
   const t = documentTotals({ lines, vatRate, discountPct: num(q.discountPct), discountAmount: num(q.discountAmount) });

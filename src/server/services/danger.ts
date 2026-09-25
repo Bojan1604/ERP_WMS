@@ -8,6 +8,7 @@ import type { Tx } from '../db';
 import { audit } from '../audit';
 import { AuthError, DomainError, assert } from '../errors';
 import { bootstrapCompany } from './company';
+import { wipeMdmData } from '../mdm/wipe';
 import type { SessionUser } from '../auth';
 import type { Actor } from './items';
 import { canUseDanger } from '@/domain/permissions';
@@ -47,6 +48,7 @@ const TRANSACTION_TABLES = [
   'Quote', // + QuoteLine
   'Invoice', // + InvoiceLine, Payment; Item.invoiceId → NULL
   'Contract', // + ContractItem, ReturnedContractItem
+  'Package', // + PackageItem
   'Item', // MdmDevice.itemId → NULL
   'GoodsReceipt',
   'PurchaseOrder', // + PurchaseOrderLine
@@ -74,14 +76,18 @@ export async function deleteTransactions(tx: Tx, actor: Actor): Promise<DeleteCo
 }
 
 /**
- * „Obriši sve": promet + partneri, šifrarnici i ostali korisnici. Ostaje firma
- * s postavkama i korisnik koji briše (i vanjski korisnici MDM-a s MDM podacima,
- * koji se uređuju u MDM modulu). Sistemski statusi, zadano skladište i
- * kategorije troškova se ponovno stvaraju, da se u programu može odmah raditi.
+ * „Obriši sve": promet + partneri, šifrarnici, ostali korisnici i svi MDM podaci
+ * (organizacije, uređaji, profili, aplikacije, datoteke, vanjski korisnici MDM-a).
+ * Ostaje firma s postavkama i korisnik koji briše. Sistemski statusi, zadano
+ * skladište i kategorije troškova se ponovno stvaraju, da se u programu može odmah
+ * raditi. `mdmFiles` = ključevi MDM datoteka na disku — pozivatelj ih briše
+ * (`removeStoredFiles`) tek nakon potvrde transakcije.
  */
-export async function deleteEverything(tx: Tx, actor: Actor): Promise<DeleteCounts> {
+export async function deleteEverything(tx: Tx, actor: Actor): Promise<DeleteCounts & { mdmFiles: string[] }> {
   const c = actor.companyId;
   const counts = await deleteTransactions(tx, actor);
+  const mdm = await wipeMdmData(tx, c);
+  Object.assign(counts, mdm.counts);
   for (const t of ['PriceAgreement', 'PortalUser', 'Partner', 'Service', 'ExpenseCategory', 'DeviceModel', 'Category', 'ItemStatus', 'Warehouse'] as const) {
     counts[t] = (counts[t] ?? 0) + (await del(tx, t, c));
   }
@@ -102,8 +108,12 @@ export async function deleteEverything(tx: Tx, actor: Actor): Promise<DeleteCoun
   await tx.userCompany.deleteMany({ where: { companyId: c, userId: { not: actor.id } } });
   counts.User = removed;
   await bootstrapCompany(tx, c);
-  await audit(tx, actor, { entity: 'company', entityId: c, action: 'wipe-all', summary: `Obrisani svi podaci firme (${removed} korisnika uklonjeno)`, diff: counts });
-  return counts;
+  await audit(tx, actor, {
+    entity: 'company', entityId: c, action: 'wipe-all',
+    summary: `Obrisani svi podaci firme (${removed} korisnika uklonjeno, ${mdm.counts.MdmDevice} MDM uređaja, ${mdm.storageKeys.length} MDM datoteka)`,
+    diff: counts,
+  });
+  return Object.assign(counts, { mdmFiles: mdm.storageKeys });
 }
 
 /**

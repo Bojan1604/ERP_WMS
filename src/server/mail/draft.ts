@@ -6,7 +6,7 @@ import { accountantRowsByIds } from '../queries/accountant';
 import { can } from '@/domain/permissions';
 import { ACCOUNTANT_ROW_CAP, parseKeys } from '@/domain/accountant';
 import { fillTemplate, readTemplates, type MailTemplateKind } from '@/domain/mail';
-import type { MailKind, PdfKind } from '@/domain/documents';
+import { quoteDocTitle, type MailKind, type PdfKind } from '@/domain/documents';
 import { INVOICE_KIND_LABEL } from '@/domain/invoice';
 import { formatDate, toISO } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
@@ -77,11 +77,11 @@ export async function resolveDoc(user: Pick<SessionUser, 'companyId' | 'perms'>,
     case 'proforma': {
       const q = await db.quote.findFirst({
         where: { id, companyId },
-        select: { id: true, kind: true, number: true, date: true, validUntil: true, grandTotal: true, partner: { select: { name: true, email: true } } },
+        select: { id: true, kind: true, title: true, number: true, date: true, validUntil: true, grandTotal: true, partner: { select: { name: true, email: true } } },
       });
       if (!q) throw new DomainError('Ponuda ne postoji.');
       const proforma = q.kind === 'PROFORMA';
-      const naslov = company.proformaTitle?.trim() || 'Predračun';
+      const naslov = quoteDocTitle({ kind: 'PROFORMA', title: q.title }, company);
       return {
         kind,
         entityId: q.id,

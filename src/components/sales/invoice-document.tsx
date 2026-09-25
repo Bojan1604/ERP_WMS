@@ -2,6 +2,7 @@ import { DocumentShell, DocTable, DocTotals, type DocCompany, type DocParty } fr
 import { CHARGE_KINDS, INVOICE_KIND_LABEL, groupLines, type ChargeInput } from '@/domain/invoice';
 import { formatDate } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
+import { VAT_ON_PAYMENT_NOTE } from '@/domain/tax';
 import { amount, decimal, eur } from '@/lib/format';
 import { PAYMENT_METHOD_LABEL, type PaymentMethodCode } from '@/domain/fiscal';
 
@@ -56,7 +57,17 @@ const time = (iso: string | null) =>
 const fullTime = (iso: string) =>
   new Intl.DateTimeFormat('hr-HR', { timeZone: 'Europe/Zagreb', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(iso));
 
-export function InvoiceDocument({ inv, company, party, currency = '€' }: { inv: InvoiceDocData; company: DocCompany & { paymentModel?: string | null; swift?: string | null }; party: DocParty; currency?: string }) {
+export function InvoiceDocument({
+  inv,
+  company,
+  party,
+  currency = '€',
+}: {
+  inv: InvoiceDocData;
+  company: DocCompany & { paymentModel?: string | null; swift?: string | null; vatRegistered?: boolean; vatOnPayment?: boolean };
+  party: DocParty;
+  currency?: string;
+}) {
   const receivable = inv.kind === 'INVOICE' || inv.kind === 'ADVANCE';
   const linesNet = r2(inv.lines.reduce((a, l) => a + l.netAmount, 0));
   const discount = r2(linesNet - inv.netTotal);
@@ -152,6 +163,8 @@ export function InvoiceDocument({ inv, company, party, currency = '€' }: { inv
         <DocTotals rows={totals} />
       </div>
       {inv.taxCategory !== 'S' && inv.taxExemptReason && <p className="mt-3 text-[11px]">{inv.taxExemptReason}</p>}
+      {company.vatRegistered === false && <p className="mt-3 text-[11px]">Izdavatelj nije u sustavu PDV-a (čl. 90. st. 2. Zakona o PDV-u).</p>}
+      {company.vatOnPayment && <p className="mt-3 text-[11px]">{VAT_ON_PAYMENT_NOTE}</p>}
       {inv.note && <p className="mt-3 whitespace-pre-line">{inv.note}</p>}
       {inv.status === 'ISSUED' && inv.zki && (
         <section className="mt-5 flex items-center justify-between gap-6 rounded border border-black/15 p-3">

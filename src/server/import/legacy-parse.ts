@@ -121,9 +121,10 @@ export const legacyPartner = z.object({
   phone: zStr, iban: zStr, contact: zStr, contactPerson: zStr, isCustomer: zBool, isSupplier: zBool, excluded: zBool, note: zStr,
   paymentTermDays: zNum, paymentDays: zNum,
 });
+export const legacyPackage = z.object({ id: zRef, name: zStr, price: zNum, note: zStr, itemIds: zIdList, createdAt: zRaw });
 export const legacyPriceList = z.object({ id: zRef, partnerId: zRef, modelId: zRef, salePrice: zNum, price: zNum, rentPrice: zNum, rentMonthly: zNum, rent: zNum });
 export const legacyItem = z.object({
-  id: zRef, serial: zStr, dupNote: zStr, statusId: zRef, warehouseId: zRef, partnerId: zRef, modelId: zRef, categoryId: zRef,
+  id: zRef, serial: zStr, dupNote: zStr, statusId: zRef, warehouseId: zRef, partnerId: zRef, modelId: zRef, categoryId: zRef, cpu: zStr, screen: zStr, os: zStr,
   importDate: zRaw, issueDate: zRaw, invoiceId: zRef, contractId: zRef, supplierId: zRef, cost: zNum, salePrice: zNum, rentPrice: zNum,
   marginPct: zNum, warrantyMonths: zNum, warrantyStart: zRaw, note: zStr, outAt: zRaw, outNote: zStr, outPartnerId: zRef,
   writeOffDate: zRaw, writeOffReason: zStr, writeOffNote: zStr, createdAt: zRaw,

@@ -14,6 +14,7 @@ import { planFromJson } from '@/server/import/analyze';
 import { runImport } from '@/server/import/run';
 import { withUserLock } from '@/server/import/upload';
 import { assertDemo, confirmDanger, deleteEverything, deleteTransactions, resetDemo } from '@/server/services/danger';
+import { removeStoredFiles } from '@/server/mdm/wipe';
 import { cleanAuditLog, fixIntegrity, resetDefaultStatuses } from '@/server/services/maintenance';
 
 const adminOnly = (u: SessionUser) => {
@@ -92,13 +93,15 @@ export const deleteTransactionsAction = userAction(z.object(zConfirm), async (in
 }, dangerOnly);
 
 export const deleteEverythingAction = userAction(z.object(zConfirm), async (input, user) => {
-  await db.$transaction(
+  const res = await db.$transaction(
     async (tx) => {
       await confirmDanger(tx, user, input);
       return deleteEverything(tx, user);
     },
     { maxWait: 20_000, timeout: 10 * 60_000 },
   );
+  // MDM datoteke s diska tek nakon potvrđenog brisanja zapisa
+  await removeStoredFiles(res.mdmFiles);
   return { message: 'Svi podaci firme su obrisani.', redirect: '/' };
 }, dangerOnly);
 

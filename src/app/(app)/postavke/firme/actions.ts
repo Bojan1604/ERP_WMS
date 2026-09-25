@@ -7,6 +7,7 @@ import { transaction } from '@/server/db';
 import type { SessionUser } from '@/server/auth';
 import { zBool, zId, zReq } from '@/server/zod';
 import { createCompany, deleteCompany, setCompanyAccess, switchCompany } from '@/server/services/companies';
+import { removeStoredFiles } from '@/server/mdm/wipe';
 
 const adminOnly = (u: SessionUser) => {
   if (u.role !== 'ADMIN') throw new AuthError('Firme otvara i briše samo administrator.', 403);
@@ -38,6 +39,7 @@ export const companyAccessAction = userAction(z.object({ userId: zId, companyId:
 }, adminOnly);
 
 export const deleteCompanyAction = userAction(z.object({ companyId: zId, confirmName: zReq('Naziv firme') }), async (input, user) => {
-  await transaction((tx) => deleteCompany(tx, user, input.companyId, input.confirmName));
+  const { mdmFiles } = await transaction((tx) => deleteCompany(tx, user, input.companyId, input.confirmName));
+  await removeStoredFiles(mdmFiles);
   return { message: 'Firma je obrisana.' };
 }, adminOnly);

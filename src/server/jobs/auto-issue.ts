@@ -4,7 +4,7 @@ import { audit } from '../audit';
 import { afterIssue } from '../fiscal';
 import { issuePending, pendingForCompany } from '../services/rentals';
 import type { Actor } from '../services/items';
-import { today } from '@/domain/dates';
+import { fromISO, toISO, today } from '@/domain/dates';
 
 /**
  * Automatsko izdavanje rata najma na dan dospijeća (Company.autoIssueRent).
@@ -56,10 +56,20 @@ async function claimDay(companyId: string, actor: Actor, day: string, force: boo
   });
 }
 
-/** Jedna firma: sve rate dospjele do `day` (uključivo). */
+/**
+ * Jedna firma: rate dospjele do `day` (uključivo), ali ne prije dana uključivanja
+ * automatskog izdavanja (`Company.autoIssueSince`) — zaostale rate iz prošlosti
+ * izdaje korisnik ručno (Najam → Za izdati), posao ih ne izdaje sam.
+ */
 export async function autoIssueCompany(companyId: string, opts: { day?: string; force?: boolean; fiscalize?: boolean } = {}): Promise<AutoIssueResult> {
   const day = opts.day ?? today();
-  const company = await db.company.findUniqueOrThrow({ where: { id: companyId }, select: { name: true } });
+  const company = await db.company.findUniqueOrThrow({ where: { id: companyId }, select: { name: true, autoIssueSince: true } });
+  // bez datuma uključivanja (stariji zapis) posao kreće od danas i to upisuje
+  let since = company.autoIssueSince ? toISO(company.autoIssueSince) : null;
+  if (!since) {
+    since = day;
+    await db.company.updateMany({ where: { id: companyId, autoIssueSince: null }, data: { autoIssueSince: fromISO(day) } });
+  }
   const out: AutoIssueResult = { companyId, companyName: company.name, issued: [], skipped: 0, errors: [] };
   const actor = await jobActor(companyId);
   if (!actor) {
@@ -68,7 +78,7 @@ export async function autoIssueCompany(companyId: string, opts: { day?: string; 
   }
   if (!(await claimDay(companyId, actor, day, !!opts.force))) return { ...out, alreadyRan: true };
 
-  const due = (await pendingForCompany(db, companyId, { now: day })).filter((p) => p.dueDate <= day);
+  const due = (await pendingForCompany(db, companyId, { now: day })).filter((p) => p.dueDate <= day && p.dueDate >= since);
   const ids: string[] = [];
   for (const p of due) {
     try {

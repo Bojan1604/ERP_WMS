@@ -21,6 +21,14 @@ export interface VatTreatment {
 }
 
 /** Ručne PDV kategorije partnera (Partner.vatCategoryOverride) — nadjačavaju izvedenu iz države. */
+/**
+ * PDV po naplaćenoj naknadi (Company.vatOnPayment): napomena na računu (ispis, PDF,
+ * napomena eRačuna) — tekst kao u starom programu (invoiceDoc.js) — i oznaka u
+ * HR proširenju eRačuna (HRObracunPDVPoNaplati, stari eracun.js).
+ */
+export const VAT_ON_PAYMENT_NOTE = 'Obračun PDV-a prema naplaćenim naknadama.';
+export const VAT_ON_PAYMENT_UBL = 'Obračun po naplaćenoj naknadi';
+
 export const VAT_OVERRIDES = ['S', 'AE', 'E', 'Z', 'O'] as const;
 export type VatOverride = (typeof VAT_OVERRIDES)[number];
 

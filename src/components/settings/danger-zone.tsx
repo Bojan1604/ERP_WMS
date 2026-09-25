@@ -143,10 +143,10 @@ export function DangerZone({ companyName, isDemo, canDanger }: { companyName: st
         </Button>
       </div>
       <p className="mt-3 text-xs leading-relaxed text-fg-3">
-        <b>Obriši promet</b> — uklanja uređaje, račune, ponude, ugovore, servisne naloge, troškove, nabavu, priloge i dnevnik; brojači dokumenata kreću ispočetka. Partneri, šifrarnici (modeli, kategorije, statusi,
+        <b>Obriši promet</b> — uklanja uređaje, račune, ponude, pakete, ugovore, servisne naloge, troškove, nabavu, priloge i dnevnik; brojači dokumenata kreću ispočetka. Partneri, šifrarnici (modeli, kategorije, statusi,
         skladišta, usluge), korisnici i postavke ostaju.
         <br />
-        <b>Obriši sve podatke</b> — uz promet briše i partnere, šifrarnike i ostale korisnike. Ostaju vaš korisnički račun, postavke firme i MDM.
+        <b>Obriši sve podatke</b> — uz promet briše i partnere, šifrarnike, ostale korisnike i sve MDM podatke (organizacije, uređaje, profile, aplikacije i datoteke). Ostaju vaš korisnički račun i postavke firme.
       </p>
       {open === 'promet' && (
         <ConfirmDanger
@@ -161,7 +161,7 @@ export function DangerZone({ companyName, isDemo, canDanger }: { companyName: st
       {open === 'sve' && (
         <ConfirmDanger
           title="Obrisati baš sve podatke?"
-          detail="Trajno se briše promet, svi partneri, modeli, kategorije, statusi, skladišta, usluge i ostali korisnici. Ostaju vaš račun i postavke firme. Radnja se ne može poništiti."
+          detail="Trajno se briše promet, svi partneri, modeli, kategorije, statusi, skladišta, usluge, ostali korisnici i svi MDM podaci s datotekama. Ostaju vaš račun i postavke firme. Radnja se ne može poništiti."
           label="Obriši sve"
           action={deleteEverythingAction}
           companyName={companyName}

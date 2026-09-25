@@ -11,14 +11,14 @@ import type { z } from 'zod';
 import { LegacyCtx } from './legacy-ctx';
 import {
   detectLegacy, legacyAudit, legacyCategory, legacyContract, legacyExpense, legacyInbound, legacyInvoice, legacyItem, legacyModel,
-  legacyOrder, legacyPartner, legacyPriceList, legacyQuote, legacyReceipt, legacyRma, legacyService, legacyStatus, legacyTransfer,
+  legacyOrder, legacyPackage, legacyPartner, legacyPriceList, legacyQuote, legacyReceipt, legacyRma, legacyService, legacyStatus, legacyTransfer,
   legacyUser, legacyWarehouse, type LegacyDb,
 } from './legacy-parse';
 import { applySalePrices, mapInvoices, mapQuotes } from './legacy-sales';
 import { mapContracts, mapRent } from './legacy-rent';
 import { mapAudit, mapExpenses, mapInbound, mapOrders, mapReceipts, mapRma, mapTransfers } from './legacy-other';
 import { linkItemInvoices, mapItems } from './legacy-items';
-import { computeInvoiceTotals, emptyPlan, normalizeItemState, type ImportPlan, type Key, type PlanCompany } from './plan';
+import { cleanSpec, computeInvoiceTotals, emptyPlan, normalizeItemState, type ImportPlan, type Key, type PlanCompany } from './plan';
 import { SYSTEM_STATUSES } from '@/server/services/company';
 import { EU_COUNTRIES } from '@/domain/tax';
 import { today as todayFn } from '@/domain/dates';
@@ -46,6 +46,19 @@ function rows<S extends z.ZodTypeAny>(ctx: LegacyCtx, db: LegacyDb, name: string
 }
 
 // ---------------------------------------------------------------- postavke i korisnici
+
+/** Paketi (Marže → Paketi): naziv, cijena, napomena i uređaji (nepostojeći uređaji se izostavljaju). */
+function mapPackages(ctx: LegacyCtx, list: Array<z.infer<typeof legacyPackage>>) {
+  const out: NonNullable<ImportPlan['packages']> = [];
+  for (const [i, p] of list.entries()) {
+    const name = (p.name || `Paket ${i + 1}`).slice(0, 200);
+    const itemKeys = [...new Set(p.itemIds.map((id) => ctx.items.get(id)?.key).filter((k): k is Key => !!k))];
+    if (itemKeys.length < p.itemIds.length) ctx.w.warn('ref-item', 'paket', `Paket „${name}": ${p.itemIds.length - itemKeys.length} uređaja ne postoji — izostavljeni.`);
+    const price = ctx.money(p.price, `Paket ${name}`, 'cijena', null);
+    out.push({ key: p.id ?? ctx.genKey('package'), name, price: price && price > 0 ? price : null, note: p.note || null, itemKeys, createdAt: ctx.ts(p.createdAt) });
+  }
+  ctx.plan.packages = out;
+}
 
 const ROLE: Record<string, string> = { admin: 'ADMIN', voditelj: 'MANAGER', prodaja: 'SALES', skladiste: 'WAREHOUSE', gost: 'ACCOUNTANT' };
 
@@ -246,12 +259,12 @@ export function mapLegacy(raw: unknown, opts: { today?: string } = {}): LegacyMa
     ctx.modelLabels.set(key, [brand, name].filter(Boolean).join(' '));
     const sale = ctx.money(m.price ?? m.salePrice, where, 'cijena', null);
     const rent = ctx.money(m.rentPrice ?? m.rentMonthly, where, 'najam', null);
-    const specs = m.specs || [m.cpu, m.screen, m.os].filter((v) => v && v !== '—' && v !== '-').join(' · ');
+    const specs = m.specs || [m.cpu, m.screen, m.os].map(cleanSpec).filter(Boolean).join(' · ');
     plan.models.push({
       key, categoryKey: m.categoryId ? (ctx.categories.get(m.categoryId) ?? null) : null, brand, name, code: m.code || null, kpd: m.kpd || null,
       salePrice: sale && sale > 0 ? sale : null, rentPrice: rent && rent > 0 ? rent : null, marginPct: ctx.num(m.marginPct, where, 'marža', null),
       warrantyMonths: ctx.int(m.warrantyMonths, where, 'jamstvo', 0, 600), minStock: ctx.int(m.minStock, where, 'min. zaliha', 0, 1_000_000) ?? 0,
-      specs: specs || null, active: m.active !== false,
+      specs: specs || null, active: m.active !== false, cpu: cleanSpec(m.cpu), screen: cleanSpec(m.screen), os: cleanSpec(m.os),
     });
   }
   mapStatuses(ctx, rows(ctx, db, 'statuses', legacyStatus));
@@ -319,7 +332,7 @@ export function mapLegacy(raw: unknown, opts: { today?: string } = {}): LegacyMa
   const inboundExpenses = mapInbound(ctx, rows(ctx, db, 'inbound', legacyInbound));
   mapExpenses(ctx, rows(ctx, db, 'expenses', legacyExpense), { receipts: receiptExpenses, inbound: inboundExpenses });
   mapAudit(ctx, rows(ctx, db, 'audit', legacyAudit));
-  if (Array.isArray(db.packages) && db.packages.length) ctx.w.info('packages', 'paketi', `Paketi (${db.packages.length}) nisu uvezeni — nova verzija ih nema.`);
+  mapPackages(ctx, rows(ctx, db, 'packages', legacyPackage));
   for (const k of ['receiveRequests', 'statusRequests']) {
     if (Array.isArray(db[k]) && (db[k] as unknown[]).length) ctx.w.info('requests', 'zahtjevi', `Zahtjevi na čekanju (${k}) nisu uvezeni — otvorite ih ponovno u novoj verziji.`);
   }

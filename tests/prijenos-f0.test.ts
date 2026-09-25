@@ -6,7 +6,7 @@ import { inferColumnType, toCsv, type ExportColumn } from '../src/lib/csv';
 import { dateRangeWhere, parseDateRange, parseMulti, parseSort, sortOrderBy } from '../src/lib/list-params';
 import { toXlsx, csvOrXlsx } from '../src/server/xlsx';
 import { renderTablePdf, formatCell } from '../src/server/pdf/table';
-import { renderDocumentPdf, PdfNotImplementedError } from '../src/server/pdf';
+import { renderDocumentPdf } from '../src/server/pdf';
 import { canSeeCost, resolvePermissions, ROLE_DEFAULTS, can } from '../src/domain/permissions';
 import { isMailKind, isPdfKind } from '../src/domain/documents';
 
@@ -95,7 +95,7 @@ test('pdf: generička tablica s hrvatskim znakovima (Roboto, UTF-8)', async () =
 });
 
 test('pdf: renderDocumentPdf odbija nepoznatu vrstu (predlošci: tests/integration/a-pdf-mail.test.ts)', async () => {
-  await assert.rejects(renderDocumentPdf('nepostojeca' as never, 'x', 'c'), PdfNotImplementedError);
+  await assert.rejects(renderDocumentPdf('nepostojeca' as never, 'x', 'c'), /Nepoznata vrsta dokumenta/);
   assert.ok(isPdfKind('invoice') && !isPdfKind('../etc'));
   assert.ok(isMailKind('accountant-zip') && !isMailKind('x'));
 });

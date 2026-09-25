@@ -1,4 +1,5 @@
-# Produkcijska slika:  docker build -t erp-wms . && docker run -p 3000:3000 --env-file .env erp-wms
+# Produkcijska slika:  docker build -t erp-wms . && docker run -p 3000:3000 --env-file .env -v erp-storage:/app/storage erp-wms
+# (storage/ — kopije i MDM datoteke — mora biti na trajnom volumenu; produkcija: deploy/docker-compose.yml)
 FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./

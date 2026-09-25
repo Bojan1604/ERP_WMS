@@ -6,7 +6,7 @@ import { AuthError } from '@/server/errors';
 import { can, isExternalRole } from '@/domain/permissions';
 import { ATTACHMENT_MIMES as INLINE_MIME } from '@/domain/attachments';
 import { isMine } from '@/server/queries/approvals';
-import { ATTACHMENT_ENTITIES, canAttachment, deleteAttachment, isAttachmentEntity, isProtectedAttachment, readAttachment } from '@/server/services/attachments';
+import { ATTACHMENT_ENTITIES, canAttachment, deleteAttachment, isAttachmentEntity, isProtectedAttachment, readAttachment, setAttachmentPublic } from '@/server/services/attachments';
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -64,6 +64,27 @@ export async function DELETE(_req: Request, { params }: Ctx) {
       return del;
     });
     return Response.json({ ok: true, data: { id: res.id } });
+  } catch (e) {
+    return Response.json(toError(e), { status: e instanceof AuthError ? e.status : 400 });
+  }
+}
+
+/** Prilog servisnog naloga vidljiv klijentu na portalu: `{ public: boolean }` — pravo dodavanja priloga. */
+export async function PATCH(req: Request, { params }: Ctx) {
+  try {
+    const user = await requireUser();
+    if (isExternalRole(user.role)) throw new AuthError('Nemate pravo mijenjati priloge.', 403);
+    const { id } = await params;
+    const body = (await req.json().catch(() => null)) as { public?: unknown } | null;
+    if (!body || typeof body.public !== 'boolean') return Response.json({ ok: false, error: 'Neispravan zahtjev.' }, { status: 400 });
+    const visible = body.public;
+    const res = await transaction(async (tx) => {
+      const a = await tx.attachment.findFirst({ where: { id, companyId: user.companyId }, select: { entity: true } });
+      if (!a || !isAttachmentEntity(a.entity)) throw new AuthError('Prilog ne postoji.', 403);
+      if (!canAttachment(user.perms, a.entity, 'add')) throw new AuthError('Nemate pravo mijenjati priloge.', 403);
+      return setAttachmentPublic(tx, user, id, visible);
+    });
+    return Response.json({ ok: true, data: { id: res.id, public: res.public } });
   } catch (e) {
     return Response.json(toError(e), { status: e instanceof AuthError ? e.status : 400 });
   }

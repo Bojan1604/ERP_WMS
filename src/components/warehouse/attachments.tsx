@@ -14,6 +14,8 @@ export interface AttachmentMeta {
   fileName: string;
   mime: string;
   size: number;
+  /** Prilog servisnog naloga vidljiv klijentu na portalu. */
+  public?: boolean;
 }
 
 export const attachmentUrl = (id: string) => `/api/prilozi/${id}`;

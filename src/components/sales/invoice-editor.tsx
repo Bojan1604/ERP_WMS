@@ -23,7 +23,7 @@ import { TotalsBox } from './totals-box';
 import { lineKey } from './inputs';
 import { autoKpd, deviceToLine as toLine, isRentLine, withRentMonths } from './line-tools';
 import { IssueDialog } from './invoice-issue-dialog';
-import { RentCard, rentMonthsFor, type ContractOpt, type RentTermsValue } from './invoice-rent-card';
+import { RentCard, rentMonthsFor, type ContractOpt, type RentNextValue, type RentTermsValue } from './invoice-rent-card';
 import type { DeviceOpt, EditorCharge, EditorLine, SalesLookups, ServiceOpt } from './types';
 
 export interface InvoiceEditorValue {
@@ -50,6 +50,8 @@ export interface InvoiceEditorValue {
   /** Razdoblje najma (YYYY-MM); prazno = prva nefakturirana rata. */
   period?: string;
   rent?: RentTermsValue;
+  /** „Zatim naplata prelazi u" (druga naplata od datuma) — za uređaje koji se dodaju na ugovor. */
+  rentNext?: RentNextValue | null;
   /** Rata iz modula Najam (ugovor i razdoblje zadani). */
   rentLocked?: boolean;
   contract?: { id: string; number: string } | null;
@@ -187,6 +189,7 @@ export function InvoiceEditor({
       contractId: rentUsed ? (v.contractId ?? null) : null,
       period: rentUsed ? v.period || null : null,
       rent: rentUsed && v.contractId === 'new' ? v.rent : null,
+      rentNext: rentUsed && v.contractId && !v.rentLocked ? (v.rentNext ?? null) : null,
       lines: v.lines.map((l) => ({
         kind: l.kind,
         itemId: l.itemId ?? null,
@@ -306,6 +309,8 @@ export function InvoiceEditor({
           contractId={v.contractId ?? null}
           period={v.period ?? ''}
           terms={v.rent!}
+          next={v.rentNext ?? null}
+          onNext={(rentNext) => set({ rentNext })}
           locked={!!v.rentLocked}
           lockedLabel={v.contract}
           onContracts={setContracts}

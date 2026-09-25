@@ -108,9 +108,6 @@ export function xlsxResponse(buf: Buffer, fileName: string) {
 type Source = Request | URL | URLSearchParams;
 const searchOf = (req: Source) => (req instanceof URLSearchParams ? req : req instanceof URL ? req.searchParams : new URL(req.url).searchParams);
 
-/** Traži li zahtjev Excel (`?format=xlsx`). */
-export const wantsXlsx = (req: Source) => searchOf(req).get('format') === 'xlsx';
-
 /** Najviše redaka u PDF-u popisa (veći popis → Excel). */
 export const PDF_MAX_ROWS = 5000;
 
@@ -145,6 +142,3 @@ export async function csvOrXlsx<T>(
   }
   return csvResponse(toCsv(rows, columns), `${base}.csv`);
 }
-
-/** Isto što i `csvOrXlsx` (CSV / Excel / PDF po `?format=`). */
-export const exportResponse = csvOrXlsx;

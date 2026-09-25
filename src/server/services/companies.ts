@@ -4,6 +4,7 @@ import type { Tx } from '../db';
 import { audit } from '../audit';
 import { DomainError, assert } from '../errors';
 import { bootstrapCompany } from './company';
+import { wipeMdmData } from '../mdm/wipe';
 import type { Actor } from './items';
 import { isCurrencyCode } from '@/domain/company';
 
@@ -128,12 +129,12 @@ export async function setCompanyAccess(tx: Tx, actor: Actor, userId: string, com
 /** Zapisi koji firmu čine „nepraznom" (brisanje firme dopušteno samo bez njih — ili nakon „Obriši sve" u opasnoj zoni). */
 export async function companyUsage(tx: Tx, companyId: string) {
   const w = { companyId };
-  const [items, invoices, partners, contracts, quotes, expenses, supplierInvoices, serviceOrders, purchaseOrders, receipts, transfers] = await Promise.all([
+  const [items, invoices, partners, contracts, quotes, expenses, supplierInvoices, serviceOrders, purchaseOrders, receipts, transfers, mdmDevices] = await Promise.all([
     tx.item.count({ where: w }), tx.invoice.count({ where: w }), tx.partner.count({ where: w }), tx.contract.count({ where: w }),
     tx.quote.count({ where: w }), tx.expense.count({ where: w }), tx.supplierInvoice.count({ where: w }), tx.serviceOrder.count({ where: w }),
-    tx.purchaseOrder.count({ where: w }), tx.goodsReceipt.count({ where: w }), tx.transfer.count({ where: w }),
+    tx.purchaseOrder.count({ where: w }), tx.goodsReceipt.count({ where: w }), tx.transfer.count({ where: w }), tx.mdmDevice.count({ where: w }),
   ]);
-  return { items, invoices, partners, contracts, quotes, expenses, supplierInvoices, serviceOrders, purchaseOrders, receipts, transfers };
+  return { items, invoices, partners, contracts, quotes, expenses, supplierInvoices, serviceOrders, purchaseOrders, receipts, transfers, mdmDevices };
 }
 
 /**
@@ -156,11 +157,15 @@ export async function deleteCompany(tx: Tx, actor: Actor, companyId: string, con
   assert(!stuck.length, `Korisnici ${stuck.map((u) => u.name).join(', ')} nemaju drugu firmu — dodijelite im pristup drugoj firmi ili ih obrišite.`);
   for (const u of home) await tx.user.update({ where: { id: u.id }, data: { companyId: u.companies[0].companyId } });
   await tx.userCompany.deleteMany({ where: { companyId } });
+  // preostali MDM podaci (organizacije, profili, datoteke) imaju ograničenja (RESTRICT) koja kaskadno brisanje firme ne prolazi
+  const mdm = await wipeMdmData(tx, companyId);
   await tx.company.delete({ where: { id: companyId } });
   await audit(tx, actor, { entity: 'company', entityId: companyId, action: 'delete', summary: `Obrisana firma „${c.name}"` });
+  return { mdmFiles: mdm.storageKeys };
 }
 
 const USAGE_LABEL = {
   items: 'uređaja', invoices: 'računa', partners: 'partnera', contracts: 'ugovora', quotes: 'ponuda', expenses: 'troškova',
   supplierInvoices: 'ulaznih računa', serviceOrders: 'servisnih naloga', purchaseOrders: 'narudžbenica', receipts: 'primki', transfers: 'međuskladišnica',
+  mdmDevices: 'MDM uređaja',
 } as const;

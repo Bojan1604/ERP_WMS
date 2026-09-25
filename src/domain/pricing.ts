@@ -56,3 +56,28 @@ export function warrantyEnd(start: string | null | undefined, months: number | n
   const t = new Date(Date.UTC(y, m - 1 + months, d));
   return t.toISOString().slice(0, 10);
 }
+
+/**
+ * Paket (Marže → Paketi): nabavna je zbroj nabavnih uređaja, prijedlog cijene zbroj
+ * preporučenih cijena, a cijena paketa ručna ili prijedlog; profit i bruto marža iz njih.
+ */
+export function packageTotals(items: Array<{ cost: number; price: number }>, price: number | null) {
+  const cost = r2(items.reduce((a, i) => a + i.cost, 0));
+  const suggested = r2(items.reduce((a, i) => a + i.price, 0));
+  const total = price ?? suggested;
+  return { cost, suggested, price: total, profit: r2(total - cost), margin: grossMargin(total, cost) };
+}
+
+/**
+ * Cijena paketa raspoređena na uređaje razmjerno preporučenim cijenama (bez preporučenih
+ * — jednako); razlika zaokruživanja ide na prvu stavku, pa je zbroj točno cijena paketa.
+ * Bez cijene paketa vrijede preporučene cijene.
+ */
+export function distributePackagePrice(prices: number[], total: number | null): number[] {
+  if (!prices.length) return [];
+  if (total === null) return prices.map(r2);
+  const sum = prices.reduce((a, p) => a + p, 0);
+  const out = prices.map((p) => r2(sum > 0 ? (p / sum) * total : total / prices.length));
+  out[0] = r2(out[0] + total - out.reduce((a, p) => a + p, 0));
+  return out;
+}

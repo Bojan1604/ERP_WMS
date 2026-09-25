@@ -65,6 +65,7 @@ async function richCompany() {
   await db.emailLog.create({ data: { companyId: c, kind: 'quote', entityId: quote.id, to: 'k@k.hr', subject: 'Ponuda', status: 'FAILED', error: 'x' } });
   await db.fiscalLog.create({ data: { companyId: c, kind: 'FISCAL', ok: true } });
   await db.priceAgreement.create({ data: { companyId: c, partnerId: s.partner.id, modelId: s.model.id, salePrice: 180 } });
+  await db.package.create({ data: { companyId: c, name: 'Paket', items: { create: [{ itemId: s.items[5].id }] } } });
   const portal = await db.portalUser.create({ data: { companyId: c, partnerId: s.partner.id, email: `p${Math.random()}@k.hr`, passwordHash: await bcrypt.hash('portal123', 4) } });
   return { ...s, sale, contract, quote, portal };
 }
@@ -77,6 +78,7 @@ const counts = (c: string) =>
     db.transfer.count({ where: { companyId: c } }), db.stocktake.count({ where: { companyId: c } }), db.attachment.count({ where: { companyId: c } }),
     db.emailLog.count({ where: { companyId: c } }), db.itemEvent.count({ where: { companyId: c } }), db.documentCounter.count({ where: { companyId: c } }),
     db.approvalRequest.count({ where: { companyId: c } }), db.fiscalLog.count({ where: { companyId: c } }), db.rentOverride.count({ where: { companyId: c } }),
+    db.package.count({ where: { companyId: c } }),
   ]);
 
 test('opasna zona: potvrda traži pravo, lozinku i točan naziv firme', async () => {
@@ -102,7 +104,7 @@ test('opasna zona: „Obriši promet" briše sav promet u jednoj transakciji, a 
 
   const deleted = await db.$transaction((tx) => deleteTransactions(tx, s.actor), { timeout: 60_000 });
   assert.equal(deleted.Item, 8);
-  assert.deepEqual(await counts(s.companyId), [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  assert.deepEqual(await counts(s.companyId), [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
   // ostaje: partneri, dogovorene cijene, modeli, kategorije, statusi, skladišta, korisnici, portal, postavke
   const c = s.companyId;
   assert.equal(await db.partner.count({ where: { companyId: c } }), 2);

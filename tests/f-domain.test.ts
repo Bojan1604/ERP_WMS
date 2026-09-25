@@ -92,6 +92,11 @@ test('2FA: rezervni kodovi, TOTP i potpisan izazov', async () => {
   // kod od prije 5 minuta više ne vrijedi
   const old = await generate({ secret, epoch: Math.floor(Date.now() / 1000) - 300 });
   assert.equal(await tf.verifyTotpCode(secret, old), old === code);
+  // zaštita od ponovne uporabe: kod koraka ≤ zadnjeg iskorištenog se odbija
+  const step = await tf.verifyTotpStep(secret, code);
+  assert.ok(step && step === Math.floor(Date.now() / 30_000) || step === Math.floor(Date.now() / 30_000) - 1);
+  assert.equal(await tf.verifyTotpStep(secret, code, { after: step }), null);
+  assert.equal(await tf.verifyTotpStep(secret, code, { after: step! - 1 }), step);
 
   const token = tf.signChallenge('user-1');
   assert.equal(tf.readChallenge(token), 'user-1');

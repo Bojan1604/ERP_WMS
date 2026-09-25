@@ -111,6 +111,18 @@ bash backup.sh | restore.sh | update.sh | obrisi-bazu.sh
 
 Ne pokrećite `db:seed` na produkciji — on briše i ponovno stvara demo firmu.
 
+**Podaci na poslužitelju** (Docker volumeni, preživljavaju `docker compose up -d --build`):
+
+| Volumen | U kontejneru | Sadržaj |
+|---|---|---|
+| `pgdata` | `/var/lib/postgresql/data` | baza — i **prilozi dokumenata** (računi, ugovori, servis, nabava, troškovi) |
+| `mdm` | `/data/mdm` (`MDM_STORAGE_DIR`) | MDM aplikacije (APK/MSI), snimke zaslona, zapisnici |
+| `storage` | `/app/storage` (`BACKUP_DIR=/app/storage/backups`) | automatske sigurnosne kopije iz programa (Postavke → Podaci) |
+
+`deploy/backup.sh` (cron, svaku noć) sprema `backups/erp-<datum>.dump` (baza, 30 dana) i
+`backups/files-<datum>.tgz` (MDM + storage, 7 dana); `restore.sh <dump> [files.tgz]` vraća oboje.
+Kopije držite i izvan poslužitelja (npr. `rsync` mape `deploy/backups`).
+
 ---
 
 ## Moduli
@@ -218,7 +230,7 @@ Neobavezno u `.env`: `MDM_STORAGE_DIR` (mapa za aplikacije, snimke i zapisnike; 
 ## Arhitektura
 
 Next.js 15 (App Router, server komponente, server akcije) · TypeScript · Prisma 6 · PostgreSQL · Tailwind 4.
-Pravila koda i raspored slojeva: **[CLAUDE.md](CLAUDE.md)**.
+Pravila koda i raspored slojeva: **[CLAUDE.md](CLAUDE.md)**. Zajednički dijelovi (popisi, izvoz, PDF, prilozi, paketi, poslovi): **[docs/RAZVOJ.md](docs/RAZVOJ.md)**.
 
 - `src/domain/` — čista poslovna logika (iznosi, PDV, numeracija, marže, motor naplate najma, eRačun XML…), bez baze, potpuno testirana
 - `src/server/services/` — operacije nad bazom u transakcijama; `changeItemStatus` je jedino mjesto promjene statusa uređaja

@@ -14,6 +14,8 @@ import type { Actor } from './items';
  * Prijava u dva koraka (TOTP, RFC 6238): tajna je u bazi šifrirana
  * (`encryptSecret`, AES-GCM iz AUTH_SECRET), rezervni kodovi samo kao sha256
  * sažeci — iskorišteni se brišu. Tolerancija ±30 s (jedan korak) za neusklađen sat mobitela.
+ * Zaštita od ponovne uporabe: pamti se zadnji iskorišteni korak (`User.totpLastStep`) i
+ * kod istog ili starijeg koraka se odbija (RFC 6238, 5.2).
  */
 export const TOTP_ISSUER = 'ERP · WMS';
 export const BACKUP_CODE_COUNT = 10;
@@ -32,16 +34,41 @@ export function generateBackupCodes(n = BACKUP_CODE_COUNT): { plain: string[]; h
   return { plain, hashes: plain.map((c) => sha(normalizeBackupCode(c))) };
 }
 
-/** Provjera šesteroznamenkastog koda (±1 korak od 30 s). */
-export async function verifyTotpCode(secret: string, code: string, epoch?: number): Promise<boolean> {
+/**
+ * Provjera šesteroznamenkastog koda (±1 korak od 30 s): vraća vremenski korak koda
+ * ili null. Uz `after` se odbija kod koraka ≤ `after` (već iskorišten).
+ */
+export async function verifyTotpStep(secret: string, code: string, opts: { after?: number | null; epoch?: number } = {}): Promise<number | null> {
   const token = code.replace(/\s/g, '');
-  if (!/^\d{6}$/.test(token)) return false;
+  if (!/^\d{6}$/.test(token)) return null;
   try {
-    const r = await verify({ secret, token, epochTolerance: 30, ...(epoch !== undefined ? { epoch } : {}) });
-    return r.valid;
+    const r = await verify({
+      secret,
+      token,
+      epochTolerance: 30,
+      ...(opts.epoch !== undefined ? { epoch: opts.epoch } : {}),
+      ...(opts.after != null ? { afterTimeStep: opts.after } : {}),
+    });
+    return r.valid && 'timeStep' in r ? r.timeStep : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** Provjera koda bez pamćenja koraka (±1 korak od 30 s). */
+export async function verifyTotpCode(secret: string, code: string, epoch?: number): Promise<boolean> {
+  return (await verifyTotpStep(secret, code, { epoch })) !== null;
+}
+
+/**
+ * Kod iz aplikacije za korisnika: ispravan i noviji od zadnjeg iskorištenog; korak se
+ * upisuje atomski (dvije istodobne prijave istim kodom ne prolaze obje).
+ */
+async function consumeTotp(tx: Tx, userId: string, secret: string, code: string, last: number | null): Promise<boolean> {
+  const step = await verifyTotpStep(secret, code, { after: last });
+  if (step === null) return false;
+  const n = await tx.$executeRaw`UPDATE "User" SET "totpLastStep" = ${step} WHERE id = ${userId} AND ("totpLastStep" IS NULL OR "totpLastStep" < ${step})`;
+  return n > 0;
 }
 
 /** Korak 1 uključivanja: nova tajna (još neaktivna) + QR kod za aplikaciju. */
@@ -61,7 +88,9 @@ export async function confirmTotpSetup(tx: Tx, actor: Actor, code: string) {
   assert(!u.totpEnabled, 'Prijava u dva koraka je već uključena.');
   const secret = decryptSecret(u.totpSecret);
   assert(secret, 'Najprije pokrenite uključivanje (skenirajte QR kod).');
-  assert(await verifyTotpCode(secret, code), 'Kod nije ispravan — provjerite vrijeme na mobitelu i upišite novi kod.');
+  // nova tajna: prethodni koraci ne vrijede, a ovaj kod se ne može iskoristiti za prijavu
+  await tx.user.update({ where: { id: actor.id }, data: { totpLastStep: null } });
+  assert(await consumeTotp(tx, actor.id, secret, code, null), 'Kod nije ispravan — provjerite vrijeme na mobitelu i upišite novi kod.');
   const codes = generateBackupCodes();
   await tx.user.update({ where: { id: actor.id }, data: { totpEnabled: true, backupCodes: codes.hashes } });
   await audit(tx, actor, { entity: 'user', entityId: actor.id, action: '2fa-on', summary: 'Uključena prijava u dva koraka' });
@@ -70,9 +99,9 @@ export async function confirmTotpSetup(tx: Tx, actor: Actor, code: string) {
 
 /** Novi rezervni kodovi (stari prestaju vrijediti). Traži važeći kod iz aplikacije. */
 export async function regenerateBackupCodes(tx: Tx, actor: Actor, code: string) {
-  const u = await tx.user.findUniqueOrThrow({ where: { id: actor.id }, select: { totpSecret: true, totpEnabled: true } });
+  const u = await tx.user.findUniqueOrThrow({ where: { id: actor.id }, select: { totpSecret: true, totpEnabled: true, totpLastStep: true } });
   assert(u.totpEnabled && u.totpSecret, 'Prijava u dva koraka nije uključena.');
-  assert(await verifyTotpCode(decryptSecret(u.totpSecret)!, code), 'Kod nije ispravan.');
+  assert(await consumeTotp(tx, actor.id, decryptSecret(u.totpSecret)!, code, u.totpLastStep), 'Kod nije ispravan ili je već iskorišten — pričekajte novi kod.');
   const codes = generateBackupCodes();
   await tx.user.update({ where: { id: actor.id }, data: { backupCodes: codes.hashes } });
   await audit(tx, actor, { entity: 'user', entityId: actor.id, action: '2fa-codes', summary: 'Izdani novi rezervni kodovi za prijavu u dva koraka' });
@@ -84,7 +113,7 @@ export async function disableOwnTotp(tx: Tx, actor: Actor, password: string) {
   const u = await tx.user.findUniqueOrThrow({ where: { id: actor.id }, select: { passwordHash: true, totpEnabled: true } });
   assert(u.totpEnabled, 'Prijava u dva koraka nije uključena.');
   assert(await bcrypt.compare(password, u.passwordHash), 'Lozinka nije ispravna.');
-  await tx.user.update({ where: { id: actor.id }, data: { totpEnabled: false, totpSecret: null, backupCodes: [] } });
+  await tx.user.update({ where: { id: actor.id }, data: { totpEnabled: false, totpSecret: null, totpLastStep: null, backupCodes: [] } });
   await audit(tx, actor, { entity: 'user', entityId: actor.id, action: '2fa-off', summary: 'Isključena prijava u dva koraka' });
 }
 
@@ -96,20 +125,20 @@ export async function resetUserTotp(tx: Tx, actor: Actor, userId: string, compan
   const u = await tx.user.findFirst({ where: { id: userId, OR: [{ companyId }, { companies: { some: { companyId } } }] }, select: { name: true, totpEnabled: true, totpSecret: true } });
   assert(u, 'Korisnik ne postoji.');
   assert(u.totpEnabled || u.totpSecret, `${u.name} nema uključenu prijavu u dva koraka.`);
-  await tx.user.update({ where: { id: userId }, data: { totpEnabled: false, totpSecret: null, backupCodes: [] } });
+  await tx.user.update({ where: { id: userId }, data: { totpEnabled: false, totpSecret: null, totpLastStep: null, backupCodes: [] } });
   await tx.session.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } });
   await audit(tx, actor, { entity: 'user', entityId: userId, action: '2fa-reset', summary: `Poništena prijava u dva koraka za ${u.name} — odjavljen sa svih uređaja` });
 }
 
 /**
- * Drugi korak prijave: TOTP kod ili rezervni kod (iskorišteni rezervni kod se
+ * Drugi korak prijave: TOTP kod (jednom po koraku) ili rezervni kod (iskorišteni se
  * briše atomski — dvije istovremene prijave istim kodom ne prolaze obje).
  */
 export async function checkSecondFactor(tx: Tx, userId: string, code: string): Promise<'totp' | 'backup' | null> {
-  const u = await tx.user.findUnique({ where: { id: userId }, select: { totpEnabled: true, totpSecret: true, backupCodes: true } });
+  const u = await tx.user.findUnique({ where: { id: userId }, select: { totpEnabled: true, totpSecret: true, totpLastStep: true, backupCodes: true } });
   if (!u?.totpEnabled || !u.totpSecret) return null;
   const clean = code.trim();
-  if (/^\d{6}$/.test(clean.replace(/\s/g, ''))) return (await verifyTotpCode(decryptSecret(u.totpSecret)!, clean)) ? 'totp' : null;
+  if (/^\d{6}$/.test(clean.replace(/\s/g, ''))) return (await consumeTotp(tx, userId, decryptSecret(u.totpSecret)!, clean, u.totpLastStep)) ? 'totp' : null;
   const h = sha(normalizeBackupCode(clean));
   if (!u.backupCodes.includes(h)) return null;
   const n = await tx.$executeRaw`UPDATE "User" SET "backupCodes" = array_remove("backupCodes", ${h}) WHERE id = ${userId} AND ${h} = ANY("backupCodes")`;

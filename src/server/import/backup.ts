@@ -74,6 +74,8 @@ function tables(companyId: string): Array<[string, Fetch | (() => Promise<Row[]>
     ['emailLogs', byId((a) => db.emailLog.findMany({ ...a, where: w }))],
     // lozinke korisnika portala su bcrypt sažeci — uključeni da se klijenti nakon vraćanja mogu prijaviti
     ['portalUsers', () => db.portalUser.findMany({ where: w, orderBy: { id: 'asc' } })],
+    ['packages', byId((a) => db.package.findMany({ ...a, where: w }))],
+    ['packageItems', () => db.packageItem.findMany({ where: { package: w }, orderBy: [{ packageId: 'asc' }, { sort: 'asc' }] })],
   ];
 }
 
@@ -197,6 +199,7 @@ export function backupToPlan(raw: Row): ImportPlan {
   plan.models = arr(raw, 'models').map((r) => ({
     key: s(r.id)!, categoryKey: s(r.categoryId), brand: s(r.brand), name: s(r.name)!, code: s(r.code), kpd: s(r.kpd), salePrice: nn(r.salePrice), rentPrice: nn(r.rentPrice),
     marginPct: nn(r.marginPct), warrantyMonths: nn(r.warrantyMonths), minStock: n(r.minStock), specs: s(r.specs), active: r.active !== false,
+    cpu: s(r.cpu), screen: s(r.screen), os: s(r.os),
   }));
   plan.statuses = arr(raw, 'statuses').map((r) => ({ key: s(r.id)!, name: s(r.name)!, kind: r.kind as never, color: s(r.color) ?? 'gray', system: !!r.system, sort: n(r.sort) }));
   plan.services = arr(raw, 'services').map((r) => ({ key: s(r.id)!, name: s(r.name)!, unit: s(r.unit) ?? 'kom', price: n(r.price), kpd: s(r.kpd), active: r.active !== false }));
@@ -213,6 +216,7 @@ export function backupToPlan(raw: Row): ImportPlan {
     cost: n(r.cost), salePrice: nn(r.salePrice), rentPrice: nn(r.rentPrice), marginPct: nn(r.marginPct), importDate: day(r.importDate), issueDate: day(r.issueDate),
     warrantyStart: day(r.warrantyStart), warrantyMonths: nn(r.warrantyMonths), outAt: s(r.outAt), outPartnerKey: s(r.outPartnerId), outNote: s(r.outNote),
     writeOffDate: day(r.writeOffDate), writeOffReason: s(r.writeOffReason), note: s(r.note), createdAt: s(r.createdAt),
+    categoryKey: s(r.categoryId), cpu: s(r.cpu), screen: s(r.screen), os: s(r.os),
   }));
   for (const it of plan.items) normalizeItemState(it);
 
@@ -314,6 +318,12 @@ export function backupToPlan(raw: Row): ImportPlan {
       lastLoginAt: s(r.lastLoginAt), createdAt: s(r.createdAt),
     }));
 
+  const pkgItems = group(arr(raw, 'packageItems'), 'packageId');
+  plan.packages = arr(raw, 'packages').map((r) => ({
+    key: s(r.id)!, name: s(r.name) ?? 'Paket', price: nn(r.price), note: s(r.note), createdAt: s(r.createdAt),
+    itemKeys: (pkgItems.get(s(r.id)!) ?? []).map((x) => s(x.itemId)!).filter(Boolean),
+  }));
+
   if (plan.users.length) W(`Korisnici iz kopije (${plan.users.length}) nisu vraćeni — u novoj firmi dodajte ih u Postavke → Korisnici.`);
   for (const note of Array.isArray(raw.notes) ? raw.notes : []) if (typeof note === 'string') W(note);
   return plan;
@@ -347,7 +357,7 @@ export function backupAttachments(rows: Row[], w: Warnings): PlanAttachment[] {
     }
     out.push({
       entity, entityKey: entityKey!, fileName: safeFileName(s(r.fileName), check.mime), mime: check.mime, size: bytes.byteLength,
-      base64: bytes.toString('base64'), createdBy: s(r.createdBy), createdAt: s(r.createdAt),
+      base64: bytes.toString('base64'), createdBy: s(r.createdBy), createdAt: s(r.createdAt), public: r.public === true,
     });
   }
   return out;

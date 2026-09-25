@@ -9,9 +9,6 @@ export const PORTAL_MAX_PHOTOS = 4;
 /** Trajanje sesije klijenta portala (dana). */
 export const PORTAL_SESSION_DAYS = 30;
 
-/** Najmanja duljina lozinke portala. */
-export const PORTAL_MIN_PASSWORD = 8;
-
 /** Filtar jamstva na popisu uređaja: u jamstvu, isteklo, bez podatka. */
 export const PORTAL_WARRANTY = { u: 'U jamstvu', isteklo: 'Jamstvo isteklo', bez: 'Bez podatka o jamstvu' } as const;
 export type PortalWarranty = keyof typeof PORTAL_WARRANTY;

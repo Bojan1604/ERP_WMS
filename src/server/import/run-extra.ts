@@ -10,8 +10,8 @@ const MAIL_ENTITY: Record<string, string> = {
 };
 
 /**
- * Tablice koje ima samo sigurnosna kopija ovog programa: dnevnik e-pošte i
- * korisnici portala. E-adresa korisnika portala je jedinstvena u cijeloj bazi —
+ * Tablice koje ima samo sigurnosna kopija ovog programa (dnevnik e-pošte,
+ * korisnici portala) i paketi (stara verzija i kopija). E-adresa korisnika portala je jedinstvena u cijeloj bazi —
  * ako je zauzeta (npr. izvorna firma još postoji), korisnik se preskače.
  */
 export async function insertExtras(c: RunCtx, plan: ImportPlan) {
@@ -37,5 +37,19 @@ export async function insertExtras(c: RunCtx, plan: ImportPlan) {
     });
   }
   c.count('portalUsers', portal.length, (plan.portalUsers?.length ?? 0) - portal.length);
-  c.step('emailLogs+portalUsers', mails.length + portal.length);
+
+  // paketi: samo uređaji upisani ovim uvozom (postojeći uređaji ciljne firme ostaju izvan paketa)
+  let packages = 0;
+  for (const p of plan.packages ?? []) {
+    const itemIds = [...new Set(p.itemKeys.filter((k) => c.isFresh('items', k)).map((k) => c.id('items', k)!).filter(Boolean))];
+    await tx.package.create({
+      data: {
+        companyId, name: p.name, price: p.price, note: p.note, createdAt: ts(p.createdAt) ?? undefined,
+        items: { create: itemIds.map((itemId, sort) => ({ itemId, sort })) },
+      },
+    });
+    packages++;
+  }
+  c.count('packages', packages);
+  c.step('emailLogs+portalUsers+packages', mails.length + portal.length + packages);
 }

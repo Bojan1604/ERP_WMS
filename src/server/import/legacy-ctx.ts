@@ -4,7 +4,7 @@
  */
 import type { StatusKind } from '@prisma/client';
 import { DocNumbers, Warnings, type ImportPlan, type Key, type PlanInvoice, type PlanItem } from './plan';
-import { INVALID, parseLegacyDate, parseLegacyNumber, parseLegacyTimestamp } from './legacy-parse';
+import { INVALID, parseLegacyDate, parseLegacyTimestamp } from './legacy-parse';
 import { r2 } from '@/domain/money';
 
 export class LegacyCtx {

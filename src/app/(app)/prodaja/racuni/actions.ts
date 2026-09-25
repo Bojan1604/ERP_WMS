@@ -87,6 +87,8 @@ const zInvoice = z.object({
   contractId: zOptId,
   period: z.preprocess((v) => (v === '' || v == null ? null : v), z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Razdoblje najma nije ispravno').nullable()).optional(),
   rent: zRentTerms.nullable().optional(),
+  /** „Zatim naplata prelazi u": od datuma `from` novi uređaji prelaze na naplatu `billing`. */
+  rentNext: z.object({ billing: z.enum(['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL']), from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Upišite datum od kojeg naplata prelazi na drugu učestalost') }).nullable().optional(),
 });
 
 /**
@@ -119,6 +121,10 @@ export const saveInvoice = action({ module: 'sales', level: 'edit' }, zInvoice, 
         contractId = (await checkInvoiceContract(tx, user, input.contractId, input.partnerId)).id;
       }
     }
+    // naplata novih uređaja kreće od datuma računa (ne ranije od početka novog ugovora)
+    const rentStart = input.contractId === 'new' && input.rent && input.rent.startDate > input.date ? input.rent.startDate : input.date;
+    const rentNext = rentUsed && contractId && input.rentNext ? input.rentNext : null;
+    if (rentNext) assert(rentNext.from > rentStart, 'Datum prijelaza na drugu naplatu mora biti nakon početka naplate.');
     const data: InvoiceInput = {
       type,
       kind: input.kind,
@@ -139,6 +145,7 @@ export const saveInvoice = action({ module: 'sales', level: 'edit' }, zInvoice, 
       description: input.description,
       note: input.note,
       paymentMethod: input.paymentMethod,
+      rentNext,
       // količina 0 se ne pretvara u 1 — servis je odbija s porukom
       lines: input.lines,
     };

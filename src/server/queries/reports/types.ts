@@ -172,9 +172,6 @@ export function itemFilterSql(f: ReportFilters, a: { item?: string; model?: stri
   return Prisma.sql`${cat} ${inIds(`${it}."modelId"`, f.modelIds)} ${inIds(`${it}."statusId"`, f.statusIds)} ${inIds(`${it}."warehouseId"`, f.warehouseIds)} ${inIds(`${it}."supplierId"`, f.supplierIds)} ${a.partner === false ? Prisma.empty : inIds(`${it}."partnerId"`, f.partnerIds)}`;
 }
 
-/** Filtri modela (stavke bez konkretnog uređaja): kategorija i model. */
-export const modelFilterSql = (f: ReportFilters, m = 'm') => Prisma.sql`${inIds(`${m}."categoryId"`, f.categoryIds)} ${inIds(`${m}.id`, f.modelIds)}`;
-
 /** Oznaka razdoblja za naslove („2026." / „sve godine" / „1. 3. 2026. – 31. 5. 2026."). */
 export function periodLabel(f: Pick<ReportFilters, 'year' | 'from' | 'to'>): string {
   const { from, to } = periodBounds(f);

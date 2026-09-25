@@ -2,7 +2,7 @@ import 'server-only';
 import { Prisma } from '@prisma/client';
 import { db } from '../db';
 import { getCompany } from './lookups';
-import { addDays, fromISO, today } from '@/domain/dates';
+import { fromISO, today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import { grossMargin, priceFromMargin, suggestedSalePrice } from '@/domain/pricing';
 import { expandExpense, type FrequencyCode } from '@/domain/expenses';
@@ -373,64 +373,6 @@ export async function modelMargins(companyId: string) {
       };
     }),
   };
-}
-
-/**
- * Paketi: otvorene ponude i predračuni s uređajima — ukupna nabavna (uređaji,
- * a za stavke po modelu prosječna nabavna na skladištu), cijena paketa (osnovica
- * ponude), profit i marža.
- */
-export async function packages(companyId: string, f: MarginFilters) {
-  const quotes = await db.quote.findMany({
-    where: {
-      companyId,
-      status: { in: ['DRAFT', 'SENT'] },
-      OR: [{ validUntil: null }, { validUntil: { gte: fromISO(addDays(today(), -365)) } }],
-      lines: { some: { kind: { in: ['DEVICE', 'MODEL'] } } },
-      ...(f.partners.length ? { partnerId: { in: f.partners } } : {}),
-      ...(f.q ? { AND: [{ OR: [{ number: { contains: f.q, mode: 'insensitive' } }, { note: { contains: f.q, mode: 'insensitive' } }, { partner: { name: { contains: f.q, mode: 'insensitive' } } }] }] } : {}),
-    },
-    orderBy: [{ date: 'desc' }],
-    take: 60,
-    select: {
-      id: true,
-      number: true,
-      kind: true,
-      note: true,
-      date: true,
-      netTotal: true,
-      partner: { select: { name: true } },
-      lines: { select: { kind: true, qty: true, modelId: true, lineType: true, description: true, item: { select: { cost: true } } } },
-    },
-  });
-  const modelIds = [...new Set(quotes.flatMap((q) => q.lines.filter((l) => l.kind === 'MODEL' && l.modelId).map((l) => l.modelId!)))];
-  const avg = modelIds.length
-    ? await db.item.groupBy({ by: ['modelId'], where: { companyId, modelId: { in: modelIds }, state: { in: ['IN_STOCK', 'RESERVED'] } }, _avg: { cost: true } })
-    : [];
-  const avgCost = new Map(avg.map((a) => [a.modelId, num(a._avg.cost)]));
-  return quotes.map((q) => {
-    // najam ne ulazi u maržu paketa (mjesečna cijena)
-    const sale = q.lines.filter((l) => l.lineType !== 'RENT');
-    const cost = r2(
-      sale.reduce((a, l) => a + (l.kind === 'DEVICE' ? num(l.item?.cost) : l.kind === 'MODEL' && l.modelId ? (avgCost.get(l.modelId) ?? 0) * num(l.qty) : 0), 0),
-    );
-    const price = num(q.netTotal);
-    const devices = q.lines.filter((l) => l.kind === 'DEVICE' || l.kind === 'MODEL').reduce((a, l) => a + num(l.qty), 0);
-    return {
-      id: q.id,
-      number: q.number,
-      kind: q.kind,
-      note: q.note,
-      date: q.date,
-      partner: q.partner.name,
-      devices,
-      models: [...new Set(q.lines.filter((l) => l.kind === 'DEVICE' || l.kind === 'MODEL').map((l) => l.description))].slice(0, 6),
-      cost,
-      price,
-      profit: r2(price - cost),
-      margin: grossMargin(price, cost),
-    };
-  });
 }
 
 /** Godine s prodanim uređajima (za odabir godine). */

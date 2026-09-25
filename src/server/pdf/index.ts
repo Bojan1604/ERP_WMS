@@ -13,14 +13,6 @@ export { renderPdf, pdfResponse, BASE_DOC } from './engine';
 export { renderTablePdf, tableDocDefinition, formatCell, type TablePdfInput } from './table';
 export { PDF_KINDS, PDF_KIND_LABEL, isPdfKind, type PdfKind } from '@/domain/documents';
 
-/** Vrsta dokumenta još nema PDF predložak — ruta /api/pdf vraća 501. */
-export class PdfNotImplementedError extends DomainError {
-  constructor(kind: string) {
-    super(`PDF za „${kind}" još nije dostupan.`);
-    this.name = 'PdfNotImplementedError';
-  }
-}
-
 export interface RenderedDocument {
   buffer: Buffer;
   /** Naziv datoteke bez putanje, npr. `Racun-12-PP1-1.pdf`. */
@@ -53,8 +45,11 @@ export async function documentDefinitionFor(kind: PdfKind, id: string, companyId
       return renderReceiptDefinition(companyId, id, !!opts.showCost);
     case 'contract-list':
       return renderContractListDefinition(companyId, id);
-    default:
-      throw new PdfNotImplementedError(String(kind));
+    default: {
+      // sve vrste iz PDF_KINDS imaju predložak (provjera pri prevođenju); nepoznata vrsta izvana → greška
+      const unknown: never = kind;
+      throw new DomainError(`Nepoznata vrsta dokumenta „${String(unknown)}".`);
+    }
   }
 }
 

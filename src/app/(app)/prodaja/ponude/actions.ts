@@ -26,6 +26,7 @@ const zLine = z.object({
 const zQuote = z.object({
   id: zOptId,
   kind: z.enum(['QUOTE', 'PROFORMA']).default('QUOTE'),
+  title: z.preprocess((v) => (typeof v === 'string' && v.trim() ? v.trim() : null), z.string().max(60, 'Naslov je predug (najviše 60 znakova)').nullable()).optional(),
   partnerId: zId,
   date: zDate,
   validUntil: zOptDate,

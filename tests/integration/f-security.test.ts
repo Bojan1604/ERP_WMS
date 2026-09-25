@@ -41,7 +41,9 @@ test('2FA: uključivanje s QR kodom, drugi korak prijave, rezervni kod vrijedi j
   assert.equal(await transaction((tx) => checkSecondFactor(tx, s.user.id, '123456')), null);
 
   await assert.rejects(transaction((tx) => confirmTotpSetup(tx, s.actor, '000000')), /Kod nije ispravan/);
-  const codes = await transaction(async (tx) => confirmTotpSetup(tx, s.actor, await generate({ secret: setup.secret })));
+  // potvrda kodom prethodnog koraka (unutar tolerancije); taj se korak više ne prihvaća
+  const now = () => Math.floor(Date.now() / 1000);
+  const codes = await transaction(async (tx) => confirmTotpSetup(tx, s.actor, await generate({ secret: setup.secret, epoch: now() - 30 })));
   assert.equal(codes.length, 10);
   const enabled = await db.user.findUniqueOrThrow({ where: { id: s.user.id } });
   assert.equal(enabled.totpEnabled, true);
@@ -49,7 +51,11 @@ test('2FA: uključivanje s QR kodom, drugi korak prijave, rezervni kod vrijedi j
   assert.ok(!enabled.backupCodes.includes(codes[0]), 'u bazi su samo sažeci');
 
   // drugi korak: TOTP, pogrešan kod, rezervni kod (jednom), rezervni kod velikim slovima i bez crtice
-  assert.equal(await transaction(async (tx) => checkSecondFactor(tx, s.user.id, await generate({ secret: setup.secret }))), 'totp');
+  const current = await generate({ secret: setup.secret });
+  assert.equal(await transaction((tx) => checkSecondFactor(tx, s.user.id, current)), 'totp');
+  // isti kod (isti korak) drugi put ne prolazi — zaštita od ponovne uporabe
+  assert.equal(await transaction((tx) => checkSecondFactor(tx, s.user.id, current)), null, 'iskorišten TOTP kod ne vrijedi');
+  assert.ok((await db.user.findUniqueOrThrow({ where: { id: s.user.id } })).totpLastStep);
   assert.equal(await transaction((tx) => checkSecondFactor(tx, s.user.id, '999999')), null);
   assert.equal(await transaction((tx) => checkSecondFactor(tx, s.user.id, codes[0])), 'backup');
   assert.equal(await transaction((tx) => checkSecondFactor(tx, s.user.id, codes[0])), null, 'iskorišten rezervni kod ne vrijedi');
@@ -60,7 +66,8 @@ test('2FA: uključivanje s QR kodom, drugi korak prijave, rezervni kod vrijedi j
   assert.equal((await db.user.findUniqueOrThrow({ where: { id: s.user.id } })).backupCodes.length, 7);
 
   // novi rezervni kodovi zamjenjuju stare
-  const fresh = await transaction(async (tx) => regenerateBackupCodes(tx, s.actor, await generate({ secret: setup.secret })));
+  await assert.rejects(transaction((tx) => regenerateBackupCodes(tx, s.actor, current)), /već iskorišten/);
+  const fresh = await transaction(async (tx) => regenerateBackupCodes(tx, s.actor, await generate({ secret: setup.secret, epoch: now() + 30 })));
   assert.equal(await transaction((tx) => checkSecondFactor(tx, s.user.id, codes[3])), null);
   assert.equal(await transaction((tx) => checkSecondFactor(tx, s.user.id, fresh[0])), 'backup');
 
@@ -176,7 +183,7 @@ test('automatsko izdavanje rata: jednom dnevno, idempotentno i uz dva istodobna 
 
   // bez uključene opcije dnevni posao firmu preskače
   assert.ok(!(await runAutoIssue()).some((r) => r.companyId === s.companyId));
-  await db.company.update({ where: { id: s.companyId }, data: { autoIssueRent: true } });
+  await db.company.update({ where: { id: s.companyId }, data: { autoIssueRent: true, autoIssueSince: fromISO(start) } });
 
   const [a, b] = await Promise.all([autoIssueCompany(s.companyId, { fiscalize: false }), autoIssueCompany(s.companyId, { fiscalize: false })]);
   const issued = a.issued.length + b.issued.length;

@@ -3,7 +3,7 @@ import { TrendingUp } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { can } from '@/domain/permissions';
 import { getLookups, getPartnerOptions } from '@/server/queries/lookups';
-import { business, marginGroups, marginTotals, marginYears, modelMargins, packages, readMarginFilters, soldItems, type MarginFilters, type MarginGroup } from '@/server/queries/margins';
+import { business, marginGroups, marginTotals, marginYears, modelMargins, readMarginFilters, soldItems, type MarginFilters, type MarginGroup } from '@/server/queries/margins';
 import { PageHeader, Card, Stat, TableWrap, Empty, Badge } from '@/components/ui/misc';
 import { Tabs } from '@/components/ui/tabs';
 import { DateRangeFilter, FilterBar, MultiSelectFilter, SearchFilter, SegmentFilter } from '@/components/ui/filters';
@@ -11,7 +11,9 @@ import { ExportButtons } from '@/components/ui/export-buttons';
 import { Pagination, readPage } from '@/components/ui/pagination';
 import { BarChart } from '@/components/charts/bar-chart';
 import { HBarChart } from '@/components/charts/hbar-chart';
-import { GlobalMarginForm, ModelMarginInput, PackageBuilder } from '@/components/sales/margin-controls';
+import { GlobalMarginForm, ModelMarginInput } from '@/components/sales/margin-controls';
+import { PackageEditor } from '@/components/sales/package-controls';
+import { PackagesView } from './packages-view';
 import { amount, date, eur, integer, pct } from '@/lib/format';
 import { cn } from '@/lib/cn';
 
@@ -44,6 +46,11 @@ export default async function MarginsPage({ searchParams }: { searchParams: Prom
   const tabHref = (v: string) => `${BASE}?${new URLSearchParams([...keep.entries(), ...(v === 'poslovanje' ? [] : [['pogled', v]])])}`;
   const exportQs = new URLSearchParams([...keep.entries(), ['pogled', f.view]]);
   const cur = String(years[0] ?? '');
+  const catalog = {
+    models: lookups.models.map((m) => ({ id: m.id, brand: m.brand, name: m.name, categoryId: m.categoryId, salePrice: null, warrantyMonths: m.warrantyMonths, kpd: m.kpd })),
+    categories: lookups.categories,
+    warehouses: lookups.warehouses,
+  };
 
   return (
     <>
@@ -53,33 +60,31 @@ export default async function MarginsPage({ searchParams }: { searchParams: Prom
         actions={
           <>
             {['artikl', 'kupac', 'model', 'kategorija'].includes(f.view) && <ExportButtons href={`/api/prodaja/marze?${exportQs}`} />}
-            {f.view === 'paketi' && edit && (
-              <PackageBuilder
-                partners={partners.map((p) => ({ id: p.id, name: p.name }))}
-                models={lookups.models.map((m) => ({ id: m.id, brand: m.brand, name: m.name, categoryId: m.categoryId, salePrice: null, warrantyMonths: m.warrantyMonths, kpd: m.kpd }))}
-                categories={lookups.categories}
-                warehouses={lookups.warehouses}
-              />
-            )}
+            {f.view === 'paketi' && edit && <PackageEditor catalog={catalog} />}
           </>
         }
       />
       <Tabs tabs={VIEWS.map(([v, label]) => ({ href: tabHref(v), label }))} param="pogled" />
-      {f.view !== 'marze' && (
+      {f.view === 'paketi' && (
+        <FilterBar>
+          <SearchFilter placeholder="Naziv paketa, napomena, serijski broj…" />
+        </FilterBar>
+      )}
+      {f.view !== 'marze' && f.view !== 'paketi' && (
         <FilterBar>
           <SegmentFilter name="godina" options={[{ value: '', label: cur }, ...years.slice(1, 5).map((y) => ({ value: String(y), label: String(y) })), { value: 'sve', label: 'Sve' }]} />
           <SearchFilter placeholder="Serijski broj, model, kupac…" />
           <DateRangeFilter label="Razdoblje" />
           <MultiSelectFilter name="kupac" label="Kupac" options={partners.map((p) => ({ value: p.id, label: p.name }))} />
-          {f.view !== 'paketi' && <MultiSelectFilter name="kategorija" label="Kategorija" options={lookups.categories.map((c) => ({ value: c.id, label: c.name }))} />}
-          {f.view !== 'paketi' && <MultiSelectFilter name="model" label="Model" options={lookups.models.map((m) => ({ value: m.id, label: [m.brand, m.name].filter(Boolean).join(' ') }))} />}
+          <MultiSelectFilter name="kategorija" label="Kategorija" options={lookups.categories.map((c) => ({ value: c.id, label: c.name }))} />
+          <MultiSelectFilter name="model" label="Model" options={lookups.models.map((m) => ({ value: m.id, label: [m.brand, m.name].filter(Boolean).join(' ') }))} />
         </FilterBar>
       )}
       {f.view === 'poslovanje' && <BusinessView companyId={user.companyId} f={f} />}
       {f.view === 'artikl' && <ItemsView companyId={user.companyId} f={f} sp={sp} />}
       {(f.view === 'kupac' || f.view === 'model' || f.view === 'kategorija') && <GroupsView companyId={user.companyId} f={f} by={f.view} />}
       {f.view === 'marze' && <ModelsView companyId={user.companyId} canEdit={edit} />}
-      {f.view === 'paketi' && <PackagesView companyId={user.companyId} f={f} />}
+      {f.view === 'paketi' && <PackagesView companyId={user.companyId} f={f} edit={edit} catalog={catalog} partners={partners.map((p) => ({ id: p.id, name: p.name }))} />}
     </>
   );
 }
@@ -394,54 +399,5 @@ async function ModelsView({ companyId, canEdit }: { companyId: string; canEdit: 
         </table>
       </TableWrap>
     </Card>
-  );
-}
-
-async function PackagesView({ companyId, f }: { companyId: string; f: MarginFilters }) {
-  const rows = await packages(companyId, f);
-  if (!rows.length) {
-    return (
-      <TableWrap>
-        <Empty icon={<TrendingUp className="size-5" />} title="Nema paketa" description={'Paket grupira više uređaja i pokazuje ukupnu maržu — sprema se kao ponuda kupcu (gumb „+ Paket").'} />
-      </TableWrap>
-    );
-  }
-  return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-      {rows.map((p) => (
-        <Card
-          key={p.id}
-          title={
-            <Link prefetch={false} href={`/prodaja/ponude/${p.id}`} className="link">
-              {p.note?.split('\n')[0]?.replace(/^Paket:\s*/, '') || p.number}
-            </Link>
-          }
-          actions={<Badge>{integer(p.devices)} uređaja</Badge>}
-        >
-          <p className="mb-2 text-xs text-fg-3">
-            {p.number} · {p.partner} · {date(p.date)}
-          </p>
-          <div className="grid grid-cols-2 gap-2 text-sm">
-            <div>
-              <p className="text-fg-3">Nabavna</p>
-              <p className="tnum font-medium">{eur(p.cost)}</p>
-            </div>
-            <div>
-              <p className="text-fg-3">Cijena paketa</p>
-              <p className="tnum font-medium">{eur(p.price)}</p>
-            </div>
-            <div>
-              <p className="text-fg-3">Profit</p>
-              <p className={cn('tnum font-medium', p.profit >= 0 ? 'text-ok' : 'text-bad-strong')}>{eur(p.profit)}</p>
-            </div>
-            <div>
-              <p className="text-fg-3">Bruto marža</p>
-              <p className="tnum font-medium">{pct(p.margin)}</p>
-            </div>
-          </div>
-          <p className="mt-2 text-xs text-fg-3">{p.models.join(' · ')}</p>
-        </Card>
-      ))}
-    </div>
   );
 }

@@ -7,11 +7,11 @@ import { audit } from '../audit';
 import { changeItemStatus, itemEvents, type Actor } from './items';
 import { documentTotals, formatInvoiceNumber, lineShareOfNet, openAmount, paymentReference, INVOICE_KIND_LABEL, type ChargeInput } from '@/domain/invoice';
 import { addDays, addMonths, formatDate, fromISO, toISO, today } from '@/domain/dates';
-import { pendingInstallments, type PlanPeriodInput } from '@/domain/billing';
+import { pendingInstallments, type BillingCode, type PlanPeriodInput } from '@/domain/billing';
 import { coveredPeriods, toDevice, toTerms } from './contract-items';
 import { num, r2 } from '@/domain/money';
 import { fiscalAtIssue } from '../fiscal/issue';
-import { billingFromMonths, defaultKpd, effectiveLineType, hasRentLines } from '@/domain/sales-lines';
+import { billingFromMonths, defaultKpd, effectiveLineType, hasRentLines, invoiceRentPlan } from '@/domain/sales-lines';
 
 // ---------------------------------------------------------------- ulazni oblici
 
@@ -55,6 +55,8 @@ export interface InvoiceInput {
   note?: string | null;
   /** Način plaćanja — određuje fiskalizaciju (gotovina/kartica → CIS). */
   paymentMethod?: PaymentMethod;
+  /** Najam: „Zatim naplata prelazi u" — od datuma `from` novi uređaji s računa prelaze na naplatu `billing`. */
+  rentNext?: { billing: BillingCode; from: string } | null;
   lines: LineInput[];
 }
 
@@ -204,6 +206,8 @@ function headerData(input: InvoiceInput) {
     description: input.description ?? null,
     note: input.note ?? null,
     paymentMethod: input.paymentMethod ?? 'TRANSFER',
+    rentNextBilling: input.contractId && input.rentNext ? input.rentNext.billing : null,
+    rentNextFrom: input.contractId && input.rentNext ? fromISO(input.rentNext.from) : null,
   } satisfies Partial<Prisma.InvoiceUncheckedCreateInput>;
 }
 
@@ -399,6 +403,7 @@ async function applyRent(tx: Tx, actor: Actor, inv: IssuingInvoice, rentLines: I
     // dinamički uvoz: rentals.ts uvozi ovaj modul (izbjegava kružni uvoz pri učitavanju)
     const { attachItems } = await import('./rentals');
     const start = toISO(contract.startDate);
+    const next = inv.rentNextBilling && inv.rentNextFrom ? { billing: inv.rentNextBilling, from: toISO(inv.rentNextFrom) } : null;
     await attachItems(
       tx,
       actor,
@@ -406,10 +411,15 @@ async function applyRent(tx: Tx, actor: Actor, inv: IssuingInvoice, rentLines: I
       attach.map((l) => {
         const months = Math.max(1, l.months ?? 1);
         const monthly = l.monthly !== null ? num(l.monthly) : r2(num(l.unitPrice) / months);
-        const billing = l.months ? billingFromMonths(l.months) : contract.billing;
         // uvjeti ugovora vrijede kad se poklapaju; inače uređaj dobiva vlastiti plan od datuma računa
-        const from = date > start ? date : start;
-        const plan: PlanPeriodInput[] = from !== start || billing !== contract.billing ? [{ from, billing }] : [];
+        // (po želji s prijelazom na drugu naplatu od zadanog datuma)
+        const plan: PlanPeriodInput[] = invoiceRentPlan({
+          invoiceDate: date,
+          contractStart: start,
+          contractBilling: contract.billing,
+          lineBilling: l.months ? billingFromMonths(l.months) : contract.billing,
+          next,
+        });
         return { itemId: l.itemId!, monthly, plan };
       }),
       { issueDate: date },

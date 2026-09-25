@@ -2,6 +2,7 @@ import 'server-only';
 import { z } from 'zod';
 import type { Tx } from '../db';
 import { assert } from '../errors';
+import { audit } from '../audit';
 import type { Actor } from './items';
 import { can, type Level, type Module, type PermissionMap } from '@/domain/permissions';
 import {
@@ -87,10 +88,17 @@ export interface NewAttachment {
   data: Uint8Array<ArrayBuffer>;
 }
 
-export const attachmentMeta = { id: true, entity: true, entityId: true, fileName: true, mime: true, size: true, createdAt: true, createdBy: true } as const;
+export const attachmentMeta = { id: true, entity: true, entityId: true, fileName: true, mime: true, size: true, public: true, createdAt: true, createdBy: true } as const;
 
 /** Dodaje priloge jednom zapisu; vrsta se provjerava po sadržaju, ne po nazivu. */
-export async function addAttachments(tx: Tx, actor: Actor, entity: AttachmentEntity, entityId: string, files: Array<{ fileName: string | null; data: Uint8Array<ArrayBuffer> }>) {
+export async function addAttachments(
+  tx: Tx,
+  actor: Actor,
+  entity: AttachmentEntity,
+  entityId: string,
+  files: Array<{ fileName: string | null; data: Uint8Array<ArrayBuffer> }>,
+  opts: { public?: boolean } = {},
+) {
   if (!files.length) return [];
   await ensureEntity(tx, actor.companyId, entity, entityId);
   const have = await tx.attachment.count({ where: { companyId: actor.companyId, entity, entityId } });
@@ -109,6 +117,8 @@ export async function addAttachments(tx: Tx, actor: Actor, entity: AttachmentEnt
       mime,
       size: f.data.byteLength,
       data: f.data,
+      // vidljivo klijentu na portalu — samo prilozi servisnog naloga
+      public: entity === 'serviceOrder' && !!opts.public,
       createdBy: actor.name,
     };
   });
@@ -119,6 +129,17 @@ export async function addAttachments(tx: Tx, actor: Actor, entity: AttachmentEnt
 }
 
 export const addAttachment = (tx: Tx, actor: Actor, a: NewAttachment) => addAttachments(tx, actor, a.entity, a.entityId, [a]).then((r) => r[0]);
+
+/** Prilog servisnog naloga vidljiv (ili ne) klijentu na portalu. */
+export async function setAttachmentPublic(tx: Tx, actor: Actor, id: string, visible: boolean) {
+  const a = await tx.attachment.findFirst({ where: { id, companyId: actor.companyId }, select: attachmentMeta });
+  assert(a, 'Prilog ne postoji.');
+  assert(a.entity === 'serviceOrder', 'Klijentu se mogu pokazati samo prilozi servisnog naloga.');
+  if (a.public === visible) return a;
+  await tx.attachment.update({ where: { id }, data: { public: visible } });
+  await audit(tx, actor, { entity: 'attachment', entityId: id, action: visible ? 'public' : 'private', summary: `Prilog ${a.fileName} ${visible ? 'vidljiv' : 'skriven'} klijentu na portalu` });
+  return { ...a, public: visible };
+}
 
 /** Brisanje priloga; vraća obrisani zapis (za dnevnik) — provjera prava je na pozivatelju (`canAttachment`). */
 export async function deleteAttachment(tx: Tx, actor: Actor, id: string) {

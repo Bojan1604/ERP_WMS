@@ -6,6 +6,7 @@ import { getQuote } from '@/server/queries/sales';
 import { PageHeader } from '@/components/ui/misc';
 import { PrintButton } from '@/components/ui/print-button';
 import { QuoteDocument, quoteDocData } from '@/components/sales/quote-document';
+import { quoteDocTitle } from '@/domain/documents';
 
 export const metadata = { title: 'Ispis ponude' };
 
@@ -18,7 +19,7 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
     <>
       <div className="no-print">
         <PageHeader
-          title={`${q.kind === 'PROFORMA' ? company.proformaTitle || 'Predračun' : 'Ponuda'} ${q.number}`}
+          title={`${quoteDocTitle(q, company)} ${q.number}`}
           back={
             <Link prefetch={false} href={`/prodaja/ponude/${q.id}`} className="hover:underline">
               ← Ponuda
@@ -27,7 +28,7 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
           actions={<PrintButton />}
         />
       </div>
-      <QuoteDocument q={quoteDocData(q)} company={company} party={q.partner} title={q.kind === 'PROFORMA' ? company.proformaTitle || 'Predračun' : 'Ponuda'} />
+      <QuoteDocument q={quoteDocData(q)} company={company} party={q.partner} title={quoteDocTitle(q, company)} />
     </>
   );
 }

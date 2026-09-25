@@ -23,13 +23,25 @@ export const PDF_KIND_LABEL: Record<PdfKind, string> = {
 
 export const isPdfKind = (k: string): k is PdfKind => (PDF_KINDS as readonly string[]).includes(k);
 
+/** Prijedlozi naslova predračuna (postavke firme i dokument). */
+export const PROFORMA_TITLES = ['Predračun', 'Proforma', 'Profaktura', 'Proforma račun'] as const;
+
+/**
+ * Naslov ponude/predračuna na ispisu, PDF-u i u e-pošti: predračun nosi vlastiti
+ * naslov dokumenta, inače naslov iz postavki firme (zadano „Predračun").
+ */
+export function quoteDocTitle(q: { kind: string; title?: string | null }, company: { proformaTitle?: string | null }): string {
+  if (q.kind !== 'PROFORMA') return 'Ponuda';
+  return q.title?.trim() || company.proformaTitle?.trim() || 'Predračun';
+}
+
 /** Vrste poruka e-pošte (`sendDocumentEmail`). `partner` = slobodna poruka partneru, `accountant-zip` = ZIP knjigovođi. */
 export const MAIL_KINDS = ['invoice', 'quote', 'proforma', 'delivery', 'service', 'partner', 'accountant-zip'] as const;
 export type MailKind = (typeof MAIL_KINDS)[number];
 
 export const isMailKind = (k: string): k is MailKind => (MAIL_KINDS as readonly string[]).includes(k);
 
-/** Ulaz server akcije `sendDocumentEmail` — potpis je konačan (faza 0). */
+/** Ulaz server akcije `sendDocumentEmail`. */
 export interface SendDocumentEmailInput {
   kind: MailKind;
   /** Id dokumenta; za `partner` id partnera; za `accountant-zip` ključ razdoblja/izbora koji zna stranica Knjigovođa. */

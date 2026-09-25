@@ -196,14 +196,6 @@ export async function itemFacets(companyId: string): Promise<{ years: number[]; 
   };
 }
 
-/** Godine uvoza za filtar. */
-export async function importYears(companyId: string): Promise<number[]> {
-  const rows = await db.$queryRaw<{ y: number }[]>`
-    SELECT DISTINCT EXTRACT(YEAR FROM "importDate")::int AS y FROM "Item"
-    WHERE "companyId" = ${companyId} AND "importDate" IS NOT NULL ORDER BY y DESC`;
-  return rows.map((r) => Number(r.y));
-}
-
 /** Kartica uređaja sa svime što se na njoj prikazuje. */
 export async function getItemCard(companyId: string, id: string) {
   const item = await db.item.findFirst({

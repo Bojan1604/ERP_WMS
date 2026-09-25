@@ -4,6 +4,7 @@ import { requireAccess } from '@/server/auth';
 import { AuthError } from '@/server/errors';
 import { db } from '@/server/db';
 import { hub3Text } from '@/domain/hub3';
+import { quoteDocTitle } from '@/domain/documents';
 import { num } from '@/domain/money';
 import { proformaReference } from '@/domain/sales-lines';
 
@@ -20,6 +21,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const q = await db.quote.findFirst({
     where: { id, companyId: user.companyId, kind: 'PROFORMA' },
     select: {
+      kind: true,
+      title: true,
       number: true,
       grandTotal: true,
       company: { select: { name: true, address: true, zip: true, city: true, iban: true, currency: true, paymentModel: true, proformaTitle: true } },
@@ -37,7 +40,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     reference: proformaReference(q.number),
     purpose: 'OTHR',
     // HUB-3 bez dijakritika
-    description: `${q.company.proformaTitle || 'Predracun'} ${q.number}`.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D'),
+    description: `${quoteDocTitle(q, q.company)} ${q.number}`.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D'),
   });
   // columns/eclevel su opcije simbologije PDF417 koje tipovi bwip-js ne navode
   const opts = { bcid: 'pdf417', text, columns: 9, eclevel: 4, scale: 2 };

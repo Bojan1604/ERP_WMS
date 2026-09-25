@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Download, Loader2, Paperclip, Trash2 } from 'lucide-react';
+import { Download, Eye, EyeOff, Loader2, Paperclip, Trash2 } from 'lucide-react';
 import { Button, buttonClass } from '@/components/ui/button';
 import { useToast } from '@/components/ui/toast';
 import { cn } from '@/lib/cn';
@@ -122,6 +122,23 @@ export function Attachments({
     }
   };
 
+  // servisni nalog: prilog vidljiv klijentu na portalu (fotografije s prijave kvara su vidljive od početka)
+  const shareable = entity === 'serviceOrder';
+  const togglePublic = async (a: AttachmentMeta) => {
+    setBusy(true);
+    try {
+      const res = await fetch(attachmentUrl(a.id), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ public: !a.public }) });
+      const out = (await res.json().catch(() => ({ ok: false }))) as { ok: boolean; error?: string };
+      if (!out.ok) throw new Error(out.error ?? 'Promjena nije uspjela.');
+      update(cur.map((x) => (x.id === a.id ? { ...x, public: !a.public } : x)));
+      toast('ok', a.public ? 'Prilog je skriven klijentu.' : 'Prilog je vidljiv klijentu na portalu.');
+    } catch (e) {
+      toast('bad', e instanceof Error ? e.message : 'Promjena nije uspjela.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const deleteButton = (key: string) =>
     confirmDel === key ? (
       <Button size="sm" variant="danger" loading={busy} icon={<Trash2 className="size-3.5" />} onClick={() => void remove(key)}>
@@ -153,6 +170,23 @@ export function Attachments({
                   <Download className="size-3.5" />
                 </a>
               </p>
+              {shareable && (
+                <button
+                  type="button"
+                  disabled={!canEdit || busy}
+                  onClick={() => void togglePublic(cur[i])}
+                  role="switch"
+                  aria-checked={!!cur[i].public}
+                  title={cur[i].public ? 'Klijent vidi prilog na portalu — klik skriva' : 'Samo interno — klik pokazuje klijentu na portalu'}
+                  className={cn(
+                    'mt-0.5 flex w-full items-center gap-1 rounded px-1 py-0.5 text-[11px] disabled:cursor-default',
+                    cur[i].public ? 'bg-ok-soft text-ok' : 'text-fg-4 hover:bg-muted hover:text-fg-2',
+                  )}
+                >
+                  {cur[i].public ? <Eye className="size-3" /> : <EyeOff className="size-3" />}
+                  Vidljivo klijentu
+                </button>
+              )}
             </li>
           ))}
         </ul>

@@ -2,7 +2,7 @@ import { requireUser } from '@/server/auth';
 import { AuthError, DomainError } from '@/server/errors';
 import { can, canSeeCost, isExternalRole } from '@/domain/permissions';
 import { isPdfKind, PDF_KIND_MODULE } from '@/domain/documents';
-import { PdfNotImplementedError, pdfResponse, renderDocumentPdf } from '@/server/pdf';
+import { pdfResponse, renderDocumentPdf } from '@/server/pdf';
 
 type Ctx = { params: Promise<{ kind: string; id: string }> };
 
@@ -26,7 +26,6 @@ export async function GET(req: Request, { params }: Ctx) {
     const doc = await renderDocumentPdf(kind, id, user.companyId, { showCost: canSeeCost(user.perms) });
     return pdfResponse(doc.buffer, doc.fileName, !new URL(req.url).searchParams.has('preuzmi'));
   } catch (e) {
-    if (e instanceof PdfNotImplementedError) return new Response(e.message, { status: 501 });
     if (e instanceof DomainError) return new Response(e.message, { status: 404 });
     console.error('[pdf]', e);
     return new Response('PDF se ne može izraditi.', { status: 500 });

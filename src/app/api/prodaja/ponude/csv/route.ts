@@ -7,6 +7,7 @@ import { quoteWhere, readQuoteFilters } from '@/server/queries/sales';
 import { QUOTE_STATUS_LABEL } from '@/server/services/quotes';
 import { formatDate, toISO, today } from '@/domain/dates';
 import { num } from '@/domain/money';
+import { quoteDocTitle } from '@/domain/documents';
 import { csvOrXlsx } from '@/server/xlsx';
 
 /** Izvoz (CSV, Excel ?format=xlsx, PDF ?format=pdf) filtriranog popisa ponuda i predračuna. */
@@ -28,6 +29,7 @@ export async function GET(req: NextRequest) {
       take: 20000,
       select: {
         kind: true,
+        title: true,
         number: true,
         date: true,
         validUntil: true,
@@ -49,7 +51,7 @@ export async function GET(req: NextRequest) {
     rows,
     [
       { label: 'Broj', value: (r) => r.number },
-      { label: 'Vrsta', value: (r) => (r.kind === 'PROFORMA' ? company.proformaTitle || 'Predračun' : 'Ponuda') },
+      { label: 'Vrsta', value: (r) => quoteDocTitle(r, company) },
       { label: 'Datum', value: (r) => formatDate(r.date) },
       { label: 'Vrijedi do', value: (r) => (r.validUntil ? formatDate(r.validUntil) : '') },
       { label: 'Kupac', value: (r) => r.partner.name },

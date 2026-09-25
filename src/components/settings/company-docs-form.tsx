@@ -138,7 +138,9 @@ export function CompanyDocsForm({
             </Card>
             <Card title="Rate najma">
               <Checkbox name="autoIssueRent" defaultChecked={value.autoIssueRent} label="Automatski izdaj račune za rate najma na dan dospijeća" />
-              <p className="mt-2 text-xs text-fg-3">Poslužitelj jednom dnevno (od 6 h) izdaje sve dospjele rate i fiskalizira ih; svaki račun i greška upisuju se u dnevnik promjena.</p>
+              <p className="mt-2 text-xs text-fg-3">
+                Poslužitelj jednom dnevno (od 6 h) izdaje rate dospjele od dana uključivanja i fiskalizira ih; starije neizdane rate izdajete ručno (Najam → Za izdati). Svaki račun i greška upisuju se u dnevnik promjena.
+              </p>
               {canRunAutoIssue && (
                 <div className="mt-3">
                   <ActionButton
@@ -146,7 +148,7 @@ export function CompanyDocsForm({
                     input={{}}
                     size="sm"
                     icon={<Play className="size-3.5" />}
-                    confirm="Izdati sada račune za sve dospjele rate najma ove firme?"
+                    confirm="Izdati sada račune za rate najma ove firme dospjele od uključivanja automatskog izdavanja?"
                     confirmLabel="Izdaj"
                   >
                     Pokreni sada

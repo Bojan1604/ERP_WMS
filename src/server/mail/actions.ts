@@ -33,7 +33,7 @@ const schema = z.object({
  * Server akcija: pošalji dokument e-poštom. Pravo po vrsti (MAIL_KIND_ACCESS):
  * račun/ponuda/predračun/otpremnica → prodaja (uređivanje), servis → servis,
  * partner → partneri (pregled), knjigovođa → izvještaji (ops).
- * Potpis je konačan (faza 0); slanje implementira područje A u `sendDocumentEmailImpl`.
+ * Slanje (SMTP, PDF privitak, dnevnik EmailLog) je u `sendDocumentEmailImpl` (server/mail/index.ts).
  */
 export async function sendDocumentEmail(input: SendDocumentEmailInput): Promise<ActionResult<SendResult>> {
   try {

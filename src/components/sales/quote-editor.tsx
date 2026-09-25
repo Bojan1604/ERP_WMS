@@ -12,6 +12,7 @@ import { eur } from '@/lib/format';
 import { documentTotals, unifyDevicePrices } from '@/domain/invoice';
 import { customerVat } from '@/domain/tax';
 import { addDays } from '@/domain/dates';
+import { PROFORMA_TITLES } from '@/domain/documents';
 import { modelQuotePrice, saveQuoteAction } from '@/app/(app)/prodaja/ponude/actions';
 import { DevicePicker } from './device-picker';
 import { CatalogPicker } from './catalog-picker';
@@ -26,6 +27,8 @@ export interface QuoteEditorValue {
   id: string | null;
   /** Ponuda ili predračun (samo pri izradi). */
   kind?: 'QUOTE' | 'PROFORMA';
+  /** Predračun: naslov na dokumentu (prazno = iz postavki firme). */
+  title?: string;
   partnerId: string | null;
   date: string;
   validUntil: string;
@@ -158,6 +161,16 @@ export function QuoteEditor({
               onChange={(e) => set({ date: e.target.value, ...(validTouched || !e.target.value ? {} : { validUntil: addDays(e.target.value, company.quoteValidDays) }) })}
             />
           </Field>
+          {v.kind === 'PROFORMA' && (
+            <Field label="Naslov na dokumentu" hint="Za ovaj dokument; zadano iz Postavke → Firma">
+              <Input list="proforma-naslovi" value={v.title ?? ''} placeholder={company.proformaTitle || 'Predračun'} maxLength={60} onChange={(e) => set({ title: e.target.value })} />
+              <datalist id="proforma-naslovi">
+                {PROFORMA_TITLES.map((t) => (
+                  <option key={t} value={t} />
+                ))}
+              </datalist>
+            </Field>
+          )}
           <Field label="Vrijedi do" hint={`Zadano ${company.quoteValidDays} dana`}>
             <Input
               type="date"
@@ -234,7 +247,7 @@ export function QuoteEditor({
             {v.lines.length} stavki · ukupno <b className="text-fg tnum">{eur(totals.total)}</b>
           </span>
           <Button variant="primary" icon={<Save className="size-4" />} loading={pending} disabled={!v.partnerId || !v.lines.length} onClick={save}>
-            {v.kind === 'PROFORMA' ? `Spremi — ${(company.proformaTitle || 'Predračun').toLowerCase()}` : 'Spremi ponudu'}
+            {v.kind === 'PROFORMA' ? `Spremi — ${(v.title?.trim() || company.proformaTitle || 'Predračun').toLowerCase()}` : 'Spremi ponudu'}
           </Button>
         </div>
       </div>

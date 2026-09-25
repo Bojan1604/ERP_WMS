@@ -3,16 +3,14 @@
 import { z } from 'zod';
 import { optBelow, optNonNegative } from '@/lib/zod-checks';
 import { action } from '@/server/action';
-import { transaction } from '@/server/db';
+import { db, transaction } from '@/server/db';
 import { assert } from '@/server/errors';
 import { audit } from '@/server/audit';
-import { zBool, zId, zMoney, zOptMoney, zOptText } from '@/server/zod';
-import { saveQuote } from '@/server/services/quotes';
+import { zBool, zId, zMoney, zOptId, zOptMoney, zOptText } from '@/server/zod';
+import { deletePackage, packageItemIds, packageToDocument, savePackage } from '@/server/services/packages';
 import { searchDevices } from '@/server/queries/sales';
 import { canSeeCost } from '@/domain/permissions';
-import { customerVat } from '@/domain/tax';
-import { addDays, today } from '@/domain/dates';
-import { num, r2 } from '@/domain/money';
+import { num } from '@/domain/money';
 
 const zPct = zMoney.refine((v) => v >= 0 && v < 100, 'Marža mora biti između 0 i 99,99 %');
 
@@ -57,44 +55,49 @@ export const setModelMarginAction = action(
 );
 
 /**
- * Paket: skupina uređaja sa skladišta s ukupnom maržom — sprema se kao ponuda
- * (nacrt) za kupca. Cijena paketa (ako je zadana) raspoređuje se na uređaje
- * razmjerno preporučenim cijenama.
+ * Paket: skupina uređaja sa skladišta s cijenom paketa i ukupnom maržom (novi ili
+ * izmjena). Iz paketa se poslije izrađuje ponuda, predračun ili nacrt računa.
  */
 export const savePackageAction = action(
   { module: 'sales', level: 'edit' },
   z.object({
-    partnerId: zId,
-    name: z.string().trim().min(1, 'Upišite naziv paketa').max(200),
-    itemIds: z.array(zId).min(1, 'Dodajte barem jedan uređaj').max(300),
+    id: zOptId,
+    name: z.string().trim().min(1, 'Upišite naziv paketa').max(200, 'Naziv je predug'),
+    itemIds: z.array(zId).min(1, 'Dodajte barem jedan uređaj').max(300, 'Najviše 300 uređaja u paketu'),
     price: zOptMoney.refine(optNonNegative, 'Cijena ne može biti negativna'),
     note: zOptText,
   }),
-  async ({ partnerId, name, itemIds, price, note }, user) => {
+  async ({ id, ...input }, user) => {
     assert(canSeeCost(user.perms), 'Nemate pravo na nabavne cijene i marže.');
-    const devices = await searchDevices(user.companyId, { itemIds, partnerId });
-    assert(devices.length === itemIds.length, 'Neki uređaji više nisu na skladištu.');
-    const suggested = devices.reduce((a, d) => a + d.price, 0);
-    const factor = price !== null && suggested > 0 ? price / suggested : 1;
     return transaction(async (tx) => {
-      const [partner, company] = await Promise.all([
-        tx.partner.findFirst({ where: { id: partnerId, companyId: user.companyId }, select: { country: true, vatCategoryOverride: true } }),
-        tx.company.findUniqueOrThrow({ where: { id: user.companyId }, select: { vatRegistered: true, vatRate: true, country: true, quoteValidDays: true } }),
-      ]);
-      assert(partner, 'Kupac ne postoji.');
-      const date = today();
-      const lines = devices.map((d) => ({ kind: 'DEVICE' as const, itemId: d.id, modelId: d.modelId, description: d.model, qty: 1, unitPrice: r2(d.price * factor) }));
-      // zaokruživanje: razlika do cijene paketa ide na prvu stavku
-      if (price !== null && lines.length) lines[0].unitPrice = r2(lines[0].unitPrice + price - lines.reduce((a, l) => a + l.unitPrice, 0));
-      const q = await saveQuote(tx, user, null, {
-        partnerId,
-        date,
-        validUntil: addDays(date, company.quoteValidDays),
-        vatRate: customerVat(partner, { vatRegistered: company.vatRegistered, vatRate: num(company.vatRate), country: company.country }).rate,
-        note: [`Paket: ${name}`, note].filter(Boolean).join('\n'),
-        lines,
-      });
-      return { message: `Paket je spremljen kao ponuda ${q.number}.`, redirect: `/prodaja/ponude/${q.id}` };
+      const p = await savePackage(tx, user, id ?? null, { ...input, note: input.note ?? null });
+      return { message: id ? 'Paket je spremljen.' : `Paket „${p.name}" je spremljen.`, data: { id: p.id } };
+    });
+  },
+);
+
+export const deletePackageAction = action({ module: 'sales', level: 'edit' }, z.object({ id: zId }), async ({ id }, user) => {
+  assert(canSeeCost(user.perms), 'Nemate pravo na nabavne cijene i marže.');
+  return transaction(async (tx) => {
+    await deletePackage(tx, user, id);
+    return { message: 'Paket je obrisan.' };
+  });
+});
+
+/** Paket → ponuda, predračun ili nacrt računa za kupca (cijene prema kupcu, cijena paketa raspoređena na uređaje). */
+export const convertPackageAction = action(
+  { module: 'sales', level: 'edit' },
+  z.object({ id: zId, partnerId: zId, target: z.enum(['QUOTE', 'PROFORMA', 'INVOICE']) }),
+  async ({ id, partnerId, target }, user) => {
+    assert(canSeeCost(user.perms), 'Nemate pravo na nabavne cijene i marže.');
+    const itemIds = await packageItemIds(db, user.companyId, id);
+    assert(itemIds.length, 'Paket nema uređaja.');
+    const devices = await searchDevices(user.companyId, { itemIds, partnerId });
+    return transaction(async (tx) => {
+      const r = await packageToDocument(tx, user, id, partnerId, target, devices);
+      return r.kind === 'invoice'
+        ? { message: 'Nacrt računa iz paketa je izrađen.', redirect: `/prodaja/racuni/${r.id}` }
+        : { message: `${target === 'PROFORMA' ? 'Predračun' : 'Ponuda'} ${r.number} iz paketa je izrađen(a).`, redirect: `/prodaja/ponude/${r.id}` };
     });
   },
 );

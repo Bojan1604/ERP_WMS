@@ -6,7 +6,7 @@ import { Card, Badge } from '@/components/ui/misc';
 import { Field, Input, Select } from '@/components/ui/field';
 import { useAction } from '@/components/ui/action';
 import { BILLING_LABEL, type BillingCode } from '@/domain/billing';
-import { periodLabel } from '@/domain/dates';
+import { formatDate, periodLabel } from '@/domain/dates';
 import { partnerContracts } from '@/app/(app)/prodaja/racuni/actions';
 import { monthsOfBilling } from '@/domain/sales-lines';
 
@@ -16,6 +16,12 @@ export interface RentTermsValue {
   months: number | null;
   seasonFrom: number | null;
   seasonTo: number | null;
+}
+
+/** „Zatim naplata prelazi u": druga učestalost naplate od zadanog datuma. */
+export interface RentNextValue {
+  billing: BillingCode;
+  from: string;
 }
 
 export interface ContractOpt {
@@ -51,23 +57,27 @@ export function RentCard({
   contractId,
   period,
   terms,
+  next,
   locked,
   lockedLabel,
   onContract,
   onPeriod,
   onTerms,
+  onNext,
   onContracts,
 }: {
   partnerId: string | null;
   contractId: string | null;
   period: string;
   terms: RentTermsValue;
+  next: RentNextValue | null;
   /** Rata iz modula Najam — ugovor i razdoblje su zadani. */
   locked: boolean;
   lockedLabel?: { id: string; number: string } | null;
   onContract: (id: string | null, c: ContractOpt | null) => void;
   onPeriod: (p: string) => void;
   onTerms: (t: RentTermsValue) => void;
+  onNext: (n: RentNextValue | null) => void;
   onContracts: (list: ContractOpt[]) => void;
 }) {
   const [list, setList] = useState<ContractOpt[]>([]);
@@ -171,6 +181,22 @@ export function RentCard({
             )}
           </>
         )}
+        {contractId && (
+          <>
+            <Field label="Zatim naplata prelazi u" hint="Za uređaje koji se ovim računom dodaju na ugovor" className="md:col-span-3">
+              <Select
+                value={next?.billing ?? ''}
+                onChange={(e) => onNext(e.target.value ? { billing: e.target.value as BillingCode, from: next?.from ?? '' } : null)}
+                options={[{ value: '', label: '— bez promjene —' }, ...BILLINGS.map((b) => ({ value: b, label: BILLING_LABEL[b] }))]}
+              />
+            </Field>
+            {next && (
+              <Field label="Od datuma" required className="md:col-span-3">
+                <Input type="date" value={next.from} onChange={(e) => onNext({ ...next, from: e.target.value })} />
+              </Field>
+            )}
+          </>
+        )}
       </div>
       <p className="mt-3 flex flex-wrap items-center gap-2 text-sm text-fg-3">
         {chosen && (
@@ -182,6 +208,7 @@ export function RentCard({
         {isNew && <span>Otvara se novi ugovor s ovim uvjetima; uređaji s računa preuzimaju mjesečnu cijenu sa stavke.</span>}
         <span>
           Cijena najma unosi se kao <b>mjesečna</b>; iznos na računu je mjesečno × {rentMonthsFor(contractId, list, terms)} mj.
+          {next?.from && ` Od ${formatDate(next.from)} uređaji prelaze na ${BILLING_LABEL[next.billing].toLowerCase()} naplatu.`}
         </span>
       </p>
     </Card>

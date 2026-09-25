@@ -16,7 +16,7 @@ import { bootstrapCompany } from '../../src/server/services/company';
 import { createDraft, issueInvoice, stornoInvoice } from '../../src/server/services/invoices';
 import { afterIssue } from '../../src/server/fiscal';
 import { invoiceUbl } from '../../src/server/fiscal/ubl-source';
-import { documentDefinitionFor, renderDocumentPdf, PdfNotImplementedError } from '../../src/server/pdf';
+import { documentDefinitionFor, renderDocumentPdf } from '../../src/server/pdf';
 import { embedPdfInUbl, withInvoicePdf } from '../../src/server/pdf/einvoice';
 import { buildEmailDraft, sendDocumentEmailImpl, sendTestEmail } from '../../src/server/mail';
 import { setMailTransportFactory } from '../../src/server/mail/transport';
@@ -165,7 +165,7 @@ test('PDF računa: sadržaj, HUB-3, SWIFT, pravno podnožje, storno; tuđa firma
   assert.equal((await renderDocumentPdf('invoice', stId, s.companyId)).buffer.subarray(0, 4).toString('latin1'), '%PDF');
 
   await assert.rejects(renderDocumentPdf('invoice', inv.id, other.companyId), DomainError);
-  await assert.rejects(renderDocumentPdf('nepostojeca' as never, inv.id, s.companyId), PdfNotImplementedError);
+  await assert.rejects(renderDocumentPdf('nepostojeca' as never, inv.id, s.companyId), /Nepoznata vrsta dokumenta/);
 });
 
 test('PDF fiskaliziranog računa (CIS demo): ZKI, JIR i QR kod', async () => {

@@ -314,6 +314,7 @@ function editorValue(inv: InvoiceDetail, showCost: boolean): InvoiceEditorValue 
     contractId: inv.contractId,
     period: inv.period ?? '',
     rent: { startDate: toISO(inv.date), billing, months: 24, seasonFrom: null, seasonTo: null },
+    rentNext: inv.rentNextBilling && inv.rentNextFrom ? { billing: inv.rentNextBilling as BillingCode, from: toISO(inv.rentNextFrom) } : null,
     rentLocked,
     contract: inv.contract,
     lines: inv.lines.map((l) => ({

@@ -43,8 +43,6 @@ export const ITEM_COLUMNS: readonly ItemColumnDef[] = [
   { key: 'warranty', label: 'Jamstvo', visible: false },
 ];
 
-export const ITEM_COLUMN_KEYS = ITEM_COLUMNS.map((c) => c.key);
-
 /** Razred zaglavlja stupca kad `<th>` ne može nositi `data-col` (npr. SortHeader). */
 export const columnClass = (key: ItemColumn) => `wh-col-${key}`;
 

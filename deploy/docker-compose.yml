@@ -34,9 +34,14 @@ services:
       APP_URL: https://${DOMAIN:?postavite DOMAIN u deploy/.env}
       MDM_STORAGE_DIR: /data/mdm
       MDM_AGENT_DIR: /data/agents
+      # automatske sigurnosne kopije iz programa (Postavke → Podaci) — na trajnom volumenu
+      BACKUP_DIR: /app/storage/backups
       NODE_ENV: production
     volumes:
+      # datoteke programa izvan baze: MDM (aplikacije, snimke, zapisnici) i storage/ (kopije);
+      # prilozi dokumenata su u bazi (pgdata). Bez volumena bi ih nova izgradnja slike obrisala.
       - mdm:/data/mdm
+      - storage:/app/storage
       - ./agents:/data/agents:ro
     expose:
       - '3000'
@@ -61,5 +66,6 @@ services:
 volumes:
   pgdata:
   mdm:
+  storage:
   caddy_data:
   caddy_config:

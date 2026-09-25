@@ -7,6 +7,7 @@ import type { Actor } from './items';
 import { STATUS_KIND_LABEL } from './items';
 import { MAX_LOGO_BYTES, checkCounterStart, isCurrencyCode, isPaymentModel, isValidLogo } from '@/domain/company';
 import { isValidOib } from '@/domain/tax';
+import { fromISO, today } from '@/domain/dates';
 
 // ---------------------------------------------------------------- firma
 
@@ -323,6 +324,8 @@ export async function saveCompanyDocs(tx: Tx, actor: Actor, input: CompanyDocsIn
     kpdRent: input.kpdRent?.trim() || null,
     kpdSale: input.kpdSale?.trim() || null,
     kpdService: input.kpdService?.trim() || null,
+    // automatsko izdavanje: rate se izdaju od dana uključivanja (bez zaostataka iz prošlosti)
+    autoIssueSince: input.autoIssueRent ? (before.autoIssueRent && before.autoIssueSince ? before.autoIssueSince : fromISO(today())) : null,
   };
   await tx.company.update({ where: { id: actor.companyId }, data });
   const changes = diff(before, data);

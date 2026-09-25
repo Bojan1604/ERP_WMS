@@ -30,6 +30,8 @@ export interface QuoteLineInput {
 export interface QuoteInput {
   /** Samo pri izradi: ponuda (zadano) ili predračun — vrsta se poslije ne mijenja. */
   kind?: QuoteKind;
+  /** Predračun: naslov na dokumentu (prazno = naslov iz postavki firme). */
+  title?: string | null;
   partnerId: string;
   date: string;
   validUntil?: string | null;
@@ -110,6 +112,7 @@ export async function saveQuote(tx: Tx, actor: Actor, id: string | null, input: 
   await checkLines(tx, actor, input.lines);
   const t = totalsOf(input);
   const header = {
+    title: input.title?.trim() || null,
     partnerId: input.partnerId,
     date: fromISO(input.date),
     validUntil: input.validUntil ? fromISO(input.validUntil) : null,
@@ -127,7 +130,7 @@ export async function saveQuote(tx: Tx, actor: Actor, id: string | null, input: 
     // predračun ima vlastiti brojač (PRED-…), ponuda svoj (PON-…)
     const number = await nextDocNumber(tx, actor.companyId, kind === 'PROFORMA' ? 'PROFORMA' : 'QUOTE', Number(input.date.slice(0, 4)));
     const q = await tx.quote.create({
-      data: { companyId: actor.companyId, kind, number, ...header, createdBy: actor.name, lines: { create: lineRows(input, t.lineNets) } },
+      data: { companyId: actor.companyId, kind, number, ...header, title: kind === 'PROFORMA' ? header.title : null, createdBy: actor.name, lines: { create: lineRows(input, t.lineNets) } },
     });
     await audit(tx, actor, { entity: 'quote', entityId: q.id, action: 'create', summary: `${QUOTE_KIND_LABEL[kind]} ${number} za ${partner.name}` });
     return q;
@@ -137,7 +140,7 @@ export async function saveQuote(tx: Tx, actor: Actor, id: string | null, input: 
   assert(!q.invoiceId, 'Ponuda je pretvorena u račun i više se ne mijenja.');
   assert(!q.contractId, 'Ponuda je pretvorena u ugovor i više se ne mijenja.');
   await tx.quoteLine.deleteMany({ where: { quoteId: id } });
-  const out = await tx.quote.update({ where: { id }, data: { ...header, lines: { create: lineRows(input, t.lineNets) } } });
+  const out = await tx.quote.update({ where: { id }, data: { ...header, title: q.kind === 'PROFORMA' ? header.title : null, lines: { create: lineRows(input, t.lineNets) } } });
   await audit(tx, actor, { entity: 'quote', entityId: id, action: 'update', summary: `Ponuda ${q.number} izmijenjena` });
   return out;
 }

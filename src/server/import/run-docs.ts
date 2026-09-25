@@ -198,6 +198,7 @@ async function insertItems(c: RunCtx, items: PlanItem[], label: string) {
       marginPct: it.marginPct, importDate: d(it.importDate), issueDate: d(it.issueDate), warrantyStart: d(it.warrantyStart), warrantyMonths: it.warrantyMonths,
       outAt: ts(it.outAt) ?? null, outPartnerId: c.id('partners', it.outPartnerKey), outNote: it.outNote, writeOffDate: d(it.writeOffDate),
       writeOffReason: it.writeOffReason, note: it.note, createdAt: ts(it.createdAt),
+      categoryId: c.id('categories', it.categoryKey ?? null), cpu: it.cpu ?? null, screen: it.screen ?? null, os: it.os ?? null,
     });
     events.push({
       id: newId(), companyId, itemId: id, at, type: 'IMPORT', message: `${label} — status „${statusNames.get(statusId) ?? it.state}"`,
@@ -320,7 +321,7 @@ async function insertOther(c: RunCtx, plan: ImportPlan) {
     .map((x) => ({ ...x, check: checkAttachmentBytes(x.data) }))
     .flatMap(({ a, entityId, data, check }) =>
       entityId && 'mime' in check
-        ? [{ companyId, entity: a.entity, entityId, fileName: safeFileName(a.fileName, check.mime), mime: check.mime, size: data.byteLength, data, createdBy: a.createdBy, createdAt: ts(a.createdAt) }]
+        ? [{ companyId, entity: a.entity, entityId, fileName: safeFileName(a.fileName, check.mime), mime: check.mime, size: data.byteLength, data, public: a.entity === 'serviceOrder' && !!a.public, createdBy: a.createdBy, createdAt: ts(a.createdAt) }]
         : [],
     );
   for (const part of chunks(att, 50)) await tx.attachment.createMany({ data: part });

@@ -17,6 +17,7 @@
  */
 import { CHARGE_KINDS, documentTotals, lineNet, type ChargeInput } from './invoice';
 import { r2 } from './money';
+import { VAT_ON_PAYMENT_NOTE, VAT_ON_PAYMENT_UBL } from './tax';
 
 export const CIUS_ID = 'urn:cen.eu:en16931:2017#compliant#urn:mfin.gov.hr:cius-2025:1.0#conformant#urn:mfin.gov.hr:ext-2025:1.0';
 export const HREXT_NS = 'urn:mfin.gov.hr:schema:xsd:HRExtensionAggregateComponents-1';
@@ -75,6 +76,8 @@ export interface UblInput {
   currency?: string;
   notes?: Array<string | null | undefined>;
   seller: UblParty & { iban?: string | null; vatRegistered?: boolean };
+  /** Izdavatelj obračunava PDV po naplaćenoj naknadi (oznaka u HR proširenju i napomena). */
+  vatOnPayment?: boolean;
   /** Operater (HR-BT-4/5): ime i OIB osobe koja izdaje račun. */
   operator?: { name: string; oib?: string | null } | null;
   buyer: UblParty;
@@ -369,7 +372,7 @@ export function buildUbl(input: UblInput): { xml: string; root: 'Invoice' | 'Cre
   <cbc:IssueTime>${esc(time)}</cbc:IssueTime>
   <cbc:DueDate>${esc(input.dueDate || input.issueDate)}</cbc:DueDate>
   <cbc:InvoiceTypeCode>${advance ? 386 : storno ? 384 : 380}</cbc:InvoiceTypeCode>`;
-  const notes = (input.notes ?? []).filter((n): n is string => !!n && !!n.trim());
+  const notes = [...(input.notes ?? []), input.vatOnPayment ? VAT_ON_PAYMENT_NOTE : null].filter((n): n is string => !!n && !!n.trim());
   const period = input.type === 'RENT' && !advance && !storno ? periodBounds(input.period) : null;
   const ref = input.billingReference && (credit || storno)
     ? `\n  <cac:BillingReference><cac:InvoiceDocumentReference><cbc:ID>${esc(input.billingReference.number)}</cbc:ID>${input.billingReference.date ? `<cbc:IssueDate>${esc(input.billingReference.date)}</cbc:IssueDate>` : ''}</cac:InvoiceDocumentReference></cac:BillingReference>`
@@ -419,12 +422,12 @@ export function buildUbl(input: UblInput): { xml: string; root: 'Invoice' | 'Cre
       .join('');
 
   // ---- hrvatski porezni prikaz kad postoji išta izvan običnog PDV-a
-  const needHr = t.category !== 'S' || charges.length > 0 || t.notRegistered;
+  const needHr = t.category !== 'S' || charges.length > 0 || t.notRegistered || !!input.vatOnPayment;
   const hrExt = needHr
     ? `
     <ext:UBLExtension>
       <ext:ExtensionContent>
-        <hrextac:HRFISK20Data>
+        <hrextac:HRFISK20Data>${input.vatOnPayment ? `\n          <hrextac:HRObracunPDVPoNaplati>${VAT_ON_PAYMENT_UBL}</hrextac:HRObracunPDVPoNaplati>` : ''}
           <hrextac:HRTaxTotal>
             <cbc:TaxAmount currencyID="${cur}">${amt(vat)}</cbc:TaxAmount>
             <hrextac:HRTaxSubtotal>

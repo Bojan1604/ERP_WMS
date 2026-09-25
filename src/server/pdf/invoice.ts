@@ -9,6 +9,7 @@ import { hub3Text } from '@/domain/hub3';
 import { warrantyEnd } from '@/domain/pricing';
 import { toISO } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
+import { VAT_ON_PAYMENT_NOTE } from '@/domain/tax';
 import { hub3Png, qrPng } from './barcode';
 import { currencySign, loadPdfCompany, type LoadedCompany } from './company';
 import { amt, box, documentDefinition, fmtDate, GREY, itemsTable, kv, pdfFileName, qty, sums, type Fact, type SumRow } from './layout';
@@ -164,7 +165,7 @@ export function invoiceDefinition(inv: LoadedInvoice, c: LoadedCompany, img: Inv
   const notes = [
     inv.taxCategory !== 'S' && inv.taxExemptReason ? inv.taxExemptReason : null,
     c.vatRegistered === false ? 'Izdavatelj nije u sustavu PDV-a (čl. 90. st. 2. Zakona o PDV-u).' : null,
-    c.vatOnPayment ? 'Obračun PDV-a prema naplaćenim naknadama.' : null,
+    c.vatOnPayment ? VAT_ON_PAYMENT_NOTE : null,
     paidInFull ? `Račun je plaćen u cijelosti${inv.paidDate ? ` ${fmtDate(toISO(inv.paidDate))}` : ''}.` : null,
     inv.note,
   ];

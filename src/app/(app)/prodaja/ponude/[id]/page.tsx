@@ -18,6 +18,7 @@ import { QuoteConvert, type ConvertLine } from '@/components/sales/quote-convert
 import { QuoteDocument, quoteDocData } from '@/components/sales/quote-document';
 import { QuoteBadge, quoteStatus } from '@/components/sales/quote-status';
 import { date } from '@/lib/format';
+import { quoteDocTitle } from '@/domain/documents';
 import { deleteQuoteAction, setQuoteStatusAction } from '../actions';
 
 export const metadata = { title: 'Ponuda' };
@@ -33,7 +34,7 @@ export default async function QuotePage({ params }: { params: Promise<{ id: stri
   const locked = !!q.invoiceId || !!q.contractId;
   const [lookups, company] = await Promise.all([edit ? getSalesLookups(user.companyId) : null, getCompany(user.companyId)]);
   const proforma = q.kind === 'PROFORMA';
-  const kindLabel = proforma ? company.proformaTitle || 'Predračun' : 'Ponuda';
+  const kindLabel = quoteDocTitle(q, company);
   const showCost = canSeeCost(user.perms);
 
   const status = (s: 'DRAFT' | 'SENT' | 'ACCEPTED' | 'REJECTED', label: string, icon: React.ReactNode) => (
@@ -177,6 +178,7 @@ function editorValue(q: QuoteDetail): QuoteEditorValue {
   return {
     id: q.id,
     kind: q.kind,
+    title: q.title ?? '',
     partnerId: q.partnerId,
     date: toISO(q.date),
     validUntil: q.validUntil ? toISO(q.validUntil) : '',

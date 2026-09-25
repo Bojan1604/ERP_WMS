@@ -2,7 +2,7 @@
  * Prodaja: vrsta stavke (prodaja/najam na istom računu), zadane KPD šifre,
  * stanje eRačuna za popise i poziv na broj predračuna. Čista logika, bez baze.
  */
-import { BILLING_MONTHS, type BillingCode } from './billing';
+import { BILLING_MONTHS, type BillingCode, type PlanPeriodInput } from './billing';
 
 export type LineTypeCode = 'SALE' | 'RENT' | 'SERVICE';
 
@@ -19,6 +19,25 @@ export const hasRentLines = (invoiceType: LineTypeCode, lines: Array<{ lineType?
   invoiceType === 'RENT' || lines.some((l) => l.lineType === 'RENT');
 
 /** Učestalost naplate iz broja mjeseci stavke najma (1 → mjesečno, 3 → kvartalno…). */
+/**
+ * Plan naplate uređaja koji račun za najam (Prodaja) dodaje na ugovor: naplata kreće
+ * od datuma računa (ne ranije od početka ugovora) s učestalošću sa stavke; uvjeti
+ * ugovora vrijede kad se poklapaju (prazan plan). Uz „Zatim naplata prelazi u"
+ * slijedi drugo razdoblje od zadanog datuma s drugom učestalošću (orig. InvoiceModal).
+ */
+export function invoiceRentPlan(o: {
+  invoiceDate: string;
+  contractStart: string;
+  contractBilling: BillingCode;
+  lineBilling: BillingCode;
+  next?: { billing: BillingCode; from: string } | null;
+}): PlanPeriodInput[] {
+  const from = o.invoiceDate > o.contractStart ? o.invoiceDate : o.contractStart;
+  const next = o.next && o.next.from > from ? o.next : null;
+  if (next) return [{ from, billing: o.lineBilling }, { from: next.from, billing: next.billing }];
+  return from !== o.contractStart || o.lineBilling !== o.contractBilling ? [{ from, billing: o.lineBilling }] : [];
+}
+
 export function billingFromMonths(months: number | null | undefined): BillingCode {
   switch (months) {
     case 3:

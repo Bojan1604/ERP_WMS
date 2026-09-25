@@ -209,6 +209,7 @@ async function insertMasterData(c: RunCtx, plan: ImportPlan) {
       rows.push({
         id, companyId, categoryId: c.id('categories', m.categoryKey), brand: m.brand, name: m.name, code: m.code, kpd: m.kpd,
         salePrice: m.salePrice, rentPrice: m.rentPrice, marginPct: m.marginPct, warrantyMonths: m.warrantyMonths, minStock: m.minStock, specs: m.specs, active: m.active,
+        cpu: m.cpu ?? null, screen: m.screen ?? null, os: m.os ?? null,
       });
     }
     await bulkInsert(tx, 'DeviceModel', rows);

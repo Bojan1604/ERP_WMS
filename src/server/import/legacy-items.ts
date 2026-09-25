@@ -5,7 +5,7 @@
 import type { z } from 'zod';
 import type { LegacyCtx } from './legacy-ctx';
 import type { legacyItem } from './legacy-parse';
-import type { PlanItem } from './plan';
+import { cleanSpec, type PlanItem, type PlanModel } from './plan';
 import type { StatusKind } from '@prisma/client';
 import type { Key } from './plan';
 
@@ -24,6 +24,7 @@ const rawInvoiceOf = new WeakMap<PlanItem, string>();
 
 export function mapItems(ctx: LegacyCtx, list: Array<z.infer<typeof legacyItem>>) {
   const notesBySerial = new Map<string, Set<string>>();
+  const modelByKey = new Map<Key, PlanModel>(ctx.plan.models.map((m) => [m.key, m]));
   let noSerial = 0;
   for (const [i, r] of list.entries()) {
     let serial = r.serial;
@@ -61,6 +62,14 @@ export function mapItems(ctx: LegacyCtx, list: Array<z.infer<typeof legacyItem>>
       ctx.w.warn('ref-status', 'veza', `${where}: nepoznat status „${r.statusId ?? ''}" — ${fb.kind === 'IN_STOCK' ? 'na skladištu' : 'status „ostalo"'}.`);
       st = { ...fb, name: '' };
     }
+    // kategorija po komadu samo kad odstupa od kategorije modela (null = kategorija modela)
+    const model = modelByKey.get(modelKey);
+    let categoryKey: Key | null = null;
+    if (r.categoryId) {
+      const cat = ctx.categories.get(r.categoryId);
+      if (!cat) ctx.w.warn('ref-category', 'veza', `${where}: kategorija „${r.categoryId}" ne postoji — vrijedi kategorija modela.`);
+      else if (cat !== model?.categoryKey) categoryKey = cat;
+    }
     const cost = ctx.money(r.cost, where, 'nabavna cijena', 0);
     const sale = ctx.money(r.salePrice, where, 'prodajna cijena', null);
     const rent = ctx.money(r.rentPrice, where, 'najam', null);
@@ -74,6 +83,8 @@ export function mapItems(ctx: LegacyCtx, list: Array<z.infer<typeof legacyItem>>
       outAt: ctx.ts(r.outAt), outPartnerKey: r.outPartnerId ? (ctx.partners.get(r.outPartnerId) ?? null) : null, outNote: r.outNote || null,
       writeOffDate: ctx.date(r.writeOffDate, where, 'otpis'), writeOffReason: [r.writeOffReason, r.writeOffNote].filter(Boolean).join(' — ') || null,
       note: r.note || null, createdAt: ctx.ts(r.createdAt),
+      // specifikacije po komadu; bez njih zadano s modela (kao pri zaprimanju)
+      categoryKey, cpu: cleanSpec(r.cpu) ?? model?.cpu ?? null, screen: cleanSpec(r.screen) ?? model?.screen ?? null, os: cleanSpec(r.os) ?? model?.os ?? null,
     };
     if (item.state === 'IN_STOCK' && !item.warehouseKey) item.warehouseKey = ctx.defaultWarehouse();
     if (r.invoiceId) rawInvoiceOf.set(item, r.invoiceId);

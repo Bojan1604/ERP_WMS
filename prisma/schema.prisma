@@ -298,7 +298,7 @@ model Company {
   /// SWIFT/BIC banke — ide na račun uz IBAN (strani kupci).
   swift               String?
   /// Naslov predračuna na dokumentu: Predračun / Proforma / Profaktura.
-  proformaTitle       String  @default("Predračun")
+  proformaTitle       String    @default("Predračun")
   /// Zadani operater kad korisnik koji izdaje račun nema ime/OIB.
   operatorName        String?
   operatorOib         String?
@@ -310,15 +310,17 @@ model Company {
   /// Pravni podaci u podnožju svih dokumenata (temeljni kapital, sud, MBS…).
   legalFooter         String?
   /// Automatsko izdavanje rata najma na dan dospijeća (pozadinski posao, jednom dnevno).
-  autoIssueRent       Boolean @default(false)
+  autoIssueRent       Boolean   @default(false)
+  /// Od kada je automatsko izdavanje uključeno — izdaju se samo rate s dospijećem od tog dana (bez zaostataka).
+  autoIssueSince      DateTime? @db.Date
   /// PDV po naplaćenoj naknadi (oznaka na računu i UBL-u).
-  vatOnPayment        Boolean @default(false)
+  vatOnPayment        Boolean   @default(false)
   /// Zadane KPD 2025 šifre stavki kad ih nema na stavci/modelu/usluzi.
   kpdRent             String?
   kpdSale             String?
   kpdService          String?
   /// Demo firma — samo takva smije „Vrati demo podatke".
-  isDemo              Boolean @default(false)
+  isDemo              Boolean   @default(false)
 
   // ---- e-pošta (SMTP, nodemailer)
   smtpHost      String?
@@ -368,6 +370,7 @@ model Company {
   items             Item[]
   invoices          Invoice[]
   quotes            Quote[]
+  packages          Package[]
   contracts         Contract[]
   purchaseOrders    PurchaseOrder[]
   receipts          GoodsReceipt[]
@@ -462,6 +465,8 @@ model User {
   totpEnabled     Boolean   @default(false)
   /// Rezervni kodovi za 2FA — samo sha256 sažeci; iskorišteni se brišu.
   backupCodes     String[]  @default([])
+  /// Zadnji iskorišteni TOTP korak (unix/30) — isti ili stariji kod se ne prihvaća ponovno (replay).
+  totpLastStep    Int?
   /// Promjena statusa ide na odobrenje: null = prati postavku firme (statusChangeNeedsApproval).
   requireApproval Boolean?
   /// Smije u opasnu zonu (brisanje prometa / svih podataka). Administrator uvijek smije.
@@ -684,6 +689,7 @@ model Partner {
 
   @@index([companyId, name])
   @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "Partner_name_trgm_idx")
+  @@index([email(ops: raw("gin_trgm_ops"))], type: Gin, map: "Partner_email_trgm_idx")
   @@index([companyId, oib])
 }
 
@@ -767,6 +773,7 @@ model Item {
   transferItems TransferItem[]
   rentOverrides RentOverride[]
   mdmDevices    MdmDevice[]
+  packageItems  PackageItem[]
 
   @@index([companyId, serial])
   @@index([serial(ops: raw("gin_trgm_ops"))], type: Gin, map: "Item_serial_trgm_idx")
@@ -777,6 +784,18 @@ model Item {
   @@index([companyId, partnerId])
   @@index([companyId, warehouseId, state])
   @@index([companyId, createdAt])
+  // sortiranje i filtri popisa uređaja, izvještaja, marži i portala
+  @@index([companyId, importDate])
+  @@index([companyId, issueDate])
+  // silazno s praznima na kraju (sortiranje „najnoviji prvi"); u migraciji DESC NULLS LAST
+  @@index([companyId, importDate(sort: Desc)], map: "Item_companyId_importDate_desc_idx")
+  @@index([companyId, issueDate(sort: Desc)], map: "Item_companyId_issueDate_desc_idx")
+  @@index([companyId, cost])
+  @@index([companyId, state, issueDate])
+  @@index([companyId, partnerId, issueDate])
+  @@index([companyId, cpu])
+  @@index([companyId, screen])
+  @@index([companyId, os])
   // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
   @@index([invoiceId])
   @@index([modelId])
@@ -865,6 +884,8 @@ model Quote {
   companyId      String
   /// QUOTE = ponuda (Series.QUOTE), PROFORMA = predračun (Series.PROFORMA, naslov iz Company.proformaTitle).
   kind           QuoteKind   @default(QUOTE)
+  /// Naslov na dokumentu (predračun): null = Company.proformaTitle.
+  title          String?
   number         String
   date           DateTime    @db.Date
   validUntil     DateTime?   @db.Date
@@ -931,6 +952,38 @@ model QuoteLine {
   @@index([serviceId])
 }
 
+/// Paket (Marže → Paketi): skupina uređaja sa skladišta s ukupnom maržom. Informativan je —
+/// iz njega se izrađuje ponuda, predračun ili nacrt računa za kupca (cijena paketa se
+/// raspoređuje na uređaje razmjerno preporučenim cijenama).
+model Package {
+  id        String   @id @default(cuid())
+  companyId String
+  name      String
+  /// Cijena paketa (neto); null = zbroj preporučenih cijena uređaja.
+  price     Decimal? @db.Decimal(14, 2)
+  note      String?
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  items   PackageItem[]
+
+  @@index([companyId, createdAt])
+}
+
+model PackageItem {
+  packageId String
+  itemId    String
+  sort      Int    @default(0)
+
+  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  item    Item    @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@id([packageId, itemId])
+  @@index([itemId])
+}
+
 model Invoice {
   id               String        @id @default(cuid())
   companyId        String
@@ -970,6 +1023,10 @@ model Invoice {
   refInvoiceId     String? // storno/odobrenje → izvorni
   contractId       String?
   period           String? // YYYY-MM — razdoblje najma koje rata pokriva
+  /// Račun za najam iz Prodaje: „Zatim naplata prelazi u" — od datuma `rentNextFrom` novi uređaji
+  /// s računa prelaze na naplatu `rentNextBilling` (drugo razdoblje plana naplate uređaja).
+  rentNextBilling  Billing?
+  rentNextFrom     DateTime?     @db.Date
   description      String?
   note             String?
   paymentRef       String? // poziv na broj
@@ -1016,6 +1073,7 @@ model Invoice {
   @@index([contractId, period])
   @@index([companyId, accountantSentAt])
   @@index([companyId, eInvoiceStatus])
+  @@index([companyId, dueDate])
   // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
   @@index([partnerId])
   @@index([refInvoiceId])
@@ -1053,6 +1111,7 @@ model InvoiceLine {
 
   @@index([invoiceId])
   @@index([itemId])
+  @@index([description(ops: raw("gin_trgm_ops"))], type: Gin, map: "InvoiceLine_description_trgm_idx")
   // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
   @@index([modelId])
   @@index([serviceId])
@@ -1109,6 +1168,8 @@ model Contract {
   @@unique([companyId, number])
   @@index([companyId, status])
   @@index([companyId, partnerId])
+  @@index([companyId, startDate])
+  @@index([companyId, endDate])
   // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
   @@index([partnerId])
 }
@@ -1205,6 +1266,7 @@ model PurchaseOrder {
 
   @@unique([companyId, number])
   @@index([companyId, status])
+  @@index([companyId, date])
   // indeksi stranih ključeva (brisanje i spajanje bez čitanja cijele tablice)
   @@index([supplierId])
 }
@@ -1360,6 +1422,8 @@ model ServiceOrder {
 
   @@unique([companyId, number])
   @@index([companyId, status])
+  @@index([companyId, reportedAt])
+  @@index([companyId, partnerId, reportedAt])
   @@index([companyId, source, status])
   @@index([portalUserId])
   @@index([itemId])
@@ -1418,6 +1482,8 @@ model Attachment {
   mime      String
   size      Int
   data      Bytes
+  /// Vidljivo klijentu na portalu (fotografije prijave kvara s portala; osoblje uključuje po prilogu servisnog naloga).
+  public    Boolean  @default(false)
   createdBy String?
   createdAt DateTime @default(now())
 
@@ -1444,6 +1510,16 @@ model AuditLog {
   @@index([companyId, entity, entityId])
 }
 
+/// Pokušaji prijave (ograničenje broja pokušaja, zajedničko za sve procese poslužitelja).
+/// Ključ: 'email:<adresa>', 'ip:<adresa>', 'portal-email:<adresa>'…
+model LoginAttempt {
+  id  String   @id @default(cuid())
+  key String
+  at  DateTime @default(now())
+
+  @@index([key, at])
+}
+
 /// Dnevnik poslane e-pošte (račun, ponuda, predračun, otpremnica, knjigovođa, partner…).
 model EmailLog {
   id        String      @id @default(cuid())
@@ -1465,6 +1541,8 @@ model EmailLog {
 
   @@index([companyId, at])
   @@index([companyId, kind, entityId])
+  @@index([to(ops: raw("gin_trgm_ops"))], type: Gin, map: "EmailLog_to_trgm_idx")
+  @@index([subject(ops: raw("gin_trgm_ops"))], type: Gin, map: "EmailLog_subject_trgm_idx")
 }
 
 /// Korisnik portala za klijente — vezan uz partnera (kupca); zasebna prijava i sesija.

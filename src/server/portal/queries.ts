@@ -157,13 +157,14 @@ export async function portalOrder(s: PortalScope, id: string) {
     select: { ...orderListSelect, publicNote: true, timeline: true, underWarranty: true, receivedAt: true, contact: true, createdAt: true },
   });
   if (!o) return null;
-  const photos = await db.attachment.findMany({ where: { companyId: s.companyId, entity: 'serviceOrder', entityId: o.id }, orderBy: { createdAt: 'asc' }, select: attachmentMeta });
+  // klijent vidi samo priloge označene „vidljivo klijentu" (svoje fotografije s prijave i one koje servis podijeli)
+  const photos = await db.attachment.findMany({ where: { companyId: s.companyId, entity: 'serviceOrder', entityId: o.id, public: true }, orderBy: { createdAt: 'asc' }, select: attachmentMeta });
   return { ...o, photos };
 }
 
-/** Prilog naloga klijenta (sa sadržajem) — samo prilozi njegovih servisnih naloga. */
+/** Prilog naloga klijenta (sa sadržajem) — samo prilozi njegovih servisnih naloga vidljivi klijentu. */
 export async function portalAttachment(s: PortalScope, attachmentId: string) {
-  const a = await db.attachment.findFirst({ where: { id: attachmentId, companyId: s.companyId, entity: 'serviceOrder' }, select: { ...attachmentMeta, data: true } });
+  const a = await db.attachment.findFirst({ where: { id: attachmentId, companyId: s.companyId, entity: 'serviceOrder', public: true }, select: { ...attachmentMeta, data: true } });
   if (!a) return null;
   const mine = await db.serviceOrder.count({ where: { ...orderWhere(s), id: a.entityId } });
   return mine ? a : null;
