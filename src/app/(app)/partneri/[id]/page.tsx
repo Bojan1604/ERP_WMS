@@ -12,6 +12,8 @@ import { PriceEditor } from '@/components/partners/price-editor';
 import { ContractsTab, DevicesTab, InvoicesTab, LedgerTab } from '@/components/partners/tabs';
 import { countryName } from '@/components/partners/countries';
 import { eur } from '@/lib/format';
+import { SendEmailButton } from '@/components/ui/send-email-button';
+import { ClientSheetButton } from '@/components/partners/client-sheet-link';
 import { deletePartnerAction, deletePriceAction, lookupPartnerAction, savePartnerAction, savePriceAction } from '../actions';
 
 type Params = Record<string, string | string[] | undefined>;
@@ -57,12 +59,16 @@ export default async function PartnerPage({ params, searchParams }: { params: Pr
           .filter(Boolean)
           .join(' · ')}
         actions={
-          canSales && counts.open > 0 ? (
-            <div className="rounded-lg bg-bad-soft px-3 py-1.5 text-right">
-              <p className="text-xs text-bad-strong">Otvoreno ({counts.openCount})</p>
-              <p className="font-semibold text-bad-strong tnum">{eur(counts.open)}</p>
-            </div>
-          ) : null
+          <>
+            {counts.devices > 0 && <ClientSheetButton partnerId={id} />}
+            <SendEmailButton kind="partner" id={id} defaultTo={partner.email} defaultSubject={company.name} label="Pošalji e-mail" />
+            {canSales && counts.open > 0 ? (
+              <div className="rounded-lg bg-bad-soft px-3 py-1.5 text-right">
+                <p className="text-xs text-bad-strong">Otvoreno ({counts.openCount})</p>
+                <p className="font-semibold text-bad-strong tnum">{eur(counts.open)}</p>
+              </div>
+            ) : null}
+          </>
         }
       />
       <Tabs
@@ -74,6 +80,8 @@ export default async function PartnerPage({ params, searchParams }: { params: Pr
           ...(canRentals ? [{ href: `${base}?tab=ugovori`, label: 'Ugovori', count: counts.contracts }] : []),
           { href: `${base}?tab=cjenik`, label: 'Cjenik', count: counts.prices },
           ...(canSales ? [{ href: `${base}?tab=kartica`, label: 'Kartica' }] : []),
+          // portal za klijente (korisnici, prijave kvara) — zasebna stranica
+          ...(partner.isCustomer ? [{ href: `${base}/portal?tab=portal`, label: 'Portal' }] : []),
         ]}
       />
       {tab === 'racuni' && canSales ? (
@@ -106,6 +114,10 @@ export default async function PartnerPage({ params, searchParams }: { params: Pr
             excluded: partner.excluded,
             paymentTermDays: partner.paymentTermDays,
             note: partner.note,
+            endpointId: partner.endpointId,
+            vatCategoryOverride: partner.vatCategoryOverride,
+            branchCode: partner.branchCode,
+            branchName: partner.branchName,
           }}
           company={{ vatRegistered: company.vatRegistered, vatRate: num(company.vatRate), country: company.country, paymentTermDays: company.paymentTermDays }}
           save={savePartnerAction}

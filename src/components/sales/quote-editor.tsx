@@ -19,10 +19,13 @@ import { LinesTable } from './lines-table';
 import { TaxFields } from './invoice-tax-fields';
 import { TotalsBox } from './totals-box';
 import { lineKey } from './inputs';
-import { modelName, type EditorLine, type SalesLookups } from './types';
+import { ServicePicker } from './service-picker';
+import { modelName, type EditorLine, type SalesLookups, type ServiceOpt } from './types';
 
 export interface QuoteEditorValue {
   id: string | null;
+  /** Ponuda ili predračun (samo pri izradi). */
+  kind?: 'QUOTE' | 'PROFORMA';
   partnerId: string | null;
   date: string;
   validUntil: string;
@@ -35,8 +38,21 @@ export interface QuoteEditorValue {
 }
 
 /** Editor ponude: stavke po modelu (bez serijskih), konkretni uređaji, usluge i ručne stavke. */
-export function QuoteEditor({ initial, lookups, stock: initialStock }: { initial: QuoteEditorValue; lookups: SalesLookups; stock: Record<string, number> }) {
-  const { partners, services, models, company } = lookups;
+export function QuoteEditor({
+  initial,
+  lookups,
+  stock: initialStock,
+  showCost = true,
+  canCreateService = false,
+}: {
+  initial: QuoteEditorValue;
+  lookups: SalesLookups;
+  stock: Record<string, number>;
+  showCost?: boolean;
+  canCreateService?: boolean;
+}) {
+  const { partners, models, company } = lookups;
+  const [services, setServices] = useState<ServiceOpt[]>(lookups.services);
   const [v, setV] = useState<QuoteEditorValue>(initial);
   const [stock, setStock] = useState(initialStock);
   const [picker, setPicker] = useState<'devices' | 'services' | 'models' | null>(null);
@@ -47,7 +63,7 @@ export function QuoteEditor({ initial, lookups, stock: initialStock }: { initial
   const set = (patch: Partial<QuoteEditorValue>) => setV((cur) => ({ ...cur, ...patch }));
 
   const partner = partners.find((p) => p.id === v.partnerId) ?? null;
-  const treatment = partner ? customerVat(partner.country, company) : null;
+  const treatment = partner ? customerVat(partner, company) : null;
   const totals = useMemo(
     () => documentTotals({ lines: v.lines, vatRate: v.vatRate, discountPct: v.discountPct, discountAmount: v.discountAmount }),
     [v.lines, v.vatRate, v.discountPct, v.discountAmount],
@@ -56,7 +72,7 @@ export function QuoteEditor({ initial, lookups, stock: initialStock }: { initial
   const choosePartner = (id: string | null) => {
     const p = partners.find((x) => x.id === id);
     if (!p) return set({ partnerId: null });
-    set({ partnerId: p.id, vatRate: customerVat(p.country, company).rate });
+    set({ partnerId: p.id, vatRate: customerVat(p, company).rate });
   };
 
   const addModel = async (modelId: string) => {
@@ -70,14 +86,26 @@ export function QuoteEditor({ initial, lookups, stock: initialStock }: { initial
       ...cur,
       lines: [
         ...cur.lines,
-        { key: lineKey(), kind: 'MODEL', modelId, description: modelName(m), unit: 'kom', kpd: '', qty: 1, unitPrice: d.price, discountPct: 0, warrantyMonths: null, agreedPrice: d.source === 'agreed' },
+        {
+          key: lineKey(),
+          kind: 'MODEL',
+          modelId,
+          description: modelName(m),
+          unit: 'kom',
+          kpd: '',
+          qty: 1,
+          unitPrice: d.price,
+          discountPct: 0,
+          warrantyMonths: null,
+          agreedPrice: d.source === 'agreed',
+          suggestSale: d.price,
+          suggestRent: m.rentPrice ?? null,
+        },
       ],
     }));
     toast('ok', `Dodano: ${modelName(m)}`);
   };
-  const addService = (id: string) => {
-    const s = services.find((x) => x.id === id);
-    if (!s) return;
+  const addService = (s: ServiceOpt) => {
     setV((cur) => ({
       ...cur,
       lines: [...cur.lines, { key: lineKey(), kind: 'SERVICE', serviceId: s.id, description: s.name, unit: s.unit, kpd: '', qty: 1, unitPrice: s.price, discountPct: 0, warrantyMonths: null, agreedPrice: false }],
@@ -97,6 +125,7 @@ export function QuoteEditor({ initial, lookups, stock: initialStock }: { initial
         qty: l.qty,
         unitPrice: l.unitPrice,
         discountPct: l.discountPct,
+        lineType: l.lineType === 'RENT' ? 'RENT' : null,
       })),
     });
 
@@ -177,7 +206,14 @@ export function QuoteEditor({ initial, lookups, stock: initialStock }: { initial
           </>
         }
       >
-        <LinesTable lines={v.lines} onChange={(lines) => set({ lines })} mode="quote" stock={stock} />
+        <LinesTable
+          lines={v.lines}
+          onChange={(lines) => set({ lines })}
+          mode="quote"
+          stock={stock}
+          showCost={showCost}
+          rent={{ docType: 'SALE', months: 1, company, models, allowRent: true }}
+        />
       </Card>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_22rem]">
@@ -198,7 +234,7 @@ export function QuoteEditor({ initial, lookups, stock: initialStock }: { initial
             {v.lines.length} stavki · ukupno <b className="text-fg tnum">{eur(totals.total)}</b>
           </span>
           <Button variant="primary" icon={<Save className="size-4" />} loading={pending} disabled={!v.partnerId || !v.lines.length} onClick={save}>
-            Spremi ponudu
+            {v.kind === 'PROFORMA' ? `Spremi — ${(company.proformaTitle || 'Predračun').toLowerCase()}` : 'Spremi ponudu'}
           </Button>
         </div>
       </div>
@@ -225,6 +261,8 @@ export function QuoteEditor({ initial, lookups, stock: initialStock }: { initial
                 agreedPrice: d.priceSource === 'agreed',
                 serial: d.serial,
                 cost: d.cost,
+                suggestSale: d.price,
+                suggestRent: d.rent ?? null,
               }))),
             ],
           })
@@ -234,6 +272,9 @@ export function QuoteEditor({ initial, lookups, stock: initialStock }: { initial
         categories={lookups.categories}
         warehouses={lookups.warehouses}
         exclude={v.lines.map((l) => l.itemId).filter((x): x is string => !!x)}
+        suppliers={lookups.suppliers}
+        statuses={lookups.statuses}
+        showCost={showCost}
       />
       <CatalogPicker
         open={picker === 'models'}
@@ -242,13 +283,13 @@ export function QuoteEditor({ initial, lookups, stock: initialStock }: { initial
         entries={models.map((m) => ({ id: m.id, label: modelName(m), hint: m.salePrice ? null : 'cijena iz marže', price: m.salePrice }))}
         onPick={addModel}
       />
-      <CatalogPicker
+      <ServicePicker
         open={picker === 'services'}
         onClose={() => setPicker(null)}
-        title="Usluge iz šifrarnika"
-        entries={services.map((s) => ({ id: s.id, label: s.name, hint: s.unit, price: s.price }))}
+        services={services}
         onPick={addService}
-        empty="Nema usluga — dodajte ih u Postavke → Šifrarnici."
+        onCreated={(x) => setServices((cur) => [...cur, x].sort((a, b) => a.name.localeCompare(b.name, 'hr')))}
+        canCreate={canCreateService}
       />
     </div>
   );

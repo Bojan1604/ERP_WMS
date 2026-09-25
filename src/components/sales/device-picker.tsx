@@ -12,11 +12,15 @@ import { findDevices } from '@/app/(app)/prodaja/racuni/actions';
 import { modelName, type DeviceOpt, type ModelOpt, type NamedOpt } from './types';
 
 const SOURCE: Record<DeviceOpt['priceSource'], string> = { agreed: 'cjenik', model: 'cijena modela', margin: 'iz marže' };
+const RENT_SOURCE: Record<NonNullable<DeviceOpt['rentSource']>, string> = { agreed: 'cjenik', item: 'uređaj', model: 'model', cost: '% nabavne', contract: 's ugovora' };
+
+export type PickMode = 'stock' | 'rented';
 
 /**
- * Birač uređaja sa skladišta (na skladištu ili izašli iz skladišta): tražilica,
- * filtri po modelu, kategoriji i skladištu, višestruki odabir. Cijena je
- * preporučena za odabranog kupca.
+ * Birač uređaja: tražilica, filtri po modelu, kategoriji, skladištu, dobavljaču
+ * i statusu, višestruki odabir. Zadano raspoloživi uređaji (na skladištu ili
+ * izašli); za najam i „Postojeći najmovi" (po želji samo uređaji ovog kupca).
+ * Cijena je preporučena za odabranog kupca (za najam mjesečna).
  */
 export function DevicePicker({
   open,
@@ -26,27 +30,44 @@ export function DevicePicker({
   models,
   categories,
   warehouses,
+  suppliers = [],
+  statuses = [],
   exclude = [],
   fixedModelId,
   count,
   title = 'Uređaji sa skladišta',
+  rent = false,
+  allowRented = false,
+  showCost = true,
 }: {
   open: boolean;
   onClose: () => void;
-  onPick: (devices: DeviceOpt[]) => void;
+  onPick: (devices: DeviceOpt[], mode: PickMode) => void;
   partnerId: string | null;
   models: ModelOpt[];
   categories: NamedOpt[];
   warehouses: NamedOpt[];
+  suppliers?: NamedOpt[];
+  statuses?: Array<NamedOpt & { kind: string }>;
   exclude?: string[];
   fixedModelId?: string;
   count?: number;
   title?: string;
+  /** Prikaži mjesečni najam kao cijenu. */
+  rent?: boolean;
+  /** Nudi način „Postojeći najmovi". */
+  allowRented?: boolean;
+  /** Nabavna cijena i marža (pravo „costs"). */
+  showCost?: boolean;
 }) {
   const [q, setQ] = useState('');
+  const [mode, setMode] = useState<PickMode>('stock');
+  const [onlyPartner, setOnlyPartner] = useState(true);
   const [modelId, setModelId] = useState(fixedModelId ?? '');
   const [categoryId, setCategoryId] = useState('');
   const [warehouseId, setWarehouseId] = useState('');
+  const [supplierId, setSupplierId] = useState('');
+  const [statusId, setStatusId] = useState('');
   const [rows, setRows] = useState<DeviceOpt[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,13 +79,28 @@ export function DevicePicker({
       setModelId(fixedModelId ?? '');
     }
   }, [open, fixedModelId]);
+  useEffect(() => {
+    // status ovisi o načinu (skladište / najam)
+    setStatusId('');
+    setPicked(new Map());
+  }, [mode]);
 
   useEffect(() => {
     if (!open) return;
     let live = true;
     setLoading(true);
     const t = setTimeout(async () => {
-      const res = await findDevices({ q, modelId: modelId || null, categoryId: categoryId || null, warehouseId: warehouseId || null, partnerId });
+      const res = await findDevices({
+        q,
+        modelId: modelId || null,
+        categoryId: categoryId || null,
+        warehouseId: warehouseId || null,
+        supplierId: supplierId || null,
+        statusId: statusId || null,
+        partnerId,
+        mode,
+        onlyPartner,
+      });
       if (!live) return;
       setLoading(false);
       if (res.ok) {
@@ -76,7 +112,7 @@ export function DevicePicker({
       live = false;
       clearTimeout(t);
     };
-  }, [open, q, modelId, categoryId, warehouseId, partnerId]);
+  }, [open, q, modelId, categoryId, warehouseId, supplierId, statusId, partnerId, mode, onlyPartner]);
 
   const skip = useMemo(() => new Set(exclude), [exclude]);
   const visible = rows.filter((r) => !skip.has(r.id));
@@ -89,12 +125,15 @@ export function DevicePicker({
       return next;
     });
   const exact = count === undefined || picked.size === count;
+  const rented = mode === 'rented';
+  const statusOpts = statuses.filter((s) => (rented ? s.kind === 'RENTED' : s.kind === 'IN_STOCK' || s.kind === 'RESERVED'));
+  const cols = 7 + (showCost ? 2 : 0) + (rented ? 1 : 0);
 
   return (
     <Dialog
       open={open}
       onClose={onClose}
-      title={title}
+      title={rented ? 'Postojeći najmovi' : title}
       size="xl"
       footer={
         <>
@@ -107,7 +146,7 @@ export function DevicePicker({
             variant="primary"
             disabled={!picked.size || !exact}
             onClick={() => {
-              onPick([...picked.values()]);
+              onPick([...picked.values()], mode);
               onClose();
             }}
           >
@@ -116,6 +155,29 @@ export function DevicePicker({
         </>
       }
     >
+      {allowRented && !fixedModelId && (
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <div className="inline-flex rounded-md border border-line p-0.5 text-sm">
+            {(
+              [
+                ['stock', 'Novi najam — sa skladišta'],
+                ['rented', 'Postojeći najmovi'],
+              ] as const
+            ).map(([v, label]) => (
+              <button key={v} type="button" onClick={() => setMode(v)} className={cn('rounded px-2.5 py-1', mode === v ? 'bg-brand text-white' : 'text-fg-2 hover:bg-muted')}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {rented && (
+            <label className="inline-flex items-center gap-1.5 text-sm">
+              <input type="checkbox" checked={onlyPartner} onChange={(e) => setOnlyPartner(e.target.checked)} className="size-4 accent-[var(--color-brand)]" />
+              Samo uređaji ovog kupca
+            </label>
+          )}
+          <span className="text-xs text-fg-3">{rented ? 'Cijena se preuzima s postojećeg ugovora.' : 'Uređaji se skidaju sa stanja i vežu uz ugovor.'}</span>
+        </div>
+      )}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="relative w-full sm:w-64">
           {loading ? (
@@ -143,14 +205,36 @@ export function DevicePicker({
             ))}
           </select>
         )}
-        <select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)} className={cn(controlClass, 'h-8 w-auto max-w-48')}>
-          <option value="">Sva skladišta</option>
-          {warehouses.map((w) => (
-            <option key={w.id} value={w.id}>
-              {w.name}
-            </option>
-          ))}
-        </select>
+        {!rented && (
+          <select value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)} className={cn(controlClass, 'h-8 w-auto max-w-48')}>
+            <option value="">Sva skladišta</option>
+            {warehouses.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name}
+              </option>
+            ))}
+          </select>
+        )}
+        {suppliers.length > 0 && (
+          <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className={cn(controlClass, 'h-8 w-auto max-w-48')} aria-label="Dobavljač">
+            <option value="">Svi dobavljači</option>
+            {suppliers.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        )}
+        {statusOpts.length > 1 && (
+          <select value={statusId} onChange={(e) => setStatusId(e.target.value)} className={cn(controlClass, 'h-8 w-auto max-w-44')} aria-label="Status">
+            <option value="">Svi statusi</option>
+            {statusOpts.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
       {error && <p className="mb-2 rounded-md bg-bad-soft px-3 py-2 text-sm text-bad-strong">{error}</p>}
       <div className="max-h-[55vh] overflow-auto scroll-slim rounded-md border border-line">
@@ -171,11 +255,12 @@ export function DevicePicker({
               <th>Serijski broj</th>
               <th>Model</th>
               <th>Kategorija</th>
-              <th>Skladište</th>
+              <th>{rented ? 'Ugovor' : 'Skladište'}</th>
+              {rented && <th>Kod</th>}
               <th>Status</th>
-              <th className="num">Nabavna</th>
-              <th className="num">Cijena</th>
-              <th className="num">Marža</th>
+              {showCost && <th className="num">Nabavna</th>}
+              <th className="num">{rent || rented ? 'Najam/mj' : 'Cijena'}</th>
+              {showCost && <th className="num">Marža</th>}
             </tr>
           </thead>
           <tbody>
@@ -185,24 +270,30 @@ export function DevicePicker({
                   <input type="checkbox" readOnly checked={picked.has(r.id)} className="size-4 align-middle accent-[var(--color-brand)]" aria-label="Označi" />
                 </td>
                 <td className="font-mono text-sm">{r.serial}</td>
-                <td>{r.model}</td>
-                <td className="text-fg-3">{r.category ?? '—'}</td>
-                <td className="text-fg-3">{r.warehouse ?? '—'}</td>
                 <td>
-                  <Badge tone={r.state === 'RESERVED' ? 'warn' : 'ok'}>{r.status}</Badge>
+                  {r.model}
+                  {r.supplier && <span className="block text-xs text-fg-3">{r.supplier}</span>}
                 </td>
-                <td className="num text-fg-3">{amount(r.cost)}</td>
+                <td className="text-fg-3">{r.category ?? '—'}</td>
+                <td className="text-fg-3">{rented ? (r.contractNumber ?? '—') : (r.warehouse ?? '—')}</td>
+                {rented && <td className="text-fg-3">{r.holder ?? '—'}</td>}
+                <td>
+                  <Badge tone={r.state === 'RESERVED' ? 'warn' : r.state === 'RENTED' ? 'info' : 'ok'}>{r.status}</Badge>
+                </td>
+                {showCost && <td className="num text-fg-3">{amount(r.cost)}</td>}
                 <td className="num">
-                  {amount(r.price)}
-                  <span className={cn('ml-1.5 text-xs', r.priceSource === 'agreed' ? 'font-medium text-brand' : 'text-fg-4')}>{SOURCE[r.priceSource]}</span>
+                  {rent || rented ? amount(r.rent ?? 0) : amount(r.price)}
+                  <span className={cn('ml-1.5 text-xs', (rent || rented ? r.rentSource === 'agreed' : r.priceSource === 'agreed') ? 'font-medium text-brand' : 'text-fg-4')}>
+                    {rent || rented ? (r.rentSource ? RENT_SOURCE[r.rentSource] : '') : SOURCE[r.priceSource]}
+                  </span>
                 </td>
-                <td className="num text-fg-3">{pct(r.margin)}</td>
+                {showCost && <td className="num text-fg-3">{pct(r.margin)}</td>}
               </tr>
             ))}
             {!visible.length && !loading && (
               <tr>
-                <td colSpan={9} className="py-8 text-center text-fg-3">
-                  Nema raspoloživih uređaja za zadane filtre.
+                <td colSpan={cols} className="py-8 text-center text-fg-3">
+                  {rented ? 'Nema uređaja u najmu za zadane filtre.' : 'Nema raspoloživih uređaja za zadane filtre.'}
                 </td>
               </tr>
             )}

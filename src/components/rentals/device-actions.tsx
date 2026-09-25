@@ -1,16 +1,16 @@
 'use client';
 
 import { useState } from 'react';
-import { CalendarRange, Euro, Pause, Play, Undo2 } from 'lucide-react';
+import { CalendarRange, Euro, Pause, Play, SlidersHorizontal, Undo2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
-import { Field, Input } from '@/components/ui/field';
+import { Field, FormGrid, Input, Select } from '@/components/ui/field';
 import { SelectionBar } from '@/components/ui/selection';
 import { useAction } from '@/components/ui/action';
 import { parseNumber } from '@/domain/money';
-import type { PlanPeriodInput } from '@/domain/billing';
+import type { BillingCode, PlanPeriodInput } from '@/domain/billing';
 import { PlanEditor } from './plan-editor';
-import { planFromRows, rowsFromPlan, validatePlan, type PlanRow } from '@/domain/plan';
+import { BILLING_OPTIONS, BULK_SEASON_OPTIONS, planFromRows, rowsFromPlan, validatePlan, type BulkSeason, type PlanRow } from '@/domain/plan';
 import { itemsPatchAction, removeItemsAction } from '@/app/(app)/najam/ugovori/actions';
 
 export interface DeviceInfo {
@@ -22,7 +22,7 @@ export interface DeviceInfo {
   rented: boolean;
 }
 
-type Mode = null | 'price' | 'plan' | 'remove';
+type Mode = null | 'price' | 'plan' | 'terms' | 'remove';
 
 /** Traka grupnih radnji nad označenim uređajima ugovora. */
 export function DeviceBulkBar({ contractId, devices, defaultFrom }: { contractId: string; devices: DeviceInfo[]; defaultFrom: string }) {
@@ -32,6 +32,7 @@ export function DeviceBulkBar({ contractId, devices, defaultFrom }: { contractId
   const [price, setPrice] = useState('');
   const [plan, setPlan] = useState<PlanRow[]>([]);
   const [planError, setPlanError] = useState<string | null>(null);
+  const [bulk, setBulk] = useState<{ price: string; billing: BillingCode | ''; season: BulkSeason | '' }>({ price: '', billing: '', season: '' });
   const byId = new Map(devices.map((d) => [d.id, d]));
   const picked = ids.map((id) => byId.get(id)).filter((d): d is DeviceInfo => Boolean(d));
 
@@ -51,6 +52,7 @@ export function DeviceBulkBar({ contractId, devices, defaultFrom }: { contractId
       const same = list.every((d) => d.monthly === list[0]?.monthly);
       setPrice(same && list[0] ? String(list[0].monthly).replace('.', ',') : '');
     }
+    if (m === 'terms') setBulk({ price: '', billing: '', season: '' });
     if (m === 'plan') {
       const first = JSON.stringify(list[0]?.plan ?? []);
       setPlan(list.every((d) => JSON.stringify(d.plan) === first) ? rowsFromPlan(list[0]?.plan) : []);
@@ -71,6 +73,9 @@ export function DeviceBulkBar({ contractId, devices, defaultFrom }: { contractId
               <>
                 <Button size="sm" icon={<Euro className="size-3.5" />} onClick={() => open('price', sel, clear)}>
                   Mjesečna cijena
+                </Button>
+                <Button size="sm" icon={<SlidersHorizontal className="size-3.5" />} onClick={() => open('terms', sel, clear)}>
+                  Sezona i naplata
                 </Button>
                 <Button size="sm" icon={<CalendarRange className="size-3.5" />} onClick={() => open('plan', sel, clear)}>
                   Plan naplate
@@ -129,6 +134,50 @@ export function DeviceBulkBar({ contractId, devices, defaultFrom }: { contractId
         <Field label="Mjesečni najam (€)" hint="Cijena se uvijek unosi mjesečno; rata se računa iz plana naplate.">
           <Input autoFocus inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} className="text-right" />
         </Field>
+      </Dialog>
+
+      <Dialog
+        open={mode === 'terms'}
+        onClose={() => setMode(null)}
+        title={`Cijena, naplata i sezona — ${picked.length} uređaja`}
+        size="md"
+        footer={
+          <>
+            <Button onClick={() => setMode(null)}>Odustani</Button>
+            <Button
+              variant="primary"
+              loading={patch.pending}
+              disabled={!bulk.price.trim() && !bulk.billing && !bulk.season}
+              onClick={() =>
+                patch.run({
+                  contractId,
+                  ids,
+                  ...(bulk.price.trim() ? { monthly: parseNumber(bulk.price) } : {}),
+                  ...(bulk.billing ? { billing: bulk.billing } : {}),
+                  ...(bulk.season ? { season: bulk.season } : {}),
+                })
+              }
+            >
+              Primijeni na {picked.length}
+            </Button>
+          </>
+        }
+      >
+        <FormGrid cols={3}>
+          <Field label="Mjesečno (€)" hint="Prazno = bez promjene">
+            <Input autoFocus inputMode="decimal" value={bulk.price} onChange={(e) => setBulk({ ...bulk, price: e.target.value })} className="text-right" placeholder="—" />
+          </Field>
+          <Field label="Naplata">
+            <Select placeholder="bez promjene" options={BILLING_OPTIONS} value={bulk.billing} onChange={(e) => setBulk({ ...bulk, billing: e.target.value as BillingCode | '' })} />
+          </Field>
+          <Field label="Sezona">
+            <Select placeholder="bez promjene" options={BULK_SEASON_OPTIONS} value={bulk.season} onChange={(e) => setBulk({ ...bulk, season: e.target.value as BulkSeason | '' })} />
+          </Field>
+        </FormGrid>
+        <p className="mt-3 text-sm text-fg-3">
+          Naplata i sezona mijenjaju se u planu svakog označenog uređaja (u svim njegovim razdobljima). „Kao na ugovoru" briše vlastitu sezonu — uređaj
+          bez drugih odstupanja vraća se na uvjete ugovora.
+        </p>
       </Dialog>
 
       <Dialog

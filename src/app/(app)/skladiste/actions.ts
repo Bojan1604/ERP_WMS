@@ -4,13 +4,14 @@ import { z } from 'zod';
 import { action } from '@/server/action';
 import { db, transaction } from '@/server/db';
 import { audit, diff } from '@/server/audit';
-import { can } from '@/domain/permissions';
+import { needsStatusApproval } from '@/domain/permissions';
 import { DomainError } from '@/server/errors';
+import { canSeeCost } from '@/domain/permissions';
 import { itemEvents } from '@/server/services/items';
 import { addAttachments, photoBytes, withPhotos, zPhotos } from '@/server/services/attachments';
 import { zBool, zId, zIds, zMoney, zOptDate, zOptId, zOptInt, zOptMoney, zOptText, zReq } from '@/server/zod';
 import {
-  announceReturn, applyStatusChange, bulkEdit, markOut, requestStatusChange, transferItems, updateItem, writeOff,
+  announceReturn, applyStatusChange, bulkEdit, deleteItems, markOut, requestStatusChange, transferItems, updateItem, writeOff,
 } from '@/server/services/warehouse';
 
 const kom = (n: number) => `${n} kom`;
@@ -20,9 +21,10 @@ export const changeStatus = action(
   z.object({ itemIds: zIds, statusId: zId, note: zOptText, warehouseId: zOptId }),
   async (input, user) =>
     transaction(async (tx) => {
-      if (!can(user.perms, 'warehouse', 'edit')) {
+      // odobrenje po korisniku (F8): User.requireApproval, inače pravilo firme za korisnike bez punog prava
+      if (user.role !== 'ADMIN') {
         const company = await tx.company.findUniqueOrThrow({ where: { id: user.companyId }, select: { statusChangeNeedsApproval: true } });
-        if (company.statusChangeNeedsApproval) {
+        if (needsStatusApproval(user, company.statusChangeNeedsApproval)) {
           const r = await requestStatusChange(tx, user, input);
           await audit(tx, user, {
             entity: 'approvalRequest',
@@ -125,9 +127,13 @@ export const bulkEditAction = action(
     cost: optField(zOptMoney),
     modelId: optField(zId),
     note: optField(zOptText),
+    partnerId: optField(zOptId),
+    marginPct: optField(zOptMoney),
   }),
   async (input, user) =>
     transaction(async (tx) => {
+      // nabavna cijena i marža samo uz pravo na nabavne cijene
+      if ((input.cost !== undefined || input.marginPct !== undefined) && !canSeeCost(user.perms)) throw new DomainError('Nemate pravo mijenjati nabavne cijene i marže.');
       const r = await bulkEdit(tx, user, input);
       await audit(tx, user, { entity: 'item', action: 'bulkUpdate', summary: `Grupna izmjena (${kom(r.count)}): ${r.summary}`, diff: { itemIds: input.itemIds, transferIds: r.transferIds } });
       return { message: `Izmijenjeno ${kom(r.count)}.` };
@@ -154,15 +160,26 @@ export const updateItemAction = action(
     modelId: zReq('Model'),
     warehouseId: zOptId,
     supplierId: zOptId,
-    cost: zMoney,
+    cost: optField(zMoney),
     rentPrice: zOptMoney,
-    marginPct: zOptMoney,
+    marginPct: optField(zOptMoney),
     warrantyMonths: zOptInt,
     importDate: zOptDate,
     note: zOptText,
+    // ručni ispravci s kartice (E6); polje koje obrazac ne šalje ostaje kakvo jest
+    cpu: optField(zOptText),
+    screen: optField(zOptText),
+    os: optField(zOptText),
+    categoryId: optField(zOptId),
+    salePrice: optField(zOptMoney),
+    issueDate: optField(zOptDate),
+    invoiceId: optField(zOptId),
+    partnerId: optField(zOptId),
   }),
-  async ({ id, ...input }, user) =>
+  async ({ id, ...raw }, user) =>
     transaction(async (tx) => {
+      // bez prava na nabavne cijene nabavna i marža se ne mijenjaju (obrazac ih ni ne prikazuje)
+      const input = canSeeCost(user.perms) ? raw : { ...raw, cost: undefined, marginPct: undefined };
       const r = await updateItem(tx, user, id, input);
       if (r.transfer) {
         await audit(tx, user, {
@@ -184,6 +201,37 @@ export const updateItemAction = action(
       return { message: r.changed.length ? 'Spremljeno.' : 'Nema promjena.' };
     }),
 );
+
+/** Brisanje uređaja bez računa, ugovora, međuskladišnice i servisa (pojedinačno ili skupno). */
+export const deleteItemsAction = action({ module: 'warehouse', level: 'edit' }, z.object({ itemIds: zIds, back: zBool }), async ({ itemIds, back }, user) =>
+  transaction(async (tx) => {
+    const r = await deleteItems(tx, user, itemIds);
+    await audit(tx, user, {
+      entity: 'item',
+      entityId: r.count === 1 ? itemIds[0] : null,
+      action: 'delete',
+      summary: `Obrisano uređaja: ${r.count} (${r.serials.slice(0, 20).join(', ')}${r.count > 20 ? '…' : ''})`,
+      diff: { itemIds, serials: r.serials },
+    });
+    const note = r.fromReceipt ? ' Primka i trošak nabave ostaju — za povrat robe dobavljaču stornirajte primku.' : '';
+    return { message: `Obrisano ${kom(r.count)}.${note}`, ...(back ? { redirect: '/skladiste' } : {}) };
+  }),
+);
+
+/** Računi za ručnu vezu s karticom uređaja (pretraga po broju ili kupcu). */
+export const searchInvoicesForItem = action({ module: 'warehouse', level: 'edit' }, z.object({ q: zOptText }), async ({ q }, user) => {
+  const rows = await db.invoice.findMany({
+    where: {
+      companyId: user.companyId,
+      number: { not: null },
+      ...(q ? { OR: [{ number: { contains: q, mode: 'insensitive' } }, { partner: { name: { contains: q, mode: 'insensitive' } } }] } : {}),
+    },
+    orderBy: [{ date: 'desc' }],
+    take: 30,
+    select: { id: true, number: true, date: true, partner: { select: { name: true } } },
+  });
+  return { data: rows.map((r) => ({ value: r.id, label: r.number ?? '—', hint: `${r.partner.name} · ${r.date.toISOString().slice(0, 10)}` })), revalidate: [] };
+});
 
 /** Pretraga partnera za padajuće izbornike (bez slanja cijelog popisa u preglednik). */
 export const searchPartners = action(

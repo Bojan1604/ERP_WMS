@@ -20,6 +20,8 @@ export async function GET() {
   await db.auditLog.create({
     data: { companyId: user.companyId, userId: user.id, userName: user.name, entity: 'import', action: 'export', summary: 'Preuzeta sigurnosna kopija (JSON)' },
   });
+  // podsjetnik na kopiju (nadzorna ploča) računa od zadnje preuzete ili spremljene kopije
+  await db.company.update({ where: { id: user.companyId }, data: { lastBackupAt: new Date() } });
   const stream = await exportCompanyStream(user.companyId);
   return new Response(stream, {
     headers: {

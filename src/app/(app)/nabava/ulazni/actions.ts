@@ -2,16 +2,23 @@
 
 import { z } from 'zod';
 import { action } from '@/server/action';
-import { transaction } from '@/server/db';
+import { db, transaction } from '@/server/db';
 import { zBool, zDate, zId, zIds, zMoney, zOptDate, zOptId, zOptMoney, zOptText, zReq } from '@/server/zod';
-import { deleteSupplierInvoice, saveSupplierInvoice } from '@/server/services/expenses';
-import { acceptSupplierInvoice, markSupplierInvoicesPaid, rejectSupplierInvoice, reportPaid } from '@/server/services/inbound';
+import { deleteSupplierInvoice, deleteSupplierInvoices, rebookSupplierInvoice, saveSupplierInvoice } from '@/server/services/supplier-invoices';
+import { acceptSupplierInvoice, fetchProviderPdf, markSupplierInvoicesPaid, rejectSupplierInvoice, reportPaid } from '@/server/services/inbound';
 import { fetchIncoming } from '@/server/services/inbound-fetch';
 import { today } from '@/domain/dates';
 
 const schema = z.object({
   id: zOptId,
-  supplierId: zId,
+  /** Odabrani partner ili slobodni unos (naziv + OIB) — partner se tada otvara pri spremanju. */
+  supplierId: zOptId,
+  supplierName: zOptText.optional(),
+  supplierOib: zOptText.optional(),
+  vatPct: zOptMoney.optional(),
+  currency: zOptText.optional(),
+  orderId: zOptId.optional(),
+  receiptId: zOptId.optional(),
   number: zReq('Broj računa'),
   issueDate: zDate,
   dueDate: zOptDate,
@@ -28,7 +35,10 @@ export const saveSupplierInvoiceAction = action({ module: 'purchasing', level: '
   const si = await transaction((tx) => saveSupplierInvoice(tx, user, id, input));
   // eRačun koji je upravo plaćen: status „plaćen" posredniku (neuspjeh ne poništava spremanje)
   const warning = si.newlyPaid && input.paidDate ? await reportPaid(user, [{ id: si.id, source: 'EINVOICE', eInvoiceId: si.eInvoiceId }], input.paidDate) : null;
-  return { message: `Ulazni račun ${si.internalNo} spremljen.`, redirect: '/nabava/ulazni', data: { warning } };
+  const extra = [si.supplierCreated && 'Dobavljač je otvoren u partnerima — dopunite adresu.', si.mode === 'receipt' && 'Trošak robe je knjižen primkom — račun ga ne knjiži ponovno.']
+    .filter(Boolean)
+    .join(' ');
+  return { message: `Ulazni račun ${si.internalNo} spremljen.${extra ? ` ${extra}` : ''}`, redirect: `/nabava/ulazni/${si.id}`, data: { warning } };
 });
 
 export const supplierInvoicesPaidAction = action(
@@ -81,9 +91,56 @@ export const rejectSupplierInvoiceAction = action(
   },
 );
 
+/** Skupno brisanje ulaznih računa (sve ili ništa). */
+export const deleteSupplierInvoicesAction = action({ module: 'purchasing', level: 'edit' }, z.object({ ids: zIds }), async ({ ids }, user) =>
+  transaction(async (tx) => {
+    const n = await deleteSupplierInvoices(tx, user, ids);
+    return { message: `Obrisano ulaznih računa: ${n}.` };
+  }),
+);
+
+/** „Knjiži ponovno" — trošak je obrisan ili račun nije knjižen. */
+export const rebookSupplierInvoiceAction = action({ module: 'purchasing', level: 'edit' }, z.object({ id: zId }), async ({ id }, user) =>
+  transaction(async (tx) => {
+    const mode = await rebookSupplierInvoice(tx, user, id);
+    return { message: mode === 'own' ? 'Račun je ponovno knjižen kao trošak.' : 'Trošak robe je već knjižen primkom — ništa se ne knjiži dvaput.' };
+  }),
+);
+
+/** PDF posrednika na zahtjev (eRačun): dohvaća izvorni dokument i sprema ugrađeni PDF kao prilog. */
+export const providerPdfAction = action({ module: 'purchasing', level: 'edit' }, z.object({ id: zId }), async ({ id }, user) => {
+  const r = await fetchProviderPdf(user, id);
+  return { message: r.created ? 'PDF posrednika je preuzet i spremljen uz račun.' : 'PDF posrednika je već spremljen uz račun.', data: { url: `/api/nabava/ulazni/${id}/prilog/${r.attachmentId}` } };
+});
+
 export const deleteSupplierInvoiceAction = action({ module: 'purchasing', level: 'edit' }, z.object({ id: zId }), async ({ id }, user) =>
   transaction(async (tx) => {
     await deleteSupplierInvoice(tx, user, id);
     return { message: 'Ulazni račun je obrisan.', redirect: '/nabava/ulazni' };
   }),
 );
+
+/** Narudžbenice i primke dobavljača za vezu s ulaznim računom (samo čitanje). */
+export const supplierDocsAction = action({ module: 'purchasing', level: 'view' }, z.object({ supplierId: zId }), async ({ supplierId }, user) => {
+  const [orders, receipts] = await Promise.all([
+    db.purchaseOrder.findMany({
+      where: { companyId: user.companyId, supplierId, status: { not: 'CANCELLED' } },
+      orderBy: [{ date: 'desc' }],
+      take: 100,
+      select: { id: true, number: true, date: true, supplierInvoiceNo: true },
+    }),
+    db.goodsReceipt.findMany({
+      where: { companyId: user.companyId, supplierId, status: 'POSTED' },
+      orderBy: [{ date: 'desc' }],
+      take: 100,
+      select: { id: true, number: true, date: true, orderId: true, expense: { select: { id: true } } },
+    }),
+  ]);
+  return {
+    data: {
+      orders: orders.map((o) => ({ value: o.id, label: o.number, hint: `${o.date.toISOString().slice(0, 10)}${o.supplierInvoiceNo ? ` · račun ${o.supplierInvoiceNo}` : ''}` })),
+      receipts: receipts.map((r) => ({ value: r.id, label: r.number, hint: `${r.date.toISOString().slice(0, 10)}${r.expense ? ' · trošak knjižen' : ''}`, orderId: r.orderId })),
+    },
+    revalidate: [],
+  };
+});

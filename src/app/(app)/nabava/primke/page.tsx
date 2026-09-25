@@ -4,6 +4,8 @@ import { pageAccess } from '@/server/auth';
 import { getLookups } from '@/server/queries/lookups';
 import { listReceipts, receiptYears, supplierOptions } from '@/server/queries/purchasing';
 import { num } from '@/domain/money';
+import { canSeeCost } from '@/domain/permissions';
+import { ExportButtons } from '@/components/ui/export-buttons';
 import { Badge, Empty, PageHeader, TableWrap } from '@/components/ui/misc';
 import { FilterBar, SearchFilter, SelectFilter } from '@/components/ui/filters';
 import { Pagination, readPage } from '@/components/ui/pagination';
@@ -19,10 +21,13 @@ export default async function ReceiptsPage({ searchParams }: { searchParams: Pro
   const c = user.companyId;
   const [list, years, suppliers, lookups] = await Promise.all([listReceipts(c, sp, pg), receiptYears(c), supplierOptions(c), getLookups(c)]);
   const filtered = ['q', 'status', 'supplier', 'warehouse', 'year'].some((k) => typeof sp[k] === 'string' && sp[k]);
+  const costs = canSeeCost(user.perms);
+  const qs = new URLSearchParams();
+  for (const k of ['q', 'status', 'supplier', 'warehouse', 'year']) if (typeof sp[k] === 'string' && sp[k]) qs.set(k, sp[k] as string);
 
   return (
     <>
-      <PageHeader title="Primke" subtitle="Zaprimljena roba po dokumentima — iz narudžbenica i skupnog zaprimanja na skladištu" />
+      <PageHeader title="Primke" subtitle="Zaprimljena roba po dokumentima — iz narudžbenica i skupnog zaprimanja na skladištu" actions={<ExportButtons href={`/api/nabava/primke?${qs}`} />} />
       <FilterBar>
         <SearchFilter placeholder="Broj, dobavljač, serijski broj…" />
         <SelectFilter name="supplier" placeholder="Svi dobavljači" options={suppliers.map((s) => ({ value: s.id, label: s.name }))} />
@@ -47,7 +52,7 @@ export default async function ReceiptsPage({ searchParams }: { searchParams: Pro
                 <th>Skladište</th>
                 <th>Narudžbenica</th>
                 <th className="num">Kom</th>
-                <th className="num">Iznos</th>
+                {costs && <th className="num">Iznos</th>}
                 <th>Status</th>
               </tr>
             </thead>
@@ -73,7 +78,7 @@ export default async function ReceiptsPage({ searchParams }: { searchParams: Pro
                     )}
                   </td>
                   <td className="num">{integer(r._count.items)}</td>
-                  <td className="num">{r.status === 'CANCELLED' ? <s>{eur(num(r.total))}</s> : eur(num(r.total))}</td>
+                  {costs && <td className="num">{r.status === 'CANCELLED' ? <s>{eur(num(r.total))}</s> : eur(num(r.total))}</td>}
                   <td>
                     <Badge tone={RECEIPT_STATUS[r.status].tone}>{RECEIPT_STATUS[r.status].label}</Badge>
                   </td>
@@ -83,7 +88,7 @@ export default async function ReceiptsPage({ searchParams }: { searchParams: Pro
             <tfoot>
               <tr>
                 <td colSpan={7}>Ukupno: {integer(list.total)} primki (iznos bez storniranih)</td>
-                <td className="num">{eur(list.sum)}</td>
+                {costs && <td className="num">{eur(list.sum)}</td>}
                 <td />
               </tr>
             </tfoot>

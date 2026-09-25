@@ -6,6 +6,7 @@ import { transaction } from '@/server/db';
 import { zBool, zId, zOptId, zOptInt, zOptMoney, zOptText, zReq } from '@/server/zod';
 import { DomainError } from '@/server/errors';
 import { lookupPartner } from '@/server/lookup';
+import { VAT_OVERRIDES } from '@/domain/tax';
 import { deletePartner, deletePriceAgreement, savePartner, savePriceAgreement } from '@/server/services/partners';
 
 const partnerSchema = z.object({
@@ -26,6 +27,11 @@ const partnerSchema = z.object({
   excluded: zBool,
   paymentTermDays: zOptInt.refine((v) => v === null || (v >= 0 && v <= 365), 'Rok plaćanja mora biti 0–365 dana'),
   note: zOptText,
+  // eRačun (C8)
+  endpointId: zOptText,
+  vatCategoryOverride: z.preprocess((v) => (v === '' || v === null || v === undefined ? null : v), z.enum(VAT_OVERRIDES, { errorMap: () => ({ message: 'Nepoznata PDV kategorija' }) }).nullable()),
+  branchCode: zOptText,
+  branchName: zOptText,
 });
 
 export const savePartnerAction = action({ module: 'partners', level: 'edit' }, partnerSchema, async ({ id, ...input }, user) => {

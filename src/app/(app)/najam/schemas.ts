@@ -15,6 +15,8 @@ export const termsSchema = z.object({
   seasonFrom: zOptInt,
   seasonTo: zOptInt,
   note: zOptText,
+  /** Ručni broj ugovora; prazno = automatski. */
+  number: zOptText.optional(),
 });
 
 export const createSchema = termsSchema.extend({
@@ -40,6 +42,8 @@ export const itemsPatchSchema = z.object({
   monthly: zMoney.optional(),
   plan: planSchema.optional(),
   status: z.enum(['PAUSED', 'ACTIVE']).optional(),
+  billing: zBilling.optional(),
+  season: z.enum(['summer', 'year', 'contract']).optional(),
 });
 
 export const addSchema = z.object({

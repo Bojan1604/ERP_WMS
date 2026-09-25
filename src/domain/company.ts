@@ -23,9 +23,17 @@ export const COMPANY_NUMBER_LIMITS = {
   defaultMarginPct: [0, 99.99, false],
   defaultWarrantyMonths: [0, 240, true],
   rentFallbackPct: [0, 100, false],
+  backupKeep: [1, 365, true],
+  backupReminderDays: [0, 365, true],
 } as const satisfies Record<string, readonly [number, number, boolean]>;
 
 const TEXT_FIELDS = ['name', 'oib', 'vatId', 'address', 'zip', 'city', 'iban', 'bank', 'email', 'phone', 'web', 'invoiceFooter'] as const;
+/** Postavke dokumenata, poreza i eRačuna (F9) — tekst do 1000 znakova. */
+const DOC_TEXT_FIELDS = [
+  'swift', 'proformaTitle', 'operatorName', 'operatorOib', 'vatTextEuGoods', 'vatTextEuService', 'vatTextThirdGoods', 'vatTextThirdService',
+  'legalFooter', 'kpdRent', 'kpdSale', 'kpdService', 'accountantEmail',
+] as const;
+const BOOL_FIELDS = ['vatRegistered', 'statusChangeNeedsApproval', 'vatOnPayment', 'eInvoiceAttachPdf', 'eReportingEnabled', 'autoBackup'] as const;
 
 export interface CompanySettingsInput {
   name?: string; oib?: string | null; vatId?: string | null; address?: string | null; zip?: string | null; city?: string | null;
@@ -34,6 +42,11 @@ export interface CompanySettingsInput {
   quoteValidDays?: number; defaultMarginPct?: number; defaultWarrantyMonths?: number; rentFallbackPct?: number;
   invoicePremises?: string; invoiceDevice?: string; invoiceSeparator?: string; invoiceFooter?: string | null;
   statusChangeNeedsApproval?: boolean;
+  swift?: string | null; proformaTitle?: string | null; operatorName?: string | null; operatorOib?: string | null;
+  vatTextEuGoods?: string | null; vatTextEuService?: string | null; vatTextThirdGoods?: string | null; vatTextThirdService?: string | null;
+  legalFooter?: string | null; kpdRent?: string | null; kpdSale?: string | null; kpdService?: string | null; accountantEmail?: string | null;
+  vatOnPayment?: boolean; eInvoiceAttachPdf?: boolean; eReportingEnabled?: boolean; autoBackup?: boolean;
+  backupKeep?: number; backupReminderDays?: number; paymentModel?: string; eInvoicePaymentMeans?: string;
 }
 
 /**
@@ -74,7 +87,14 @@ export function sanitizeCompanySettings(raw: Record<string, unknown>): { company
     if (clamped !== n) notes.push(`Postavka ${k} (${n}) svedena na ${clamped}.`);
     (out as Record<string, unknown>)[k] = clamped;
   }
-  for (const k of ['vatRegistered', 'statusChangeNeedsApproval'] as const) if (typeof raw[k] === 'boolean') out[k] = raw[k];
+  for (const k of BOOL_FIELDS) if (typeof raw[k] === 'boolean') out[k] = raw[k];
+  for (const k of DOC_TEXT_FIELDS) {
+    const v = raw[k];
+    if (typeof v === 'string') (out as Record<string, unknown>)[k] = v.slice(0, 1000);
+    else if (v === null && k !== 'proformaTitle') (out as Record<string, unknown>)[k] = null;
+  }
+  if (typeof raw.paymentModel === 'string' && isPaymentModel(raw.paymentModel)) out.paymentModel = raw.paymentModel;
+  if (raw.eInvoicePaymentMeans === '30' || raw.eInvoicePaymentMeans === '58') out.eInvoicePaymentMeans = raw.eInvoicePaymentMeans;
   for (const [k, maxLen] of [['invoicePremises', 20], ['invoiceDevice', 20], ['invoiceSeparator', 3]] as const) {
     const v = raw[k];
     if (typeof v === 'string' && v.trim() && v.length <= maxLen && !/\s/.test(v)) out[k] = v;
@@ -82,3 +102,21 @@ export function sanitizeCompanySettings(raw: Record<string, unknown>): { company
   }
   return { company: out, notes };
 }
+
+// ---------------------------------------------------------------- brojači dokumenata (F9)
+
+/**
+ * „Sljedeći broj" dokumenta u seriji (nastavak numeracije iz starog programa):
+ * brojač se postavlja na `next − 1` i smije samo rasti — ne ispod zadnjeg
+ * brojača ni ispod najvećeg već izdanog broja (inače bi se broj ponovio).
+ */
+export function checkCounterStart(next: number, current: number, maxIssued: number): string | null {
+  if (!Number.isInteger(next) || next < 1) return 'Sljedeći broj mora biti cijeli broj veći od 0.';
+  if (next > 9_999_999) return 'Sljedeći broj je prevelik.';
+  const floor = Math.max(current, maxIssued);
+  if (next - 1 < floor) return `Sljedeći broj ne može biti manji od ${floor + 1} — broj ${floor} je već izdan.`;
+  return null;
+}
+
+/** Model poziva na broj (HR00, HR01 … HR99). */
+export const isPaymentModel = (v: string) => /^HR\d{2}$/.test(v);

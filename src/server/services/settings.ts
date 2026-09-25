@@ -1,11 +1,12 @@
 import 'server-only';
-import type { StatusKind } from '@prisma/client';
+import type { Series, StatusKind } from '@prisma/client';
 import type { Tx } from '../db';
 import { audit, diff } from '../audit';
 import { DomainError, assert } from '../errors';
 import type { Actor } from './items';
 import { STATUS_KIND_LABEL } from './items';
-import { MAX_LOGO_BYTES, isCurrencyCode, isValidLogo } from '@/domain/company';
+import { MAX_LOGO_BYTES, checkCounterStart, isCurrencyCode, isPaymentModel, isValidLogo } from '@/domain/company';
+import { isValidOib } from '@/domain/tax';
 
 // ---------------------------------------------------------------- firma
 
@@ -277,3 +278,93 @@ export async function deleteLookup(tx: Tx, actor: Actor, entity: LookupEntity, i
     }
   }
 }
+
+// ---------------------------------------------------------------- dokumenti, porez, eRačun, najam (F9)
+
+export interface CompanyDocsInput {
+  swift: string | null;
+  proformaTitle: string;
+  eInvoicePaymentMeans: string;
+  paymentModel: string;
+  operatorName: string | null;
+  operatorOib: string | null;
+  vatTextEuGoods: string | null;
+  vatTextEuService: string | null;
+  vatTextThirdGoods: string | null;
+  vatTextThirdService: string | null;
+  legalFooter: string | null;
+  autoIssueRent: boolean;
+  vatOnPayment: boolean;
+  kpdRent: string | null;
+  kpdSale: string | null;
+  kpdService: string | null;
+  eInvoiceAttachPdf: boolean;
+  eReportingEnabled: boolean;
+}
+
+export async function saveCompanyDocs(tx: Tx, actor: Actor, input: CompanyDocsInput) {
+  const before = await tx.company.findUniqueOrThrow({ where: { id: actor.companyId } });
+  assert(['30', '58'].includes(input.eInvoicePaymentMeans), 'Način plaćanja na eRačunu mora biti 30 ili 58.');
+  const paymentModel = input.paymentModel.trim().toUpperCase();
+  assert(isPaymentModel(paymentModel), 'Model poziva na broj mora biti oblika HR00 – HR99.');
+  const swift = input.swift?.replace(/\s+/g, '').toUpperCase() || null;
+  assert(!swift || /^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(swift), 'SWIFT/BIC mora imati 8 ili 11 znakova (npr. PBZGHR2X).');
+  const operatorOib = input.operatorOib?.replace(/\s+/g, '') || null;
+  assert(!operatorOib || isValidOib(operatorOib), 'OIB zadanog operatera nije ispravan.');
+  for (const [k, v] of [['najam', input.kpdRent], ['prodaju', input.kpdSale], ['uslugu', input.kpdService]] as const) {
+    assert(!v || /^\d\d\.\d\d\.\d\d$/.test(v.trim()), `KPD šifra za ${k} mora biti oblika 00.00.00.`);
+  }
+  const data = {
+    ...input,
+    swift,
+    operatorOib,
+    paymentModel,
+    proformaTitle: input.proformaTitle.trim() || 'Predračun',
+    kpdRent: input.kpdRent?.trim() || null,
+    kpdSale: input.kpdSale?.trim() || null,
+    kpdService: input.kpdService?.trim() || null,
+  };
+  await tx.company.update({ where: { id: actor.companyId }, data });
+  const changes = diff(before, data);
+  if (Object.keys(changes).length) {
+    await audit(tx, actor, { entity: 'company', entityId: actor.companyId, action: 'update', summary: 'Postavke dokumenata, poreza i eRačuna izmijenjene', diff: changes as object });
+  }
+}
+
+/** Brojači dokumenata firme za godinu, s najvećim izdanim brojem računa (za „nastavak numeracije"). */
+export async function documentCounters(tx: Tx, companyId: string, year: number) {
+  const [counters, maxInvoice] = await Promise.all([
+    tx.documentCounter.findMany({ where: { companyId, year } }),
+    tx.invoice.aggregate({ where: { companyId, year, seq: { not: null } }, _max: { seq: true } }),
+  ]);
+  return { counters: new Map(counters.map((c) => [c.series, c.last])), maxInvoiceSeq: maxInvoice._max.seq ?? 0 };
+}
+
+/**
+ * Nastavak numeracije: „sljedeći broj" u seriji za godinu (brojač = sljedeći − 1).
+ * Brojač se ne smije spustiti ispod već izdanih brojeva. Upis je atomski
+ * (GREATEST), pa istovremeno izdavanje ne može dobiti isti broj.
+ */
+export async function setCounterStart(tx: Tx, actor: Actor, series: Series, year: number, next: number) {
+  assert(Number.isInteger(year) && year >= 2000 && year <= 2100, 'Neispravna godina.');
+  const { counters, maxInvoiceSeq } = await documentCounters(tx, actor.companyId, year);
+  const current = counters.get(series) ?? 0;
+  const err = checkCounterStart(next, current, series === 'INVOICE' ? maxInvoiceSeq : 0);
+  if (err) throw new DomainError(err);
+  const rows = await tx.$queryRaw<Array<{ last: number }>>`
+    INSERT INTO "DocumentCounter" ("companyId", "series", "year", "last")
+    VALUES (${actor.companyId}, ${series}::"Series", ${year}, ${next - 1})
+    ON CONFLICT ("companyId", "series", "year") DO UPDATE SET "last" = GREATEST("DocumentCounter"."last", EXCLUDED."last")
+    RETURNING "last"`;
+  assert(Number(rows[0].last) === next - 1, 'Brojač se u međuvremenu promijenio — osvježite stranicu.');
+  await audit(tx, actor, {
+    entity: 'company', entityId: actor.companyId, action: 'counter',
+    summary: `Numeracija ${SERIES_LABEL[series]} ${year}.: sljedeći broj ${next} (prije ${current + 1})`,
+    diff: { series, year, from: current, to: next - 1 },
+  });
+}
+
+export const SERIES_LABEL: Record<Series, string> = {
+  INVOICE: 'računa', QUOTE: 'ponuda', PROFORMA: 'predračuna', CONTRACT: 'ugovora', ORDER: 'narudžbenica', RECEIPT: 'primki',
+  TRANSFER: 'međuskladišnica', SERVICE: 'servisnih naloga', SUPPLIER_INVOICE: 'ulaznih računa', STOCKTAKE: 'inventura',
+};

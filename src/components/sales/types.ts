@@ -19,9 +19,16 @@ export interface EditorLine {
   /** Najam: mjesečna cijena i broj mjeseci (samo se čuva). */
   monthly?: number | null;
   months?: number | null;
+  /** Vrsta stavke: prodaja ili najam (miješani račun / ponuda za najam); null = vrsta dokumenta. */
+  lineType?: 'SALE' | 'RENT' | null;
   /** Samo za prikaz. */
   serial?: string | null;
   cost?: number | null;
+  /** Uređaj je već u najmu (postojeći najam) — cijena s ugovora. */
+  existing?: boolean;
+  /** Preporučene cijene za promjenu vrste stavke (prodaja / mjesečni najam), ako su poznate. */
+  suggestSale?: number | null;
+  suggestRent?: number | null;
 }
 
 export interface PartnerOpt {
@@ -32,6 +39,8 @@ export interface PartnerOpt {
   note: string | null;
   paymentTermDays: number | null;
   excluded: boolean;
+  /** Ručna PDV kategorija partnera (nadjačava izvedenu iz države). */
+  vatCategoryOverride?: string | null;
 }
 
 export interface ServiceOpt {
@@ -48,8 +57,10 @@ export interface ModelOpt {
   name: string;
   categoryId: string | null;
   salePrice: number | null;
+  rentPrice?: number | null;
   warrantyMonths: number | null;
   kpd: string | null;
+  kpdRent?: string | null;
 }
 
 export interface NamedOpt {
@@ -65,6 +76,11 @@ export interface CompanyDefaults {
   quoteValidDays: number;
   defaultWarrantyMonths: number;
   defaultMarginPct: number;
+  rentFallbackPct?: number;
+  kpdSale?: string | null;
+  kpdRent?: string | null;
+  kpdService?: string | null;
+  proformaTitle?: string;
 }
 
 export interface SalesLookups {
@@ -73,6 +89,8 @@ export interface SalesLookups {
   models: ModelOpt[];
   categories: NamedOpt[];
   warehouses: NamedOpt[];
+  suppliers?: NamedOpt[];
+  statuses?: Array<NamedOpt & { kind: string }>;
   company: CompanyDefaults;
 }
 
@@ -84,6 +102,7 @@ export interface DeviceOpt {
   model: string;
   category: string | null;
   warehouse: string | null;
+  supplier?: string | null;
   state: string;
   status: string;
   cost: number;
@@ -91,8 +110,14 @@ export interface DeviceOpt {
   priceSource: 'agreed' | 'model' | 'margin';
   modelPrice: number | null;
   margin: number | null;
+  rent?: number;
+  rentSource?: 'agreed' | 'item' | 'model' | 'cost' | 'contract';
+  contractId?: string | null;
+  contractNumber?: string | null;
+  holder?: string | null;
   warrantyMonths: number;
   kpd: string | null;
+  kpdRent?: string | null;
 }
 
 export type ChargeKind = 'N' | 'POVNAK' | 'PP' | 'PPMV';

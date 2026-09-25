@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '../../db';
 import { expandExpense, type FrequencyCode } from '@/domain/expenses';
 import { toISO } from '@/domain/dates';
-import { n, monthChart, monthRows, opt, revenueSql, type ReportDef, type Row } from './types';
+import { n, monthChart, monthRows, opt, periodSql, revenueSql, type ReportDef, type ReportFilters, type Row } from './types';
 
 /**
  * Troškovi po mjesecima i kategorijama (neto, bez PDV-a). Jednokratni se
@@ -66,12 +66,12 @@ export async function expensesByMonth(companyId: string, year: number, opts: { e
 }
 
 /** Neto prihod po mjesecima (računi, storna, odobrenja) i nabavna vrijednost prodanog. */
-export async function revenueByMonth(companyId: string, year: number) {
+export async function revenueByMonth(companyId: string, f: Pick<ReportFilters, 'year' | 'from' | 'to'>) {
   const rows = await db.$queryRaw<Array<{ m: number; net: Prisma.Decimal; cost: Prisma.Decimal }>>`
     SELECT EXTRACT(MONTH FROM i."date")::int AS m, SUM(i."netTotal") AS net,
            SUM(CASE WHEN i."type" = 'SALE' THEN i."costTotal" ELSE 0 END) AS cost
     FROM "Invoice" i JOIN "Partner" p ON p.id = i."partnerId"
-    WHERE ${revenueSql(companyId)} AND i."year" = ${year}
+    WHERE ${revenueSql(companyId)} ${periodSql('i."date"', f)}
     GROUP BY 1`;
   const revenue = Array<number>(12).fill(0);
   const cost = Array<number>(12).fill(0);
@@ -89,9 +89,10 @@ export const costReports: ReportDef[] = [
     area: 'Troškovi',
     description: 'Neto troškovi po kategoriji i mjesecu; ponavljajući troškovi knjiže se do tekućeg mjeseca.',
     filters: ['year'],
+    singleYear: true,
     run: async (companyId, f) => {
       const [{ byCategory, total }, cats] = await Promise.all([
-        expensesByMonth(companyId, f.year),
+        expensesByMonth(companyId, f.displayYear),
         db.expenseCategory.findMany({ where: { companyId }, select: { id: true, name: true } }),
       ]);
       const name = new Map(cats.map((c) => [c.id as string | null, c.name]));
@@ -129,8 +130,9 @@ export const costReports: ReportDef[] = [
     area: 'Troškovi',
     description: 'Neto prihod umanjen za sve troškove (uključujući nabavu robe) po mjesecima, s kumulativom.',
     filters: ['year'],
+    singleYear: true,
     run: async (companyId, f) => {
-      const [rev, exp] = await Promise.all([revenueByMonth(companyId, f.year), expensesByMonth(companyId, f.year)]);
+      const [rev, exp] = await Promise.all([revenueByMonth(companyId, f), expensesByMonth(companyId, f.displayYear)]);
       let cum = 0;
       const rows = monthRows(f.year, (m) => {
         const r = rev.revenue[m - 1];

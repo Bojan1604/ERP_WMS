@@ -25,7 +25,7 @@ const partnerLink = (p: { id: string; name: string } | null) =>
     <span className="text-fg-4">—</span>
   );
 
-export async function ReservedSection({ companyId, canOps, canSell, canRent }: { companyId: string; canOps: boolean; canSell: boolean; canRent: boolean }) {
+export async function ReservedSection({ companyId, canOps, canSell, canRent, canSeeCost = true }: { companyId: string; canOps: boolean; canSell: boolean; canRent: boolean; canSeeCost?: boolean }) {
   const groups = await reservedGroups(companyId);
   if (!groups.length) return <Empty icon={<Inbox className="size-5" />} title="Nema uređaja koji su izašli iz skladišta" description="Uređaji označeni kao „Izašlo iz skladišta“ čekaju ovdje da prodaja izda račun ili ih doda na ugovor." />;
   return (
@@ -40,7 +40,7 @@ export async function ReservedSection({ companyId, canOps, canSell, canRent }: {
                 <Badge>{g.items.length} kom</Badge>
               </span>
             }
-            actions={<span className="text-sm text-fg-3">{eur(g.items.reduce((s, i) => s + num(i.cost), 0))}</span>}
+            actions={canSeeCost ? <span className="text-sm text-fg-3">{eur(g.items.reduce((s, i) => s + num(i.cost), 0))}</span> : undefined}
           >
             <div className="px-3 pt-2">
               <ReservedBar partnerId={g.partnerId} canOps={canOps} canSell={canSell} canRent={canRent} />

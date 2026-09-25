@@ -6,7 +6,7 @@ import { ActionForm, ActionButton, FormError, type ServerAction } from '@/compon
 import { Button } from '@/components/ui/button';
 import { Checkbox, Field, FormGrid, Input, Select, Textarea } from '@/components/ui/field';
 import { Card } from '@/components/ui/misc';
-import { customerVat, isValidOib } from '@/domain/tax';
+import { customerVat, isValidOib, VAT_OVERRIDES, VAT_OVERRIDE_LABEL } from '@/domain/tax';
 import { COUNTRIES } from './countries';
 import { OibLookupButton, OibLookupResult } from './oib-lookup';
 import type { PartnerLookup } from '@/server/lookup';
@@ -29,6 +29,11 @@ export interface PartnerFormValue {
   excluded: boolean;
   paymentTermDays: number | null;
   note: string | null;
+  /** eRačun (C8) */
+  endpointId?: string | null;
+  vatCategoryOverride?: string | null;
+  branchCode?: string | null;
+  branchName?: string | null;
 }
 
 export function PartnerForm({
@@ -50,7 +55,8 @@ export function PartnerForm({
   const [oib, setOib] = useState(value.oib ?? '');
   const [country, setCountry] = useState(value.country || 'HR');
   const [excluded, setExcluded] = useState(value.excluded);
-  const vat = customerVat(country, company);
+  const [override, setOverride] = useState(value.vatCategoryOverride ?? '');
+  const vat = customerVat({ country, vatCategoryOverride: override || null }, company);
   const oibState = !oib.trim() ? null : isValidOib(oib) ? 'ok' : 'bad';
   const countries = COUNTRIES.some((c) => c.value === country) ? COUNTRIES : [{ value: country, label: country }, ...COUNTRIES];
 
@@ -137,6 +143,34 @@ export function PartnerForm({
                   <Field label="Napomena na računima" hint="Ističe se pri izdavanju računa ovom partneru.">
                     <Textarea name="note" defaultValue={value.note ?? ''} rows={3} />
                   </Field>
+                </fieldset>
+              </Card>
+              <Card title="eRačun">
+                <fieldset disabled={!canEdit} className="space-y-3">
+                  <Field label="Elektronička adresa" hint="Oblik „shema:id“ (npr. 9934:OIB, 0088:GLN). Prazno = OIB (shema 9934)." error={fields.endpointId}>
+                    <Input name="endpointId" defaultValue={value.endpointId ?? ''} className="font-mono" placeholder="prazno = OIB" />
+                  </Field>
+                  <Field
+                    label="Porezna kategorija"
+                    error={fields.vatCategoryOverride}
+                    hint="Automatski i za kupce izvan sustava PDV-a (obrt, paušalist) — račun im ide s PDV-om. Ručna kategorija je za posebne slučajeve."
+                  >
+                    <Select
+                      name="vatCategoryOverride"
+                      value={override}
+                      onChange={(e) => setOverride(e.target.value)}
+                      placeholder="Automatski prema državi"
+                      options={VAT_OVERRIDES.map((v) => ({ value: v, label: VAT_OVERRIDE_LABEL[v] }))}
+                    />
+                  </Field>
+                  <FormGrid cols={3}>
+                    <Field label="Poslovna jedinica" hint="šifra" error={fields.branchCode}>
+                      <Input name="branchCode" defaultValue={value.branchCode ?? ''} className="font-mono" maxLength={20} />
+                    </Field>
+                    <Field label="Naziv jedinice" className="sm:col-span-2" error={fields.branchName}>
+                      <Input name="branchName" defaultValue={value.branchName ?? ''} placeholder="npr. Restoran Marina, Split" />
+                    </Field>
+                  </FormGrid>
                 </fieldset>
               </Card>
               <Card title="Obračun">

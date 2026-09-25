@@ -5,11 +5,11 @@ import { audit } from '../audit';
 import { decryptSecret } from '../fiscal/crypto';
 import { providerFor, type EInvoiceProvider, type ProviderResult } from '../fiscal/einvoice';
 import type { Actor } from './items';
-import { expenseCategoryId } from './purchasing';
-import { setSupplierInvoicesPaid } from './expenses';
+import { applyInvoiceExpense, setSupplierInvoicesPaid } from './supplier-invoices';
 import { truncate } from '@/domain/fiscal';
+import { parseUbl, ublPdf } from '@/domain/ubl-parse';
+import { sniffMime } from '@/domain/attachments';
 import { today } from '@/domain/dates';
-import { r2 } from '@/domain/money';
 
 // =============================================================================
 //  Ulazni eRačuni (Fiskalizacija 2.0): prihvaćanje, odbijanje i plaćanje
@@ -102,26 +102,9 @@ export async function acceptSupplierInvoice(actor: Actor, id: string, opts: { bo
   return { already, reported: !!provider };
 }
 
-/** Trošak uz ulazni račun (kao kvačica „Knjiži kao trošak" na obrascu), ako ga još nema. */
+/** Trošak uz ulazni račun (kao kvačica „Knjiži kao trošak" na obrascu) — po pravilu „roba se knjiži jednom". */
 async function bookExpense(tx: Tx, actor: Actor, si: Awaited<ReturnType<typeof loadInvoice>>) {
-  const has = await tx.expense.findUnique({ where: { supplierInvoiceId: si.id }, select: { id: true } });
-  if (has) return;
-  await tx.expense.create({
-    data: {
-      companyId: actor.companyId,
-      date: si.issueDate,
-      categoryId: si.category ? await expenseCategoryId(tx, actor.companyId, si.category) : null,
-      description: `Ulazni račun ${si.number} — ${si.supplier.name}`,
-      partnerId: si.supplier.id,
-      netAmount: r2(Number(si.netAmount)),
-      vatAmount: r2(Number(si.vatAmount)),
-      paid: !!si.paidDate,
-      paidDate: si.paidDate,
-      source: 'SUPPLIER_INVOICE',
-      supplierInvoiceId: si.id,
-      createdBy: actor.name,
-    },
-  });
+  await applyInvoiceExpense(tx, actor, si.id, true);
 }
 
 /**
@@ -208,4 +191,38 @@ export async function reportPaid(actor: Actor, rows: Array<{ id: string; source:
   return failed.length
     ? `Plaćanje je zabilježeno u programu, ali posrednik nije prihvatio status „plaćen" za ${failed.length} eRačun(a): ${[...new Set(failed)].slice(0, 3).join('; ')}`
     : null;
+}
+
+// ---------------------------------------------------------------- PDF posrednika
+
+/**
+ * „PDF posrednika" na zahtjev: izvorni dokument se ponovno dohvaća od posrednika
+ * i iz njega se uzima ugrađeni PDF (AdditionalDocumentReference). PDF se sprema
+ * kao prilog računa (ako već nije) i vraća se njegov id.
+ */
+export async function fetchProviderPdf(actor: Actor, id: string): Promise<{ attachmentId: string; created: boolean }> {
+  const si = await db.supplierInvoice.findFirst({ where: { id, companyId: actor.companyId }, select: { id: true, internalNo: true, number: true, source: true, eInvoiceId: true } });
+  assert(si, 'Ulazni račun ne postoji.');
+  assert(si.source === 'EINVOICE' && si.eInvoiceId, 'PDF posrednika postoji samo za eRačune preuzete od posrednika.');
+  const { provider } = await companyProvider(actor.companyId);
+  assert(provider.documentXml, `Posrednik „${provider.code}" ne vraća izvorni dokument.`);
+  const r = await provider.documentXml(si.eInvoiceId);
+  await log(actor.companyId, r.ok, `document ${si.eInvoiceId} (PDF)`, r);
+  if (!r.ok || !r.xml) throw new DomainError(`Posrednik nije vratio dokument: ${r.error ?? 'nepoznata greška'}`);
+  const parsed = parseUbl(r.xml);
+  const pdf = parsed ? ublPdf(parsed) : null;
+  if (!pdf) throw new DomainError('Dobavljač u eRačun nije ugradio PDF — posrednik ga nema za ovaj dokument.');
+  const bytes = Buffer.from(pdf.base64, 'base64');
+  assert(bytes.byteLength > 0 && bytes.byteLength <= 10 * 1024 * 1024 && sniffMime(bytes) === 'application/pdf', 'Ugrađeni dokument nije ispravan PDF (ili je veći od 10 MB).');
+  const fileName = /\.pdf$/i.test(pdf.fileName) ? pdf.fileName.slice(-120) : `${si.number.replace(/[^\w.-]+/g, '-').slice(0, 80) || si.internalNo}.pdf`;
+  return transaction(async (tx) => {
+    const same = await tx.attachment.findFirst({ where: { companyId: actor.companyId, entity: 'supplierInvoice', entityId: si.id, mime: 'application/pdf', size: bytes.byteLength }, select: { id: true } });
+    if (same) return { attachmentId: same.id, created: false };
+    const a = await tx.attachment.create({
+      data: { companyId: actor.companyId, entity: 'supplierInvoice', entityId: si.id, fileName, mime: 'application/pdf', size: bytes.byteLength, data: bytes, createdBy: actor.name },
+      select: { id: true },
+    });
+    await audit(tx, actor, { entity: 'supplierInvoice', entityId: si.id, action: 'pdf', summary: `Ulazni račun ${si.internalNo}: preuzet PDF posrednika` });
+    return { attachmentId: a.id, created: true };
+  });
 }

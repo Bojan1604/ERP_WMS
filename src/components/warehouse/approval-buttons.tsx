@@ -86,7 +86,7 @@ export function ReceiveApprovalButtons({ id, serials, returning, warehouseId, wa
   return (
     <>
       {serials > 0 ? (
-        <LinkButton href={`/skladiste/zaprimanje?zahtjev=${id}`} variant="primary" icon={<PackageCheck className="size-4" />}>
+        <LinkButton href={`/skladiste/odobrenja/${id}`} variant="primary" icon={<PackageCheck className="size-4" />}>
           Provjeri i zaprimi
         </LinkButton>
       ) : (

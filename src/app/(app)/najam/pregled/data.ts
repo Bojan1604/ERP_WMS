@@ -5,6 +5,7 @@ import { toTerms } from '@/server/services/rentals';
 import { devicePlan, deviceChargesInYear, type ContractDevice, type PlanPeriodInput } from '@/domain/billing';
 import { today, toISO } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
+import { parseMulti } from '@/lib/list-params';
 
 type Params = Record<string, string | string[] | undefined>;
 const str = (v: string | string[] | undefined) => (typeof v === 'string' ? v.trim() : '');
@@ -18,6 +19,10 @@ export interface OverviewFilters {
   billedOnly: boolean;
   sold: boolean;
   excluded: boolean;
+  /** Statusi uređaja (id-evi) — višestruki odabir. */
+  statuses: string[];
+  /** Vrsta retka: najam (uređaj na ugovoru) i/ili prodaja (bez ugovora). Prazno = sve. */
+  kinds: Array<'najam' | 'prodaja'>;
 }
 
 export function readFilters(params: Params): OverviewFilters {
@@ -32,6 +37,8 @@ export function readFilters(params: Params): OverviewFilters {
     billedOnly: str(params.naplata) === '1',
     sold: str(params.prodani) === '1',
     excluded: str(params.iskljuceni) === '1',
+    statuses: parseMulti(params, 'status'),
+    kinds: parseMulti(params, 'vrsta', ['najam', 'prodaja'] as const),
   };
 }
 
@@ -54,7 +61,10 @@ async function rowIds(companyId: string, f: OverviewFilters): Promise<string[]> 
              FROM jsonb_array_elements(CASE WHEN jsonb_typeof(ci.plan) = 'array' THEN ci.plan ELSE '[]'::jsonb END) e),
           ${base}) <= ${cutoff}`
     : Prisma.empty;
-  const sold = f.sold
+  // samo najam: redak s ugovorom; samo prodaja: bez ugovora (prodani u godini se tada uključuju sami)
+  const onlyRent = f.kinds.length === 1 && f.kinds[0] === 'najam';
+  const onlySale = f.kinds.length === 1 && f.kinds[0] === 'prodaja';
+  const sold = f.sold || onlySale
     ? Prisma.sql`OR EXISTS (
         SELECT 1 FROM "InvoiceLine" l JOIN "Invoice" v ON v.id = l."invoiceId"
         WHERE l."itemId" = i.id AND v."companyId" = ${companyId} AND v.status = 'ISSUED' AND v.kind = 'INVOICE'
@@ -78,6 +88,8 @@ async function rowIds(companyId: string, f: OverviewFilters): Promise<string[]> 
       ${f.partner ? Prisma.sql`AND p.id = ${f.partner}` : Prisma.empty}
       ${f.model ? Prisma.sql`AND m.id = ${f.model}` : Prisma.empty}
       ${f.category ? Prisma.sql`AND m."categoryId" = ${f.category}` : Prisma.empty}
+      ${f.statuses.length ? Prisma.sql`AND i."statusId" = ANY(${f.statuses})` : Prisma.empty}
+      ${onlyRent ? Prisma.sql`AND c.id IS NOT NULL` : onlySale ? Prisma.sql`AND c.id IS NULL` : Prisma.empty}
       ${q ? Prisma.sql`AND (i.serial ILIKE ${q} OR m.name ILIKE ${q} OR COALESCE(m.brand, '') ILIKE ${q} OR COALESCE(p.name, '') ILIKE ${q})` : Prisma.empty}
     ORDER BY p.name NULLS LAST, i.serial, i.id`;
   return rows.map((r) => r.id);
@@ -108,7 +120,7 @@ async function cellsFor(companyId: string, ids: string[], f: OverviewFilters) {
           FROM "ContractItem" ci WHERE ci."itemId" = ANY(${ids})`
       : Promise.resolve([]),
     db.rentOverride.findMany({ where: { companyId, year: f.year, itemId: { in: ids } }, select: { itemId: true, month: true, amount: true } }),
-    f.sold
+    f.sold || (f.kinds.length === 1 && f.kinds[0] === 'prodaja')
       ? db.invoiceLine.findMany({
           where: {
             itemId: { in: ids },

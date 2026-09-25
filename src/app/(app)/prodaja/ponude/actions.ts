@@ -1,13 +1,14 @@
 'use server';
 
 import { z } from 'zod';
+import { optInRange } from '@/lib/zod-checks';
 import { action } from '@/server/action';
 import { db, transaction } from '@/server/db';
-import { zBool, zDate, zId, zMoney, zOptDate, zOptId, zOptText } from '@/server/zod';
-import { convertQuote, deleteQuote, saveQuote, setQuoteStatus } from '@/server/services/quotes';
+import { zBool, zDate, zId, zMoney, zOptDate, zOptId, zOptInt, zOptText } from '@/server/zod';
+import { convertQuote, convertQuoteToContract, deleteQuote, saveQuote, setQuoteStatus, QUOTE_KIND_LABEL } from '@/server/services/quotes';
 import { getCompany } from '@/server/queries/lookups';
 import { num, r2 } from '@/domain/money';
-import { priceFromMargin } from '@/domain/pricing';
+import { priceFromMargin, suggestedRent } from '@/domain/pricing';
 
 const zLine = z.object({
   kind: z.enum(['DEVICE', 'MODEL', 'SERVICE', 'MANUAL']),
@@ -19,10 +20,12 @@ const zLine = z.object({
   qty: zMoney,
   unitPrice: zMoney,
   discountPct: zMoney.refine((v) => v >= 0 && v <= 100, 'Popust stavke mora biti između 0 i 100 %'),
+  lineType: z.enum(['SALE', 'RENT']).nullable().optional(),
 });
 
 const zQuote = z.object({
   id: zOptId,
+  kind: z.enum(['QUOTE', 'PROFORMA']).default('QUOTE'),
   partnerId: zId,
   date: zDate,
   validUntil: zOptDate,
@@ -37,7 +40,8 @@ const zQuote = z.object({
 export const saveQuoteAction = action({ module: 'sales', level: 'edit' }, zQuote, async ({ id, ...input }, user) =>
   transaction(async (tx) => {
     const q = await saveQuote(tx, user, id, input);
-    return { message: id ? 'Ponuda je spremljena.' : `Ponuda ${q.number} je izrađena.`, redirect: `/prodaja/ponude/${q.id}`, data: { id: q.id } };
+    const label = QUOTE_KIND_LABEL[q.kind];
+    return { message: id ? `${label} je spremljen(a).` : `${label} ${q.number} je izrađen(a).`, redirect: `/prodaja/ponude/${q.id}`, data: { id: q.id } };
   }),
 );
 
@@ -70,30 +74,66 @@ export const convertQuoteAction = action(
 );
 
 /**
- * Cijena stavke po modelu za kupca: dogovorena → cijena modela → iz marže na
- * prosječnu nabavnu uređaja na skladištu. Vraća i broj uređaja na skladištu.
+ * Stavke najma s ponude → novi ugovor o najmu (uvjeti: početak, naplata,
+ * trajanje, sezona). Za stavke po modelu biraju se uređaji sa skladišta.
  */
-export const modelQuotePrice = action({ module: 'sales', level: 'view' }, z.object({ modelId: zId, partnerId: zOptId }), async ({ modelId, partnerId }, user) => {
-  const [model, agreed, stock, company] = await Promise.all([
-    db.deviceModel.findFirst({ where: { id: modelId, companyId: user.companyId }, select: { salePrice: true, marginPct: true } }),
-    partnerId ? db.priceAgreement.findFirst({ where: { companyId: user.companyId, partnerId, modelId }, select: { salePrice: true } }) : null,
-    db.item.aggregate({
-      where: { companyId: user.companyId, modelId, state: { in: ['IN_STOCK', 'RESERVED'] }, contractItem: null },
-      _avg: { cost: true },
-      _count: true,
+export const convertQuoteToContractAction = action(
+  { module: 'rentals', level: 'edit' },
+  z.object({
+    id: zId,
+    picks: z.record(z.array(z.string().min(1))).default({}),
+    startDate: zDate,
+    billing: z.enum(['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL']),
+    months: zOptInt.refine(optInRange(1, 240), 'Trajanje mora biti između 1 i 240 mjeseci'),
+    seasonFrom: zOptInt.refine(optInRange(1, 12), 'Neispravan mjesec'),
+    seasonTo: zOptInt.refine(optInRange(1, 12), 'Neispravan mjesec'),
+  }),
+  async ({ id, picks, ...terms }, user) =>
+    transaction(async (tx) => {
+      const c = await convertQuoteToContract(tx, user, id, picks, terms);
+      return { message: `Ugovor ${c.number} je otvoren; uređaji su u najmu.`, redirect: `/najam/ugovori/${c.id}` };
     }),
-    getCompany(user.companyId),
-  ]);
-  let price = 0;
-  let source: 'agreed' | 'model' | 'margin' = 'margin';
-  if (agreed?.salePrice && num(agreed.salePrice) > 0) {
-    price = num(agreed.salePrice);
-    source = 'agreed';
-  } else if (model?.salePrice && num(model.salePrice) > 0) {
-    price = num(model.salePrice);
-    source = 'model';
-  } else {
-    price = priceFromMargin(num(stock._avg.cost), model?.marginPct ? num(model.marginPct) : num(company.defaultMarginPct));
-  }
-  return { data: { price: r2(price), source, stock: stock._count }, revalidate: [] };
-});
+);
+
+/**
+ * Cijena stavke po modelu za kupca. Prodaja: dogovorena → cijena modela → iz
+ * marže na prosječnu nabavnu uređaja na skladištu. Najam (mjesečno): dogovorena
+ * → najam modela → % prosječne nabavne. Vraća i broj uređaja na skladištu.
+ */
+export const modelQuotePrice = action(
+  { module: 'sales', level: 'view' },
+  z.object({ modelId: zId, partnerId: zOptId, lineType: z.enum(['SALE', 'RENT']).nullable().optional() }),
+  async ({ modelId, partnerId, lineType }, user) => {
+    const [model, agreed, stock, company] = await Promise.all([
+      db.deviceModel.findFirst({ where: { id: modelId, companyId: user.companyId }, select: { salePrice: true, rentPrice: true, marginPct: true } }),
+      partnerId ? db.priceAgreement.findFirst({ where: { companyId: user.companyId, partnerId, modelId }, select: { salePrice: true, rentPrice: true } }) : null,
+      db.item.aggregate({
+        where: { companyId: user.companyId, modelId, state: { in: ['IN_STOCK', 'RESERVED'] }, contractItem: null },
+        _avg: { cost: true },
+        _count: true,
+      }),
+      getCompany(user.companyId),
+    ]);
+    if (lineType === 'RENT') {
+      const r = suggestedRent({
+        agreed: agreed?.rentPrice == null ? null : num(agreed.rentPrice),
+        modelRent: model?.rentPrice == null ? null : num(model.rentPrice),
+        cost: num(stock._avg.cost),
+        fallbackPct: num(company.rentFallbackPct),
+      });
+      return { data: { price: r.price, source: r.source === 'agreed' ? ('agreed' as const) : r.source === 'model' ? ('model' as const) : ('margin' as const), stock: stock._count }, revalidate: [] };
+    }
+    let price = 0;
+    let source: 'agreed' | 'model' | 'margin' = 'margin';
+    if (agreed?.salePrice && num(agreed.salePrice) > 0) {
+      price = num(agreed.salePrice);
+      source = 'agreed';
+    } else if (model?.salePrice && num(model.salePrice) > 0) {
+      price = num(model.salePrice);
+      source = 'model';
+    } else {
+      price = priceFromMargin(num(stock._avg.cost), model?.marginPct ? num(model.marginPct) : num(company.defaultMarginPct));
+    }
+    return { data: { price: r2(price), source, stock: stock._count }, revalidate: [] };
+  },
+);

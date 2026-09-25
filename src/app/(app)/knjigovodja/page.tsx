@@ -5,7 +5,8 @@ import { pageAccess } from '@/server/auth';
 import { getCompany } from '@/server/queries/lookups';
 import { listAccountant } from '@/server/queries/accountant';
 import { can } from '@/domain/permissions';
-import { ACCOUNTANT_KIND_LABEL, ACCOUNTANT_ROW_CAP, readAccountantFilters, type AccountantKind } from '@/domain/accountant';
+import { ACCOUNTANT_KIND_LABEL, ACCOUNTANT_ROW_CAP, accountantEInvoiceLabel, readAccountantFilters, type AccountantKind } from '@/domain/accountant';
+import { ExportButtons } from '@/components/ui/export-buttons';
 import { today } from '@/domain/dates';
 import { FISCAL_STATUS_LABEL, FISCAL_STATUS_TONE } from '@/domain/fiscal';
 import { Badge, Empty, Notice, PageHeader, Stat, TableWrap } from '@/components/ui/misc';
@@ -38,11 +39,18 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
   const canSales = can(user.perms, 'sales', 'view');
   const canPurchasing = can(user.perms, 'purchasing', 'edit');
   const notSent = totals.out.notSent + totals.in.notSent;
-  const subject = encodeURIComponent(`Računi ${company.name} ${date(f.from)} – ${date(f.to)}`);
+  const subjectText = `Računi ${company.name} ${date(f.from)} – ${date(f.to)}`;
+  const subject = encodeURIComponent(subjectText);
+  const exportQs = new URLSearchParams();
+  for (const [k, v] of Object.entries(sp)) if (typeof v === 'string' && v && k !== 'page') exportQs.set(k, v);
 
   return (
     <>
-      <PageHeader title="Knjigovođa" subtitle={`Izlazni i ulazni računi · ${date(f.from)} – ${date(f.to)}`} />
+      <PageHeader
+        title="Knjigovođa"
+        subtitle={`Izlazni i ulazni računi · ${date(f.from)} – ${date(f.to)}`}
+        actions={<ExportButtons href={`/api/knjigovodja/izvoz?${exportQs}`} />}
+      />
 
       {company.accountantEmail ? (
         <Notice tone="info">
@@ -96,10 +104,10 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
       </FilterBar>
 
       <SelectionProvider ids={rows.map((r) => r.key)}>
-        <AccountantBar action={markAccountantSentAction} canMark={canMark} />
+        <AccountantBar action={markAccountantSentAction} canMark={canMark} email={{ to: company.accountantEmail ?? null, subject: subjectText }} />
         <TableWrap>
           {rows.length ? (
-            <table className="data-table sm:min-w-[1100px]">
+            <table className="data-table sm:min-w-[1250px]">
               <thead>
                 <tr>
                   <th className="w-8">
@@ -109,11 +117,13 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
                   <th>Smjer</th>
                   <th>Datum</th>
                   <th>Partner</th>
+                  <th>OIB</th>
                   <th>Vrsta</th>
                   <th className="num">Osnovica</th>
                   <th className="num">PDV</th>
                   <th className="num">Ukupno</th>
                   <th>Status</th>
+                  <th>eRačun</th>
                   <th>Knjigovođi</th>
                 </tr>
               </thead>
@@ -139,7 +149,9 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
                       <td className="whitespace-nowrap">{date(r.date)}</td>
                       <td className="max-w-72 max-sm:col-span-2 max-sm:max-w-none">
                         <span className="block truncate max-sm:whitespace-normal">{r.partner}</span>
-                        {r.oib && <span className="block text-xs text-fg-3 tnum">OIB {r.oib}</span>}
+                      </td>
+                      <td className="tnum text-fg-3" data-label="OIB">
+                        {r.oib ?? '—'}
                       </td>
                       <td className="whitespace-nowrap">{ACCOUNTANT_KIND_LABEL[r.kind]}</td>
                       <td className="num">{amount(r.net)}</td>
@@ -148,10 +160,9 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
                       <td>
                         <span className="flex flex-wrap items-center gap-1">
                           <Badge tone={PAY_TONE[r.statusTone]}>{r.status}</Badge>
-                          {r.fiscal && (
-                            <Badge tone={FISCAL_STATUS_TONE[r.fiscal]} title={`${r.eInvoice ? 'eRačun' : 'Fiskalizacija'}: ${FISCAL_STATUS_LABEL[r.fiscal]}`}>
-                              {r.eInvoice ? 'eRačun' : 'F'}
-                              {r.fiscal !== 'SENT' && ` · ${FISCAL_STATUS_LABEL[r.fiscal].toLowerCase()}`}
+                          {r.fiscal && !r.eInvoice && (
+                            <Badge tone={FISCAL_STATUS_TONE[r.fiscal]} title={`Fiskalizacija: ${FISCAL_STATUS_LABEL[r.fiscal]}`}>
+                              F{r.fiscal !== 'SENT' && ` · ${FISCAL_STATUS_LABEL[r.fiscal].toLowerCase()}`}
                             </Badge>
                           )}
                           {r.attachments > 0 && (
@@ -160,6 +171,15 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
                             </Badge>
                           )}
                         </span>
+                      </td>
+                      <td data-label="eRačun">
+                        {r.eInvoice ? (
+                          <Badge tone={r.eInvoice === 'INBOUND' ? 'brand' : r.fiscal ? FISCAL_STATUS_TONE[r.fiscal] : 'info'} title={r.fiscal ? `Fiskalizacija: ${FISCAL_STATUS_LABEL[r.fiscal]}` : undefined}>
+                            {accountantEInvoiceLabel(r.eInvoice)}
+                          </Badge>
+                        ) : (
+                          <span className="text-fg-4">—</span>
+                        )}
                       </td>
                       <td>{r.sentAt ? <Badge tone="ok">poslano {date(today(new Date(r.sentAt)))}</Badge> : <Badge tone="warn">nije poslano</Badge>}</td>
                     </SelectableTr>
@@ -170,21 +190,21 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
                 {dirs.out && (
                   <tr>
                     <td />
-                    <td colSpan={5}>Izlazni: {integer(totals.out.count)} dokumenata</td>
+                    <td colSpan={6}>Izlazni: {integer(totals.out.count)} dokumenata</td>
                     <td className="num">{amount(totals.out.net)}</td>
                     <td className="num">{amount(totals.out.vat)}</td>
                     <td className="num">{amount(totals.out.total)}</td>
-                    <td colSpan={2} />
+                    <td colSpan={3} />
                   </tr>
                 )}
                 {dirs.in && (
                   <tr>
                     <td />
-                    <td colSpan={5}>Ulazni: {integer(totals.in.count)} dokumenata</td>
+                    <td colSpan={6}>Ulazni: {integer(totals.in.count)} dokumenata</td>
                     <td className="num">{amount(totals.in.net)}</td>
                     <td className="num">{amount(totals.in.vat)}</td>
                     <td className="num">{amount(totals.in.total)}</td>
-                    <td colSpan={2} />
+                    <td colSpan={3} />
                   </tr>
                 )}
               </tfoot>

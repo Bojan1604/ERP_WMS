@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { CheckCircle2, Printer, Send, Trash2, Undo2, XCircle } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
-import { can } from '@/domain/permissions';
+import { can, canSeeCost } from '@/domain/permissions';
 import { getCompany } from '@/server/queries/lookups';
 import { getQuote, getSalesLookups, stockByModel, type QuoteDetail } from '@/server/queries/sales';
 import { toISO } from '@/domain/dates';
@@ -10,9 +10,11 @@ import { num } from '@/domain/money';
 import { PageHeader, Notice } from '@/components/ui/misc';
 import { MoreMenu } from '@/components/ui/more-menu';
 import { LinkButton } from '@/components/ui/button';
+import { PdfButton } from '@/components/ui/pdf-button';
+import { SendEmailButton } from '@/components/ui/send-email-button';
 import { ActionButton } from '@/components/ui/action';
 import { QuoteEditor, type QuoteEditorValue } from '@/components/sales/quote-editor';
-import { QuoteConvert } from '@/components/sales/quote-convert';
+import { QuoteConvert, type ConvertLine } from '@/components/sales/quote-convert';
 import { QuoteDocument, quoteDocData } from '@/components/sales/quote-document';
 import { QuoteBadge, quoteStatus } from '@/components/sales/quote-status';
 import { date } from '@/lib/format';
@@ -27,8 +29,12 @@ export default async function QuotePage({ params }: { params: Promise<{ id: stri
   if (!q) notFound();
   const edit = can(user.perms, 'sales', 'edit');
   const st = quoteStatus(q.status, q.validUntil ? toISO(q.validUntil) : null);
-  const locked = !!q.invoiceId;
-  const lookups = edit ? await getSalesLookups(user.companyId) : null;
+  // pretvorena u račun ili ugovor — više se ne mijenja
+  const locked = !!q.invoiceId || !!q.contractId;
+  const [lookups, company] = await Promise.all([edit ? getSalesLookups(user.companyId) : null, getCompany(user.companyId)]);
+  const proforma = q.kind === 'PROFORMA';
+  const kindLabel = proforma ? company.proformaTitle || 'Predračun' : 'Ponuda';
+  const showCost = canSeeCost(user.perms);
 
   const status = (s: 'DRAFT' | 'SENT' | 'ACCEPTED' | 'REJECTED', label: string, icon: React.ReactNode) => (
     <ActionButton action={setQuoteStatusAction} input={{ id: q.id, status: s }} icon={icon} size="md">
@@ -42,13 +48,13 @@ export default async function QuotePage({ params }: { params: Promise<{ id: stri
         <PageHeader
           title={
             <span className="flex items-center gap-2">
-              Ponuda {q.number} <QuoteBadge status={st} />
+              {kindLabel} {q.number} <QuoteBadge status={st} />
             </span>
           }
           subtitle={`${q.partner.name} · ${date(q.date)}${q.validUntil ? ` · vrijedi do ${date(q.validUntil)}` : ''}`}
           back={
-            <Link prefetch={false} href="/prodaja/ponude" className="hover:underline">
-              ← Ponude
+            <Link prefetch={false} href={proforma ? '/prodaja/ponude?vrsta=PROFORMA' : '/prodaja/ponude'} className="hover:underline">
+              ← {proforma ? 'Predračuni' : 'Ponude'}
             </Link>
           }
           actions={
@@ -56,6 +62,20 @@ export default async function QuotePage({ params }: { params: Promise<{ id: stri
               <LinkButton href={`/prodaja/ponude/${q.id}/ispis`} icon={<Printer className="size-4" />}>
                 Ispis
               </LinkButton>
+              <PdfButton kind={q.kind === 'PROFORMA' ? 'proforma' : 'quote'} id={q.id} send={edit} />
+              {edit && <SendEmailButton kind={q.kind === 'PROFORMA' ? 'proforma' : 'quote'} id={q.id} />}
+              {edit && !q.invoiceId && q.contractId && q.status !== 'REJECTED' && lookups && (
+                <QuoteConvert
+                  quoteId={q.id}
+                  partnerId={q.partnerId}
+                  models={lookups.models}
+                  categories={lookups.categories}
+                  warehouses={lookups.warehouses}
+                  hasContract
+                  showCost={showCost}
+                  lines={convertLines(q)}
+                />
+              )}
               {edit && !locked && (
                 <>
                   {/* na mobitelu promjene statusa i brisanje su iza gumba „Više" */}
@@ -70,7 +90,7 @@ export default async function QuotePage({ params }: { params: Promise<{ id: stri
                       variant="danger"
                       icon={<Trash2 className="size-4" />}
                       confirmTitle="Brisanje ponude"
-                      confirm={`Ponuda ${q.number} bit će trajno obrisana.`}
+                      confirm={`${kindLabel} ${q.number} bit će trajno obrisan(a).`}
                       confirmLabel="Obriši"
                     >
                       Obriši
@@ -83,16 +103,9 @@ export default async function QuotePage({ params }: { params: Promise<{ id: stri
                       models={lookups.models}
                       categories={lookups.categories}
                       warehouses={lookups.warehouses}
-                      lines={q.lines.map((l) => ({
-                        id: l.id,
-                        kind: l.kind,
-                        description: l.description,
-                        qty: num(l.qty),
-                        modelId: l.modelId,
-                        itemId: l.itemId,
-                        serial: l.item?.serial ?? null,
-                        itemAvailable: !!l.item && (l.item.state === 'IN_STOCK' || l.item.state === 'RESERVED'),
-                      }))}
+                      canContract={can(user.perms, 'rentals', 'edit')}
+                      showCost={showCost}
+                      lines={convertLines(q)}
                     />
                   )}
                 </>
@@ -110,7 +123,19 @@ export default async function QuotePage({ params }: { params: Promise<{ id: stri
             </LinkButton>
           }
         >
-          Ponuda je pretvorena u račun {q.invoice.number ?? '(nacrt)'} i više se ne mijenja.
+          {kindLabel} je pretvoren(a) u račun {q.invoice.number ?? '(nacrt)'} i više se ne mijenja.
+        </Notice>
+      )}
+      {q.contract && (
+        <Notice
+          tone="ok"
+          action={
+            <LinkButton href={`/najam/ugovori/${q.contract.id}`} size="sm">
+              Otvori ugovor
+            </LinkButton>
+          }
+        >
+          Stavke najma su na ugovoru {q.contract.number}.{!q.invoiceId && ' Račun (prodaja i prva rata najma) izradite gumbom „Pretvori u račun".'}
         </Notice>
       )}
       {st === 'EXPIRED' && !locked && <Notice tone="warn">Rok valjanosti ponude je istekao — produžite datum „Vrijedi do" ako je ponuda i dalje aktualna.</Notice>}
@@ -118,18 +143,40 @@ export default async function QuotePage({ params }: { params: Promise<{ id: stri
         <QuoteEditor
           initial={editorValue(q)}
           lookups={lookups}
+          showCost={showCost}
+          canCreateService={edit}
           stock={await stockByModel(user.companyId, [...new Set(q.lines.map((l) => l.modelId).filter((x): x is string => !!x))])}
         />
       ) : (
-        <QuoteDocument q={quoteDocData(q)} company={await getCompany(user.companyId)} party={q.partner} />
+        <QuoteDocument q={quoteDocData(q)} company={company} party={q.partner} title={kindLabel} />
       )}
     </>
   );
 }
 
+function convertLines(q: QuoteDetail): ConvertLine[] {
+  return q.lines.map((l) => ({
+    id: l.id,
+    kind: l.kind,
+    description: l.description,
+    qty: num(l.qty),
+    modelId: l.modelId,
+    itemId: l.itemId,
+    serial: l.item?.serial ?? null,
+    rent: l.lineType === 'RENT',
+    // najam po ugovoru iz ponude: uređaj je već na tom ugovoru
+    itemAvailable:
+      !!l.item &&
+      ((l.item.state === 'IN_STOCK' || l.item.state === 'RESERVED') && !l.item.contractItem
+        ? true
+        : l.lineType === 'RENT' && !!q.contractId && l.item.contractItem?.contractId === q.contractId),
+  }));
+}
+
 function editorValue(q: QuoteDetail): QuoteEditorValue {
   return {
     id: q.id,
+    kind: q.kind,
     partnerId: q.partnerId,
     date: toISO(q.date),
     validUntil: q.validUntil ? toISO(q.validUntil) : '',
@@ -152,6 +199,8 @@ function editorValue(q: QuoteDetail): QuoteEditorValue {
       discountPct: num(l.discountPct),
       warrantyMonths: null,
       agreedPrice: false,
+      lineType: l.lineType === 'RENT' ? 'RENT' : null,
+      monthly: l.monthly === null ? null : num(l.monthly),
       serial: l.item?.serial ?? null,
     })),
   };

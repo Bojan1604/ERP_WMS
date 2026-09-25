@@ -5,10 +5,12 @@ import { db } from '@/server/db';
 import { getLookups, modelLabel } from '@/server/queries/lookups';
 import { getItemCard } from '@/server/queries/warehouse';
 import { plain } from '@/server/plain';
-import { can } from '@/domain/permissions';
+import { can, canSeeCost } from '@/domain/permissions';
 import { num } from '@/domain/money';
 import { toISO } from '@/domain/dates';
-import { warrantyEnd } from '@/domain/pricing';
+import { suggestedSalePrice, warrantyEnd } from '@/domain/pricing';
+import { warrantyDaysLeft } from '@/domain/warehouse-list';
+import { DeleteItemButton } from '@/components/warehouse/item-delete';
 import { CONTRACT_STATUS_LABEL } from '@/domain/billing';
 import { Badge, Card, COLOR_TONE, Detail, Notice, PageHeader } from '@/components/ui/misc';
 import { ItemForm } from '@/components/warehouse/item-form';
@@ -54,9 +56,22 @@ export default async function ItemCardPage({ params }: { params: Promise<{ id: s
   if (item.warehouse && !options.warehouses.some((w) => w.value === item.warehouse!.id)) options.warehouses.push({ value: item.warehouse.id, label: item.warehouse.name });
 
   const cost = num(item.cost);
+  const costs = canSeeCost(user.perms);
   const months = item.warrantyMonths ?? item.model.warrantyMonths ?? card.defaultWarrantyMonths;
-  const wEnd = warrantyEnd(item.warrantyStart ? toISO(item.warrantyStart) : null, months);
+  // jamstvo teče od upisanog početka, datuma računa ili datuma izdavanja
+  const wStart = item.warrantyStart ?? item.invoice?.date ?? item.issueDate;
+  const wEnd = warrantyEnd(wStart ? toISO(wStart) : null, months);
+  const wDays = warrantyDaysLeft(wStart ? toISO(wStart) : null, months);
   const roc = returnOnCost(card.earned, cost);
+  const suggested = suggestedSalePrice({
+    modelPrice: item.model.salePrice === null ? null : num(item.model.salePrice),
+    cost,
+    itemMargin: item.marginPct === null ? null : num(item.marginPct),
+    modelMargin: item.model.marginPct === null ? null : num(item.model.marginPct),
+    companyMargin: card.defaultMarginPct,
+  });
+  const categories = lookups.categories.map((x) => ({ value: x.id, label: x.name }));
+  const partnerLocked = contract ? 'Klijent ugovora — mijenja se na ugovoru.' : item.state === 'IN_STOCK' ? 'Uređaj je na skladištu — nema klijenta.' : null;
 
   return (
     <>
@@ -72,8 +87,13 @@ export default async function ItemCardPage({ params }: { params: Promise<{ id: s
             <Badge tone={COLOR_TONE[item.status.color] ?? 'neutral'}>{item.status.name}</Badge>
           </span>
         }
-        subtitle={[modelLabel(item.model), item.model.category?.name, item.dupNote && `napomena: ${item.dupNote}`].filter(Boolean).join(' · ')}
-        actions={<ItemActions itemId={item.id} state={item.state} onContract={!!contract} cost={cost} options={options} perms={perms} />}
+        subtitle={[modelLabel(item.model), item.category?.name ?? item.model.category?.name, item.dupNote && `napomena: ${item.dupNote}`].filter(Boolean).join(' · ')}
+        actions={
+          <>
+            <ItemActions itemId={item.id} state={item.state} onContract={!!contract} cost={costs ? cost : 0} options={options} perms={perms} />
+            {perms.canEdit && <DeleteItemButton itemId={item.id} />}
+          </>
+        }
       />
 
       {card.duplicates.length > 0 && (
@@ -109,10 +129,22 @@ export default async function ItemCardPage({ params }: { params: Promise<{ id: s
                   warrantyMonths: item.warrantyMonths,
                   importDate: item.importDate,
                   note: item.note,
+                  cpu: item.cpu,
+                  screen: item.screen,
+                  os: item.os,
+                  categoryId: item.categoryId,
+                  salePrice: item.salePrice,
+                  issueDate: item.issueDate,
+                  invoice: item.invoice ? { value: item.invoice.id, label: `${item.invoice.number ?? 'nacrt'} · ${date(item.invoice.date)}` } : null,
+                  partner: item.partner ? { value: item.partner.id, label: item.partner.name } : null,
                 })}
                 models={options.models}
                 warehouses={options.warehouses}
+                categories={categories}
                 hasDuplicates={card.duplicates.length > 0}
+                canSeeCost={costs}
+                modelSpecs={{ cpu: item.model.cpu, screen: item.model.screen, os: item.model.os }}
+                partnerLocked={partnerLocked}
               />
             ) : (
               <dl className="grid gap-x-8 sm:grid-cols-2">
@@ -120,9 +152,14 @@ export default async function ItemCardPage({ params }: { params: Promise<{ id: s
                 <Detail label="Model">{modelLabel(item.model)}</Detail>
                 <Detail label="Skladište">{item.warehouse?.name}</Detail>
                 <Detail label="Dobavljač">{item.supplier?.name}</Detail>
-                <Detail label="Nabavna cijena">{eur(cost)}</Detail>
+                {costs && <Detail label="Nabavna cijena">{eur(cost)}</Detail>}
+                <Detail label="Prodajna cijena">{item.salePrice ? eur(num(item.salePrice)) : null}</Detail>
                 <Detail label="Najam mj.">{item.rentPrice ? eur(num(item.rentPrice)) : null}</Detail>
-                <Detail label="Marža">{item.marginPct ? pct(num(item.marginPct)) : null}</Detail>
+                {costs && <Detail label="Marža">{item.marginPct ? pct(num(item.marginPct)) : null}</Detail>}
+                <Detail label="Procesor">{item.cpu ?? item.model.cpu}</Detail>
+                <Detail label="Ekran">{item.screen ?? item.model.screen}</Detail>
+                <Detail label="Operativni sustav">{item.os ?? item.model.os}</Detail>
+                <Detail label="Kategorija">{item.category?.name ?? item.model.category?.name}</Detail>
                 <Detail label="Datum uvoza">{date(item.importDate)}</Detail>
                 <Detail label="Napomena" className="sm:col-span-2">
                   {item.note}
@@ -168,7 +205,18 @@ export default async function ItemCardPage({ params }: { params: Promise<{ id: s
                 ) : null}
               </Detail>
               <Detail label="Datum izdavanja">{item.issueDate ? date(item.issueDate) : null}</Detail>
-              <Detail label="Jamstvo do">{wEnd ? <span className={cn(wEnd < toISO(new Date()) && 'text-fg-3 line-through')}>{date(wEnd)}</span> : null}</Detail>
+              <Detail label="Jamstvo do">
+                {wEnd ? (
+                  <span className={cn(wEnd < toISO(new Date()) && 'text-fg-3 line-through')}>
+                    {date(wEnd)}
+                    {wDays !== null && wDays >= 0 && <span className="text-fg-3"> · još {wDays} d</span>}
+                  </span>
+                ) : null}
+              </Detail>
+              <Detail label="Preporučena prodajna">
+                {eur(suggested.price)}
+                <span className="text-xs text-fg-3"> · {suggested.source === 'model' ? 'cijena modela' : 'iz marže'}</span>
+              </Detail>
               <Detail label="Primka">
                 {item.receipt ? (
                   <Link prefetch={false} href={`/nabava/primke/${item.receipt.id}`} className="link">
@@ -215,6 +263,7 @@ export default async function ItemCardPage({ params }: { params: Promise<{ id: s
             </Card>
           )}
 
+          {costs && (
           <Card title="Zarada">
             <dl>
               <Detail label="Zarađeno (računi)">{eur(card.earned)}</Detail>
@@ -226,6 +275,7 @@ export default async function ItemCardPage({ params }: { params: Promise<{ id: s
             </dl>
             <p className="mt-2 text-xs text-fg-3">Zbroj neto stavki izdanih računa s ovim uređajem (bez storniranih), {card.earnedLines} stavki.</p>
           </Card>
+          )}
 
           <Card title="Servisni nalozi" padded={!card.serviceOrders.length}>
             {card.serviceOrders.length ? (

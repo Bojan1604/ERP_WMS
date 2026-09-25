@@ -1,10 +1,14 @@
 import 'server-only';
 import { Prisma } from '@prisma/client';
 import { db } from '../db';
-import { can, type PermissionMap } from '@/domain/permissions';
-import { addDays, fromISO, today } from '@/domain/dates';
+import { can, canSeeCost, type PermissionMap } from '@/domain/permissions';
+import { addDays, daysBetween, fromISO, today, toISO } from '@/domain/dates';
 import { num } from '@/domain/money';
 import { pendingForCompany } from '../services/rentals';
+import { returnCandidates } from './warehouse';
+import { expensesByMonth } from './reports/costs';
+import { readReceivePayload } from '@/domain/receive-request';
+import { portalNewCount } from '../portal/count';
 
 const OPEN_SERVICE = ['REPORTED', 'RECEIVED', 'DIAGNOSIS', 'AT_SUPPLIER'] as const;
 
@@ -24,6 +28,10 @@ export const revenueWhere = (companyId: string, year: number): Prisma.InvoiceWhe
  * se računaju u bazi. Dijelovi za koje korisnik nema pravo se ne dohvaćaju.
  */
 export async function dashboardData(companyId: string, perms: PermissionMap) {
+  const costs = canSeeCost(perms);
+  const expensesOn = can(perms, 'expenses');
+  const settings = can(perms, 'settings');
+  const whEdit = can(perms, 'warehouse', 'edit');
   const year = Number(today().slice(0, 4));
   const now = today();
   const todayDate = fromISO(now);
@@ -46,13 +54,14 @@ export async function dashboardData(companyId: string, perms: PermissionMap) {
     revenue, saleCost, byMonth, receivables, overdue, overdueTop,
     stock, rentMonthly, activeContracts, pending,
     reserved, returning, approvals, lowStock, warranties,
-    serviceOld,
+    serviceOld, byStatus, stale, serviceOpen, returns, receive, expensesYear, backup, portal,
   ] = await Promise.all([
     skip(money, () => db.invoice.aggregate({ where: revenueWhere(companyId, year), _sum: { netTotal: true } })),
     skip(money, () => db.invoice.aggregate({ where: { ...revenueWhere(companyId, year), type: 'SALE' }, _sum: { costTotal: true } })),
     skip(money, () =>
-      db.$queryRaw<Array<{ m: number; type: string; net: Prisma.Decimal }>>`
-        SELECT EXTRACT(MONTH FROM i."date")::int AS m, i."type"::text AS type, SUM(i."netTotal") AS net
+      db.$queryRaw<Array<{ m: number; type: string; net: Prisma.Decimal; cost: Prisma.Decimal }>>`
+        SELECT EXTRACT(MONTH FROM i."date")::int AS m, i."type"::text AS type, SUM(i."netTotal") AS net,
+               SUM(CASE WHEN i."type" = 'SALE' THEN i."costTotal" ELSE 0 END) AS cost
         FROM "Invoice" i JOIN "Partner" p ON p.id = i."partnerId"
         WHERE i."companyId" = ${companyId} AND i."year" = ${year} AND i."status" = 'ISSUED'
           AND i."kind" IN ('INVOICE','STORNO','CREDIT_NOTE') AND p."excluded" = false
@@ -80,7 +89,7 @@ export async function dashboardData(companyId: string, perms: PermissionMap) {
     skip(rentals, () => pendingForCompany(db, companyId).then((r) => ({ count: r.length, amount: r.reduce((a, x) => a + x.amount, 0) }))),
     skip(wh, () => db.item.count({ where: { companyId, state: 'RESERVED' } })),
     skip(wh, () => db.item.count({ where: { companyId, state: 'RETURNING' } })),
-    skip(wh, () => db.approvalRequest.count({ where: { companyId, status: 'PENDING' } })),
+    skip(wh, () => db.approvalRequest.count({ where: { companyId, status: 'PENDING', kind: 'STATUS_CHANGE' } })),
     skip(wh, () =>
       db.$queryRaw<Array<{ id: string; brand: string | null; name: string; minStock: number; stock: number }>>`
         SELECT m.id, m.brand, m.name, m."minStock",
@@ -114,25 +123,78 @@ export async function dashboardData(companyId: string, perms: PermissionMap) {
         }),
       ]),
     ),
+    // uređaji po statusu (pita) — bez otpisanih
+    skip(wh, () =>
+      db.$queryRaw<Array<{ id: string; name: string; cnt: number }>>`
+        SELECT s.id, s.name, COUNT(i.id)::int AS cnt FROM "Item" i JOIN "ItemStatus" s ON s.id = i."statusId"
+        WHERE i."companyId" = ${companyId} AND i."state" <> 'WRITTEN_OFF' GROUP BY s.id, s.name, s."sort" ORDER BY s."sort", s.name`,
+    ),
+    // zaliha starija od godine dana (od zaprimanja)
+    skip(wh, () =>
+      db.$queryRaw<Array<{ id: string; serial: string; model: string; since: Date; cost: Prisma.Decimal; total: number; value: Prisma.Decimal }>>`
+        SELECT i.id, i.serial, concat_ws(' ', m.brand, m.name) AS model, COALESCE(i."importDate", i."createdAt"::date) AS since, i."cost",
+               COUNT(*) OVER ()::int AS total, SUM(i."cost") OVER () AS value
+        FROM "Item" i JOIN "DeviceModel" m ON m.id = i."modelId"
+        WHERE i."companyId" = ${companyId} AND i."state" = 'IN_STOCK' AND COALESCE(i."importDate", i."createdAt"::date) < ${fromISO(addDays(now, -365))}::date
+        ORDER BY since, i.serial LIMIT 6`,
+    ),
+    skip(service, () => db.serviceOrder.count({ where: { companyId, status: { in: [...OPEN_SERVICE] } } })),
+    skip(wh || rentals, () => returnCandidates(companyId)),
+    skip(whEdit, () => db.approvalRequest.findMany({ where: { companyId, status: 'PENDING', kind: 'RECEIVE' }, orderBy: { createdAt: 'asc' }, take: 20, select: { id: true, requestedBy: true, payload: true } })),
+    skip(expensesOn || money, () => expensesByMonth(companyId, year).then((e) => e.total.reduce((a, b) => a + b, 0))),
+    skip(settings, () => db.company.findUniqueOrThrow({ where: { id: companyId }, select: { backupReminderDays: true, lastBackupAt: true, autoBackup: true } })),
+    // nove prijave kvara s portala za klijente (servisni nalozi izvora PORTAL u statusu „Prijavljeno")
+    skip(service, () =>
+      Promise.all([
+        portalNewCount(companyId),
+        db.serviceOrder.findMany({
+          where: { companyId, source: 'PORTAL', status: 'REPORTED' },
+          orderBy: { createdAt: 'desc' },
+          take: 3,
+          select: { id: true, serial: true, partner: { select: { name: true } } },
+        }),
+      ]),
+    ),
   ]);
 
-  const months = Array.from({ length: 12 }, () => ({ SALE: 0, RENT: 0, SERVICE: 0 }));
-  for (const r of byMonth ?? []) months[r.m - 1][r.type as 'SALE' | 'RENT' | 'SERVICE'] += num(r.net);
+  const months = Array.from({ length: 12 }, () => ({ SALE: 0, RENT: 0, SERVICE: 0, cost: 0 }));
+  for (const r of byMonth ?? []) {
+    months[r.m - 1][r.type as 'SALE' | 'RENT' | 'SERVICE'] += num(r.net);
+    months[r.m - 1].cost += num(r.cost);
+  }
+  // povrat s terena: razlozi i ugovori
+  const reasons = new Map<string, number>();
+  for (const r of returns ?? []) reasons.set(r.reason, (reasons.get(r.reason) ?? 0) + 1);
+  const receiveCodes = (receive ?? []).reduce((a, r) => a + readReceivePayload(r.payload).serials.length, 0);
+  const backupDue =
+    backup && backup.backupReminderDays > 0 && (!backup.lastBackupAt || daysBetween(toISO(backup.lastBackupAt), now) >= backup.backupReminderDays)
+      ? { last: backup.lastBackupAt ? toISO(backup.lastBackupAt) : null, days: backup.lastBackupAt ? daysBetween(toISO(backup.lastBackupAt), now) : null }
+      : null;
 
   const revenueNet = num(revenue?._sum.netTotal);
   return {
     year,
     today: now,
-    access: { sales, money, rentals, wh, service, reports: can(perms, 'reports') },
+    access: { sales, money, rentals, wh, service, reports: can(perms, 'reports'), costs, settings },
     kpi: {
       revenue: money ? revenueNet : null,
-      grossProfit: money ? revenueNet - num(saleCost?._sum.costTotal) : null,
+      grossProfit: money && costs ? revenueNet - num(saleCost?._sum.costTotal) : null,
+      expenses: expensesYear !== null ? { amount: expensesYear, net: money ? revenueNet - expensesYear : null } : null,
+      serviceOpen,
       receivables: receivables ? { amount: num(receivables._sum.openAmount), count: receivables._count } : null,
       overdue: overdue ? { amount: num(overdue._sum.openAmount), count: overdue._count } : null,
       stock: stock ? { value: num(stock._sum.cost), count: stock._count } : null,
       rent: rentMonthly ? { monthly: num(rentMonthly._sum.monthly), contracts: activeContracts ?? 0 } : null,
     },
-    months: money ? months : null,
+    months: money ? months.map((m) => ({ ...m, profit: costs ? m.SALE - m.cost : null })) : null,
+    byStatus,
+    stale: stale ? { count: stale[0]?.total ?? 0, value: costs ? num(stale[0]?.value) : null, rows: stale.map((r) => ({ id: r.id, serial: r.serial, model: r.model, since: toISO(r.since), cost: costs ? num(r.cost) : null })) } : null,
+    returns: returns
+      ? { count: returns.length, reasons: [...reasons.entries()].map(([r, c]) => `${c}× ${r}`).join(' · '), contracts: [...new Set(returns.map((r) => r.contractNumber))] }
+      : null,
+    receive: receive ? { count: receive.length, codes: receiveCodes, by: [...new Set(receive.map((r) => r.requestedBy))] } : null,
+    backupDue,
+    portal: portal ? { count: portal[0], rows: portal[1].map((r) => ({ id: r.id, serial: r.serial, partner: r.partner?.name ?? null })) } : null,
     pending,
     overdueTop: overdueTop?.map((i) => ({ id: i.id, number: i.number, partner: i.partner.name, dueDate: i.dueDate ?? i.date, open: num(i.openAmount) })) ?? null,
     reserved,

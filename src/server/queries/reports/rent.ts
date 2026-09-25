@@ -3,9 +3,7 @@ import { Prisma } from '@prisma/client';
 import { db } from '../../db';
 import { addDays, today } from '@/domain/dates';
 import { CONTRACT_STATUS_LABEL, type ContractStatusCode } from '@/domain/billing';
-import { monthChart, monthRows, n, opt, revenueSql, type ReportDef, type Row } from './types';
-
-const iso = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null);
+import { inIds, iso, itemFilterSql, monthChart, monthRows, n, periodSql, revenueSql, type ReportDef, type Row } from './types';
 /** Uređaj se naplaćuje ako nema vlastitog statusa ili je aktivan. */
 const billableItem = Prisma.sql`(ci."status" IS NULL OR ci."status" = 'ACTIVE')`;
 
@@ -15,14 +13,13 @@ export const rentReports: ReportDef[] = [
     title: 'Mjesečni prihod od najma',
     area: 'Najam',
     description: 'Neto prihod iz računa za najam po mjesecu izdavanja (umanjen za storna i odobrenja).',
-    filters: ['year', 'partner'],
+    filters: ['year', 'range', 'partner'],
     run: async (companyId, f) => {
       const rows = await db.$queryRaw<Array<{ m: number; net: Prisma.Decimal; cnt: number; contracts: number }>>`
         SELECT EXTRACT(MONTH FROM i."date")::int AS m, SUM(i."netTotal") AS net,
                COUNT(*) FILTER (WHERE i."kind" = 'INVOICE')::int AS cnt, COUNT(DISTINCT i."contractId")::int AS contracts
         FROM "Invoice" i JOIN "Partner" p ON p.id = i."partnerId"
-        WHERE ${revenueSql(companyId)} AND i."type" = 'RENT' AND i."year" = ${f.year}
-          ${opt(!!f.partnerId, Prisma.sql`AND i."partnerId" = ${f.partnerId}`)}
+        WHERE ${revenueSql(companyId)} AND i."type" = 'RENT' ${periodSql('i."date"', f)} ${inIds('i."partnerId"', f.partnerIds)}
         GROUP BY 1`;
       const out = monthRows(f.year, (m) => {
         const r = rows.find((x) => x.m === m);
@@ -46,8 +43,8 @@ export const rentReports: ReportDef[] = [
     title: 'Aktivni najmovi po klijentu',
     area: 'Najam',
     description: 'Aktivni ugovori po klijentu: broj uređaja i mjesečni najam koji se naplaćuje.',
-    filters: [],
-    run: async (companyId) => {
+    filters: ['partner', 'category', 'model'],
+    run: async (companyId, f) => {
       const rows = await db.$queryRaw<Array<{ id: string; name: string; contracts: number; devices: number; monthly: Prisma.Decimal; since: Date; ends: Date | null }>>`
         SELECT p.id, p.name, COUNT(DISTINCT c.id)::int AS contracts, COUNT(ci.id)::int AS devices,
                COALESCE(SUM(ci."monthly") FILTER (WHERE ${billableItem}), 0) AS monthly,
@@ -55,7 +52,10 @@ export const rentReports: ReportDef[] = [
         FROM "Contract" c
         JOIN "Partner" p ON p.id = c."partnerId"
         LEFT JOIN "ContractItem" ci ON ci."contractId" = c.id
-        WHERE c."companyId" = ${companyId} AND c."status" = 'ACTIVE' AND p."excluded" = false
+        LEFT JOIN "Item" it ON it.id = ci."itemId"
+        LEFT JOIN "DeviceModel" m ON m.id = it."modelId"
+        WHERE c."companyId" = ${companyId} AND c."status" = 'ACTIVE' AND p."excluded" = false ${inIds('c."partnerId"', f.partnerIds)}
+          ${f.categoryIds.length || f.modelIds.length ? Prisma.sql`AND it.id IS NOT NULL ${itemFilterSql({ ...f, partnerIds: [] }, { partner: false })}` : Prisma.empty}
         GROUP BY p.id ORDER BY monthly DESC`;
       const out: Row[] = rows.map((r) => ({
         name: r.name, contracts: r.contracts, devices: r.devices, monthly: n(r.monthly), annual: Math.round(n(r.monthly) * 12 * 100) / 100,
@@ -82,7 +82,7 @@ export const rentReports: ReportDef[] = [
     title: 'Ugovori — istek i obnova',
     area: 'Najam',
     description: 'Aktivni ugovori kojima kraj ističe u odabranom razdoblju (i oni kojima je kraj već prošao) — za obnovu ili povrat opreme.',
-    filters: ['days'],
+    filters: ['days', 'partner'],
     defaultDays: 90,
     run: async (companyId, f) => {
       const now = today();
@@ -94,7 +94,7 @@ export const rentReports: ReportDef[] = [
         JOIN "Partner" p ON p.id = c."partnerId"
         LEFT JOIN "ContractItem" ci ON ci."contractId" = c.id
         WHERE c."companyId" = ${companyId} AND c."status" IN ('ACTIVE','PAUSED') AND p."excluded" = false
-          AND c."endDate" IS NOT NULL AND c."endDate" <= ${addDays(now, f.days)}::date
+          AND c."endDate" IS NOT NULL AND c."endDate" <= ${addDays(now, f.days)}::date ${inIds('c."partnerId"', f.partnerIds)}
         GROUP BY c.id, p.name ORDER BY c."endDate"`;
       return {
         columns: [
@@ -120,14 +120,14 @@ export const rentReports: ReportDef[] = [
     title: 'Nabava po dobavljačima',
     area: 'Nabava',
     description: 'Proknjižene primke u godini po dobavljaču: broj primki, zaprimljenih uređaja i nabavna vrijednost.',
-    filters: ['year'],
+    filters: ['year', 'range', 'supplier'],
     run: async (companyId, f) => {
       const rows = await db.$queryRaw<Array<{ id: string | null; name: string | null; receipts: number; devices: number; total: Prisma.Decimal; last: Date }>>`
         SELECT s.id, s.name, COUNT(*)::int AS receipts,
                COALESCE(SUM((SELECT COUNT(*) FROM "Item" it WHERE it."receiptId" = r.id)), 0)::int AS devices,
                SUM(r."total") AS total, MAX(r."date") AS last
         FROM "GoodsReceipt" r LEFT JOIN "Partner" s ON s.id = r."supplierId"
-        WHERE r."companyId" = ${companyId} AND r."status" = 'POSTED' AND EXTRACT(YEAR FROM r."date") = ${f.year}
+        WHERE r."companyId" = ${companyId} AND r."status" = 'POSTED' ${periodSql('r."date"', f)} ${inIds('r."supplierId"', f.supplierIds)}
           AND (s.id IS NULL OR s."excluded" = false)
         GROUP BY s.id ORDER BY total DESC`;
       const sum = rows.reduce((a, r) => a + n(r.total), 0);
@@ -140,13 +140,14 @@ export const rentReports: ReportDef[] = [
           { key: 'name', label: 'Dobavljač' },
           { key: 'receipts', label: 'Primki', kind: 'int' },
           { key: 'devices', label: 'Uređaja', kind: 'int' },
-          { key: 'total', label: 'Nabavna vrijednost', kind: 'money' },
-          { key: 'share', label: 'Udio', kind: 'pct', sum: true },
-          { key: 'avg', label: 'Prosj. po uređaju', kind: 'money', sum: false },
+          { key: 'total', label: 'Nabavna vrijednost', kind: 'money', cost: true },
+          { key: 'share', label: 'Udio', kind: 'pct', sum: true, cost: true },
+          { key: 'avg', label: 'Prosj. po uređaju', kind: 'money', sum: false, cost: true },
           { key: 'last', label: 'Zadnja primka', kind: 'date' },
         ],
         rows: out,
         chart: { kind: 'hbar', title: 'Nabava po dobavljaču', rows: out.slice(0, 10).map((r) => ({ label: String(r.name), value: Number(r.total) })) },
+        chartCost: true,
       };
     },
   },

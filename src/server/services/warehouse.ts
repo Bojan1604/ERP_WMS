@@ -7,6 +7,9 @@ import { changeItemStatus, itemEvents, statusFor, type Actor } from './items';
 import { fromISO, formatDate, today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import { supplierVat } from '@/domain/tax';
+import { suggestedRent } from '@/domain/pricing';
+import { addDevices } from './rentals';
+import { deleteBlockedMessage } from '@/domain/warehouse-list';
 import {
   dupNoteError, MAX_RECEIVE, MOVABLE_STATES, NO_WRITE_OFF_STATES, parseSerials, RETURNABLE_STATES, STATE_LABEL, type StateKind,
 } from '@/domain/warehouse';
@@ -198,6 +201,46 @@ export async function cancelOut(tx: Tx, actor: Actor, itemIds: string[]) {
   return { count: items.length };
 }
 
+/**
+ * Izašli uređaji na postojeći aktivni ugovor (E11): predložena mjesečna cijena
+ * (cjenik kupca → uređaj → model → % nabavne), status „U najmu" i klijent s
+ * ugovora — kroz servis najma (`addDevices` → `attachItems`), bez dupliciranja.
+ */
+export async function addOutToContract(tx: Tx, actor: Actor, contractId: string, itemIds: string[]) {
+  const ids = [...new Set(itemIds)];
+  assert(ids.length, 'Označite uređaje.');
+  const c = await tx.contract.findFirst({ where: { id: contractId, companyId: actor.companyId }, select: { id: true, number: true, partnerId: true } });
+  assert(c, 'Ugovor ne postoji.');
+  const [items, company] = await Promise.all([
+    tx.item.findMany({
+      where: { id: { in: ids }, companyId: actor.companyId },
+      select: { id: true, serial: true, state: true, cost: true, rentPrice: true, modelId: true, model: { select: { rentPrice: true } } },
+    }),
+    tx.company.findUniqueOrThrow({ where: { id: actor.companyId }, select: { rentFallbackPct: true } }),
+  ]);
+  assert(items.length === ids.length, 'Neki uređaji ne postoje.');
+  const notOut = items.filter((i) => i.state !== 'RESERVED');
+  assert(!notOut.length, `Na ugovor s izlaza idu samo uređaji koji su izašli iz skladišta: ${notOut.slice(0, 10).map((i) => i.serial).join(', ')}`);
+  const agreed = await tx.priceAgreement.findMany({
+    where: { companyId: actor.companyId, partnerId: c.partnerId, modelId: { in: [...new Set(items.map((i) => i.modelId))] } },
+    select: { modelId: true, rentPrice: true },
+  });
+  const agreedBy = new Map(agreed.map((a) => [a.modelId, a.rentPrice === null ? null : num(a.rentPrice)]));
+  const rows = items.map((i) => ({
+    itemId: i.id,
+    monthly: suggestedRent({
+      agreed: agreedBy.get(i.modelId) ?? null,
+      itemRent: i.rentPrice === null ? null : num(i.rentPrice),
+      modelRent: i.model.rentPrice === null ? null : num(i.model.rentPrice),
+      cost: num(i.cost),
+      fallbackPct: num(company.rentFallbackPct),
+    }).price,
+    plan: [],
+  }));
+  const r = await addDevices(tx, actor, c.id, rows, { skipPast: false });
+  return { count: r.count, number: c.number };
+}
+
 // ---------------------------------------------------------------- povrat
 
 export async function announceReturn(tx: Tx, actor: Actor, itemIds: string[], note?: string | null) {
@@ -271,6 +314,10 @@ export interface BulkEditInput {
   cost?: number | null;
   modelId?: string;
   note?: string | null;
+  /** Klijent kod kojeg je uređaj (null = ukloni klijenta). */
+  partnerId?: string | null;
+  /** Bruto marža % (null = prati model / firmu). */
+  marginPct?: number | null;
 }
 
 export async function bulkEdit(tx: Tx, actor: Actor, input: BulkEditInput) {
@@ -309,6 +356,21 @@ export async function bulkEdit(tx: Tx, actor: Actor, input: BulkEditInput) {
     data.note = input.note;
     parts.push(input.note ? `napomena → ${input.note}` : 'napomena obrisana');
   }
+  if (input.partnerId !== undefined) {
+    // uređaj na skladištu nije ni kod koga — klijent se upisuje samo uređajima izvan skladišta
+    const p = await ensurePartner(tx, actor, input.partnerId);
+    const inStock = items.filter((i) => i.state === 'IN_STOCK');
+    assert(!p || !inStock.length, `Uređaji na skladištu ne mogu imati klijenta (${inStock.slice(0, 5).map((i) => i.serial).join(', ')}${inStock.length > 5 ? '…' : ''}).`);
+    const onContract = items.filter((i) => i.contractItem);
+    assert(!onContract.length, `Klijent uređaja na ugovoru je klijent ugovora — ne mijenja se ručno (${onContract.slice(0, 5).map((i) => i.serial).join(', ')}).`);
+    data.partnerId = p?.id ?? null;
+    parts.push(p ? `klijent → ${p.name}` : 'klijent uklonjen');
+  }
+  if (input.marginPct !== undefined) {
+    assert(input.marginPct === null || (input.marginPct >= 0 && input.marginPct < 100), 'Marža mora biti između 0 i 100 %.');
+    data.marginPct = input.marginPct === null ? null : r2(input.marginPct);
+    parts.push(input.marginPct === null ? 'marža → prati model / firmu' : `bruto marža → ${r2(input.marginPct).toFixed(2).replace('.', ',')} %`);
+  }
   assert(parts.length || input.warehouseId !== undefined, 'Odaberite barem jedno polje za izmjenu.');
   assert(parts.length, 'Odabrani uređaji su već u tom skladištu.');
   const ids = items.map((i) => i.id);
@@ -327,15 +389,25 @@ export interface ItemEditInput {
   modelId: string;
   warehouseId: string | null;
   supplierId: string | null;
-  cost: number;
+  /** Bez prava na nabavne cijene polja nabavne i marže se ne šalju (undefined = ne mijenja se). */
+  cost?: number;
   rentPrice: number | null;
-  marginPct: number | null;
+  marginPct?: number | null;
   warrantyMonths: number | null;
   importDate: string | null;
   note: string | null;
+  // ručni ispravci (E6) — undefined = ne mijenja se
+  cpu?: string | null;
+  screen?: string | null;
+  os?: string | null;
+  categoryId?: string | null;
+  salePrice?: number | null;
+  issueDate?: string | null;
+  invoiceId?: string | null;
+  partnerId?: string | null;
 }
 
-const EDIT_LABEL: Record<keyof ItemEditInput, string> = {
+const EDIT_LABEL: Record<string, string> = {
   serial: 'serijski broj',
   dupNote: 'razlikovna napomena',
   modelId: 'model',
@@ -347,11 +419,21 @@ const EDIT_LABEL: Record<keyof ItemEditInput, string> = {
   warrantyMonths: 'jamstvo',
   importDate: 'datum uvoza',
   note: 'napomena',
+  cpu: 'procesor',
+  screen: 'ekran',
+  os: 'operativni sustav',
+  categoryId: 'kategorija',
+  salePrice: 'prodajna cijena',
+  issueDate: 'datum izlaza',
+  invoiceId: 'račun',
+  partnerId: 'klijent',
 };
+
+const optText = (v: string | null | undefined) => (v === undefined ? undefined : v?.trim() || null);
 
 /** Izmjena kartice uređaja; vraća promijenjena polja (za dnevnik). */
 export async function updateItem(tx: Tx, actor: Actor, id: string, input: ItemEditInput) {
-  const before = await tx.item.findFirst({ where: { id, companyId: actor.companyId } });
+  const before = await tx.item.findFirst({ where: { id, companyId: actor.companyId }, include: { contractItem: { select: { id: true } } } });
   assert(before, 'Uređaj ne postoji.');
   const serial = input.serial.trim();
   assert(serial, 'Serijski broj je obavezan.');
@@ -371,36 +453,102 @@ export async function updateItem(tx: Tx, actor: Actor, id: string, input: ItemEd
   const moving = warehouseId !== before.warehouseId;
   assert(!moving || (MOVABLE_STATES as string[]).includes(before.state), 'Skladište se mijenja samo uređajima koji su u skladištu.');
   assert(!moving || warehouseId || before.state !== 'IN_STOCK', 'Uređaj na stanju mora biti u nekom skladištu.');
-  assert(input.cost >= 0, 'Nabavna cijena ne može biti negativna.');
-  assert(input.marginPct === null || (input.marginPct >= 0 && input.marginPct < 100), 'Marža mora biti između 0 i 100 %.');
+  assert(input.cost === undefined || input.cost >= 0, 'Nabavna cijena ne može biti negativna.');
+  assert(input.marginPct === undefined || input.marginPct === null || (input.marginPct >= 0 && input.marginPct < 100), 'Marža mora biti između 0 i 100 %.');
   assert(input.warrantyMonths === null || (input.warrantyMonths >= 0 && input.warrantyMonths <= 240), 'Jamstvo mora biti između 0 i 240 mjeseci.');
+  assert(input.salePrice === undefined || input.salePrice === null || input.salePrice >= 0, 'Prodajna cijena ne može biti negativna.');
+
+  // ručni ispravci: kategorija, račun i klijent moraju pripadati firmi
+  if (input.categoryId) {
+    assert(await tx.category.count({ where: { id: input.categoryId, companyId: actor.companyId } }), 'Kategorija ne postoji.');
+  }
+  if (input.invoiceId) {
+    assert(await tx.invoice.count({ where: { id: input.invoiceId, companyId: actor.companyId } }), 'Račun ne postoji.');
+  }
+  if (input.partnerId !== undefined && input.partnerId !== before.partnerId) {
+    await ensurePartner(tx, actor, input.partnerId);
+    assert(!input.partnerId || before.state !== 'IN_STOCK', 'Uređaj na skladištu nije kod klijenta — klijent se upisuje uređajima izvan skladišta.');
+    assert(!before.contractItem, 'Klijent uređaja na ugovoru je klijent ugovora — mijenja se na ugovoru.');
+  }
 
   // promjena skladišta je premještaj — međuskladišnica (dokument i povijest), ne izravan upis
   let transfer: Awaited<ReturnType<typeof transferItems>> | null = null;
   if (moving && warehouseId) transfer = await transferItems(tx, actor, { itemIds: [id], toWarehouseId: warehouseId, note: 'Izmjena kartice uređaja' });
 
-  const data = {
+  const data: Record<string, unknown> = {
     serial,
     dupNote,
     modelId: input.modelId,
     warehouseId,
     supplierId: input.supplierId,
-    cost: r2(input.cost),
     rentPrice: input.rentPrice === null ? null : r2(input.rentPrice),
-    marginPct: input.marginPct,
     warrantyMonths: input.warrantyMonths,
     importDate: input.importDate ? fromISO(input.importDate) : null,
     note: input.note,
   };
-  await tx.item.update({ where: { id }, data });
+  if (input.cost !== undefined) data.cost = r2(input.cost);
+  if (input.marginPct !== undefined) data.marginPct = input.marginPct;
+  for (const k of ['cpu', 'screen', 'os'] as const) {
+    const v = optText(input[k]);
+    if (v !== undefined) data[k] = v;
+  }
+  if (input.categoryId !== undefined) data.categoryId = input.categoryId;
+  if (input.salePrice !== undefined) data.salePrice = input.salePrice === null ? null : r2(input.salePrice);
+  if (input.issueDate !== undefined) data.issueDate = input.issueDate ? fromISO(input.issueDate) : null;
+  if (input.invoiceId !== undefined) data.invoiceId = input.invoiceId;
+  if (input.partnerId !== undefined) data.partnerId = input.partnerId;
+  await tx.item.update({ where: { id }, data: data as Prisma.ItemUncheckedUpdateInput });
 
-  const changed = (Object.keys(data) as Array<keyof typeof data>).filter((k) => norm(before[k]) !== norm(data[k]));
+  const b = before as unknown as Record<string, unknown>;
+  const changed = Object.keys(data).filter((k) => norm(b[k]) !== norm(data[k]));
   // premještaj ima vlastiti zapis u povijesti (međuskladišnica)
   const edited = transfer ? changed.filter((k) => k !== 'warehouseId') : changed;
   if (edited.length) {
-    await itemEvents(tx, actor, [id], { type: 'EDIT', message: `Izmijenjeno: ${edited.map((k) => EDIT_LABEL[k]).join(', ')}` });
+    await itemEvents(tx, actor, [id], { type: 'EDIT', message: `Izmijenjeno: ${edited.map((k) => EDIT_LABEL[k] ?? k).join(', ')}` });
   }
-  return { before, after: data, changed, transfer };
+  const after = Object.fromEntries(Object.entries(data).map(([k, v]) => [k, v instanceof Date ? v.toISOString().slice(0, 10) : v]));
+  return { before, after, changed, transfer };
+}
+
+// ---------------------------------------------------------------- brisanje
+
+/**
+ * Brisanje uređaja (pojedinačno ili skupno) — samo uređaji bez računa, ugovora,
+ * međuskladišnice i servisnog naloga; inače jasna poruka koji i zašto (takvi se
+ * otpisuju). Prilozi uređaja se brišu s njim; primka i njen trošak ostaju.
+ */
+export async function deleteItems(tx: Tx, actor: Actor, itemIds: string[]) {
+  const ids = [...new Set(itemIds)];
+  assert(ids.length, 'Niste odabrali nijedan uređaj.');
+  const items = await tx.item.findMany({
+    where: { id: { in: ids }, companyId: actor.companyId },
+    select: {
+      id: true,
+      serial: true,
+      invoiceId: true,
+      receiptId: true,
+      contractItem: { select: { id: true } },
+      _count: { select: { invoiceLines: true, returnedFrom: true, transferItems: true, serviceOrders: true, replacements: true } },
+    },
+  });
+  assert(items.length === ids.length, 'Neki od odabranih uređaja ne postoje.');
+  const blocked = deleteBlockedMessage(
+    items.map((i) => ({
+      serial: i.serial,
+      invoiceId: i.invoiceId,
+      invoiceLines: i._count.invoiceLines,
+      onContract: !!i.contractItem,
+      returnedFromContract: i._count.returnedFrom,
+      transfers: i._count.transferItems,
+      serviceOrders: i._count.serviceOrders + i._count.replacements,
+    })),
+  );
+  if (blocked) throw new DomainError(blocked);
+  // prilozi i stavke inventure nisu vezani stranim ključem
+  await tx.attachment.deleteMany({ where: { companyId: actor.companyId, entity: 'item', entityId: { in: ids } } });
+  await tx.stocktakeScan.updateMany({ where: { itemId: { in: ids } }, data: { itemId: null } });
+  await tx.item.deleteMany({ where: { id: { in: ids }, companyId: actor.companyId } });
+  return { count: ids.length, serials: items.map((i) => i.serial), fromReceipt: items.filter((i) => i.receiptId).length };
 }
 
 function norm(v: unknown): string {
@@ -423,6 +571,12 @@ export interface ReceiveInput {
   serials: string[];
   skipExisting: boolean;
   dupNote: string | null;
+  /** Specifikacije komada; prazno = zadano s modela. */
+  cpu?: string | null;
+  screen?: string | null;
+  os?: string | null;
+  /** Knjiži nabavnu vrijednost kao trošak „Nabava robe" (zadano da). */
+  bookExpense?: boolean;
 }
 
 /** Postojeći serijski brojevi firme iz zadanog popisa (jedan upit). */
@@ -445,7 +599,7 @@ export async function receiveItems(tx: Tx, actor: Actor, input: ReceiveInput) {
   assert(input.cost >= 0, 'Nabavna cijena ne može biti negativna.');
 
   const [model, warehouse, supplier, company, status, existing] = await Promise.all([
-    tx.deviceModel.findFirst({ where: { id: input.modelId, companyId: actor.companyId }, select: { id: true, brand: true, name: true } }),
+    tx.deviceModel.findFirst({ where: { id: input.modelId, companyId: actor.companyId }, select: { id: true, brand: true, name: true, cpu: true, screen: true, os: true } }),
     ensureWarehouse(tx, actor, input.warehouseId),
     ensurePartner(tx, actor, input.supplierId),
     tx.company.findUniqueOrThrow({ where: { id: actor.companyId }, select: { vatRate: true, country: true } }),
@@ -466,6 +620,11 @@ export async function receiveItems(tx: Tx, actor: Actor, input: ReceiveInput) {
 
   const cost = r2(input.cost);
   const total = r2(cost * toCreate.length);
+  const specs = {
+    cpu: input.cpu?.trim() || model.cpu || null,
+    screen: input.screen?.trim() || model.screen || null,
+    os: input.os?.trim() || model.os || null,
+  };
   const date = fromISO(input.importDate);
   const number = await nextDocNumber(tx, actor.companyId, 'RECEIPT', yearOf(input.importDate));
 
@@ -499,6 +658,7 @@ export async function receiveItems(tx: Tx, actor: Actor, input: ReceiveInput) {
         supplierId: supplier?.id ?? null,
         receiptId: receipt.id,
         cost,
+        ...specs,
         importDate: date,
         note: input.note,
       })),
@@ -514,7 +674,7 @@ export async function receiveItems(tx: Tx, actor: Actor, input: ReceiveInput) {
     refId: receipt.id,
   });
 
-  if (total > 0) {
+  if (total > 0 && input.bookExpense !== false) {
     const vat = supplierVat(supplier?.country, { vatRate: num(company.vatRate), country: company.country });
     await tx.expense.create({
       data: {

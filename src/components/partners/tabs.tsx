@@ -104,7 +104,7 @@ export async function DevicesTab({ companyId, partnerId, params }: { companyId: 
             <LinkButton href={`/partneri/${partnerId}/uredaji`} icon={<Printer className="size-4" />}>
               Popis uređaja za klijenta
             </LinkButton>
-            <ExportButtons href={`/api/partneri/${partnerId}/uredaji`} />
+            <ExportButtons href={`/api/partneri/${partnerId}/uredaji?pogled=sve`} />
           </div>
         )}
       </div>

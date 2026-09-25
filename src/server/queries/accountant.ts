@@ -107,6 +107,8 @@ const inSelect = {
   total: true,
   paidDate: true,
   accountantSentAt: true,
+  source: true,
+  supplierOib: true,
   supplier: { select: { name: true, oib: true } },
 } satisfies Prisma.SupplierInvoiceSelect;
 
@@ -178,7 +180,7 @@ export async function loadAccountantRows(
       number: r.number,
       internalNo: r.internalNo,
       partner: r.supplier.name,
-      oib: r.supplier.oib,
+      oib: r.supplier.oib ?? r.supplierOib,
       kind: 'INBOUND',
       net: num(r.netAmount),
       vat: num(r.vatAmount),
@@ -188,7 +190,8 @@ export async function loadAccountantRows(
       sentAt: r.accountantSentAt ? r.accountantSentAt.toISOString() : null,
       attachments: inAtt.get(r.id) ?? 0,
       fiscal: null,
-      eInvoice: null,
+      // ulazni eRačun (preuzet od posrednika) — oznaka u stupcu eRačun
+      eInvoice: r.source === 'EINVOICE' ? 'INBOUND' : null,
     });
   }
   // najnoviji prvi; unutar dana izlazni pa ulazni

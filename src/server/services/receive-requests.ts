@@ -5,7 +5,10 @@ import { assert, DomainError } from '../errors';
 import { changeItemStatus, type Actor } from './items';
 import { addAttachments, copyAttachment } from './attachments';
 import { MAX_RECEIVE, parseSerials, STATE_LABEL } from '@/domain/warehouse';
-import { BACK_TO_STOCK_STATES, readReceivePayload, type ReceiveRequestPayload, type RequestPhoto } from '@/domain/receive-request';
+import {
+  BACK_TO_STOCK_STATES, planReceiveRows, readReceivePayload, type ReceiveRequestPayload, type ReceiveRowDecision, type RequestPhoto,
+} from '@/domain/receive-request';
+import { receiveGoods } from './purchasing';
 
 /**
  * Zahtjev za zaprimanje robe: skladištar s operativnom razinom skenira robu,
@@ -90,15 +93,33 @@ export async function receiveRequestForForm(tx: Tx, actor: Actor, id: string) {
  * odobren. Novi uređaji nastaju prije ovoga, primkom (`receiveItems`) u istoj
  * transakciji — `receiptId` ih povezuje.
  */
-export async function approveReceiveRequest(tx: Tx, actor: Actor, id: string, opts: { warehouseId: string; receiptId?: string | null; receiptNumber?: string | null }) {
+export async function approveReceiveRequest(
+  tx: Tx,
+  actor: Actor,
+  id: string,
+  opts: {
+    warehouseId: string;
+    receiptId?: string | null;
+    receiptNumber?: string | null;
+    /** Poznati uređaji koje administrator preskače (ostaju gdje jesu). */
+    skipReturning?: string[];
+    /** Ispravljeni serijski brojevi (skenirani kod → upisani) — za slike naljepnica. */
+    serialFix?: Record<string, string>;
+    /** Novi redovi koje je administrator preskočio (za zapis u zahtjevu). */
+    skippedNew?: number;
+  },
+) {
   const r = await pendingReceive(tx, actor, id);
   const w = await tx.warehouse.findFirst({ where: { id: opts.warehouseId, companyId: actor.companyId }, select: { id: true, name: true } });
   assert(w, 'Skladište ne postoji.');
-  assert(opts.receiptId || r.p.returning.length, 'Zahtjev sadrži nove serijske brojeve — zaprimite ih kroz „Provjeri i zaprimi".');
+  const skip = new Set(opts.skipReturning ?? []);
+  const returning = r.p.returning.filter((x) => !skip.has(x));
+  assert(opts.receiptId || !r.p.serials.length || (opts.skippedNew ?? 0) >= r.p.serials.length, 'Zahtjev sadrži nove serijske brojeve — zaprimite ih kroz „Provjeri i zaprimi".');
+  assert(opts.receiptId || returning.length, 'Nema ničega za zaprimiti — ako roba nije stigla, zahtjev odbijte.');
 
   // poznati uređaji: preskaču se oni koji su u međuvremenu već na skladištu ili obrisani
-  const back = r.p.returning.length
-    ? await tx.item.findMany({ where: { companyId: actor.companyId, id: { in: r.p.returning }, state: { in: BACK_TO_STOCK_STATES } }, select: { id: true, serial: true } })
+  const back = returning.length
+    ? await tx.item.findMany({ where: { companyId: actor.companyId, id: { in: returning }, state: { in: BACK_TO_STOCK_STATES } }, select: { id: true, serial: true } })
     : [];
   if (back.length) {
     await changeItemStatus(tx, actor, back.map((i) => i.id), {
@@ -116,17 +137,82 @@ export async function approveReceiveRequest(tx: Tx, actor: Actor, id: string, op
   const backIds = new Set(back.map((i) => i.id));
   let photos = 0;
   for (const ph of r.p.photos) {
-    const target = (ph.itemId && backIds.has(ph.itemId) ? ph.itemId : null) ?? (ph.code ? bySerial.get(ph.code.trim().toUpperCase()) : undefined);
+    const code = ph.code ? (opts.serialFix?.[ph.code] ?? ph.code) : null;
+    const target = (ph.itemId && backIds.has(ph.itemId) ? ph.itemId : null) ?? (code ? bySerial.get(code.trim().toUpperCase()) : undefined);
     if (target) photos += await copyAttachment(tx, actor, ph.id, 'item', target, `Zaprimanje ${ph.code ?? ''}`.trim());
   }
 
-  const summary = [opts.receiptNumber && `primka ${opts.receiptNumber} (${created.length} kom)`, back.length && `vraćeno na skladište ${back.length} kom`].filter(Boolean).join(', ');
+  const skippedAll = (opts.skippedNew ?? 0) + (r.p.returning.length - returning.length);
+  const summary = [
+    opts.receiptNumber && `primka ${opts.receiptNumber} (${created.length} kom)`,
+    back.length && `vraćeno na skladište ${back.length} kom`,
+    skippedAll && `preskočeno ${skippedAll}`,
+  ]
+    .filter(Boolean)
+    .join(', ');
   const upd = await tx.approvalRequest.updateMany({
     where: { id: r.id, status: 'PENDING' },
     data: { status: 'APPROVED', resolvedBy: actor.name, resolvedAt: new Date(), resolveNote: summary ? `Zaprimljeno: ${summary}` : null },
   });
   assert(upd.count === 1, 'Zahtjev je već riješen.');
   return { returned: back.length, created: created.length, photos, requestedBy: r.requestedBy, warehouse: w.name };
+}
+
+export interface ReceiveReviewInput {
+  warehouseId: string;
+  supplierId: string | null;
+  /** Nabavna cijena po komadu za nove uređaje. */
+  cost: number;
+  importDate: string;
+  supplierDocNumber: string | null;
+  note: string | null;
+  bookExpense: boolean;
+  /** Odluka za svaki novi kod iz zahtjeva (model, ispravak serijskog, preskoči). */
+  rows: ReceiveRowDecision[];
+  /** Poznati uređaji koji se ne vraćaju na skladište. */
+  skipReturning: string[];
+}
+
+/**
+ * Odobravanje zahtjeva po retku (E9): za svaki novi kod administrator bira
+ * model, po potrebi ispravlja serijski broj (usporedba sa slikom) ili redak
+ * preskače. Novi uređaji nastaju jednom primkom (po modelu stavka), poznati se
+ * vraćaju na skladište, zahtjev postaje odobren — sve u jednoj transakciji.
+ */
+export async function approveReceiveRows(tx: Tx, actor: Actor, id: string, input: ReceiveReviewInput) {
+  const r = await pendingReceive(tx, actor, id);
+  let plan: ReturnType<typeof planReceiveRows>;
+  try {
+    plan = planReceiveRows(r.p.serials, input.rows);
+  } catch (e) {
+    throw new DomainError(e instanceof Error ? e.message : String(e));
+  }
+  assert(input.cost >= 0, 'Nabavna cijena ne može biti negativna.');
+  const skipReturning = input.skipReturning.filter((x) => r.p.returning.includes(x));
+  const returning = r.p.returning.length - skipReturning.length;
+  assert(plan.received || returning, 'Svi redovi su preskočeni — ako roba nije stigla, zahtjev odbijte.');
+
+  let receipt: { id: string; number: string; count: number } | null = null;
+  if (plan.received) {
+    receipt = await receiveGoods(tx, actor, {
+      supplierId: input.supplierId,
+      warehouseId: input.warehouseId,
+      date: input.importDate,
+      supplierDocNumber: input.supplierDocNumber,
+      note: input.note ?? `Zahtjev za zaprimanje (${r.requestedBy})`,
+      bookExpense: input.bookExpense,
+      lines: [...plan.byModel].map(([modelId, serials]) => ({ modelId, unitCost: input.cost, serials })),
+    });
+  }
+  const res = await approveReceiveRequest(tx, actor, id, {
+    warehouseId: input.warehouseId,
+    receiptId: receipt?.id ?? null,
+    receiptNumber: receipt?.number ?? null,
+    skipReturning,
+    serialFix: plan.serialFix,
+    skippedNew: plan.skipped,
+  });
+  return { ...res, receiptId: receipt?.id ?? null, receiptNumber: receipt?.number ?? null, skipped: plan.skipped + skipReturning.length };
 }
 
 /**

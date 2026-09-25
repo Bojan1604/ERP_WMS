@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { ArrowRightLeft, LogOut, Pencil, Printer, Tag, Trash2, Undo2 } from 'lucide-react';
+import { ArrowRightLeft, Eraser, LogOut, Pencil, Printer, Tag, Trash2, Undo2 } from 'lucide-react';
 import { Button, buttonClass } from '@/components/ui/button';
 import { labelsHref } from './scan-actions';
 import { SelectionBar } from '@/components/ui/selection';
@@ -10,6 +10,7 @@ import {
   AnnounceReturnDialog, BulkEditDialog, MarkOutDialog, StatusDialog, TransferDialog, WriteOffDialog,
   type Perms, type SelectedMeta, type WarehouseOptions,
 } from './dialogs';
+import { DeleteItemsDialog } from './item-delete';
 import { MOVABLE_STATES, NO_WRITE_OFF_STATES, RETURNABLE_STATES, type StateKind } from '@/domain/warehouse';
 
 export interface RowMeta {
@@ -18,7 +19,7 @@ export interface RowMeta {
   cost: number;
 }
 
-type Which = 'status' | 'out' | 'transfer' | 'writeoff' | 'edit' | 'return' | null;
+type Which = 'status' | 'out' | 'transfer' | 'writeoff' | 'edit' | 'return' | 'delete' | null;
 
 const barBtn = 'border-0 bg-white/10 text-white hover:bg-white/20';
 
@@ -87,13 +88,23 @@ export function ItemBulkBar({ rows, options, perms }: { rows: Record<string, Row
                   >
                     Otpiši
                   </Button>
+                  <Button
+                    size="sm"
+                    className="border-0 bg-bad-soft text-bad-strong hover:brightness-95"
+                    icon={<Eraser className="size-3.5" />}
+                    title="Trajno obriši uređaje bez računa, ugovora i međuskladišnice"
+                    onClick={() => setWhich('delete')}
+                  >
+                    Obriši
+                  </Button>
                 </>
               )}
               {which === 'status' && <StatusDialog {...base} statuses={options.statuses} warehouses={options.warehouses} perms={perms} meta={meta} />}
               {which === 'out' && <MarkOutDialog {...base} count={ids.length} />}
               {which === 'return' && <AnnounceReturnDialog {...base} count={ids.length} />}
               {which === 'transfer' && <TransferDialog {...base} warehouses={options.warehouses} count={ids.length} />}
-              {which === 'edit' && <BulkEditDialog {...base} warehouses={options.warehouses} models={options.models} count={ids.length} />}
+              {which === 'edit' && <BulkEditDialog {...base} warehouses={options.warehouses} models={options.models} count={ids.length} canSeeCost={perms.canSeeCost !== false} />}
+              {which === 'delete' && <DeleteItemsDialog {...base} />}
               <Link prefetch={false} href={labelsHref(ids)} className={buttonClass('secondary', 'sm', barBtn)}>
                 <Printer className="size-3.5" />
                 Ispiši naljepnice

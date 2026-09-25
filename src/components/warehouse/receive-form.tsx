@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Inbox, Loader2, Printer, ScanLine } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Loader2, Printer, ScanLine } from 'lucide-react';
 import { Button, LinkButton } from '@/components/ui/button';
 import { Combobox } from '@/components/ui/combobox';
 import { Field, FormGrid, Input, Select, Textarea, type Option } from '@/components/ui/field';
@@ -12,36 +12,30 @@ import { today } from '@/domain/dates';
 import { eur, integer } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { PartnerPicker } from './pickers';
+import { BookExpenseToggle, SupplierVatBadge, useReceiveHints } from './receive-extras';
 import { MAX_RECEIVE, parseSerials, serialRange } from '@/domain/warehouse';
 import { checkSerials, receiveAction } from '@/app/(app)/skladiste/zaprimanje/actions';
 import { ScanDialog } from '@/components/scan/scan-input';
 import { RECEIVE_PREFILL_KEY } from '@/components/scan/core';
-import { AttachmentGallery } from './attachments';
-import { dateTime } from '@/lib/format';
+import { RequestPanel, type ReceiveRequestInfo } from './receive-request-panel';
 
 const PREVIEW_ROWS = 300;
 
-/** Zahtjev skladištara koji se zaprima („Provjeri i zaprimi" s Odobrenja). */
-export interface ReceiveRequestInfo {
-  id: string;
-  requestedBy: string;
-  createdAt: string;
-  warehouseId: string;
-  note: string | null;
-  returning: Array<{ id: string; serial: string; status: string }>;
-  photos: Array<{ id: string; code: string | null; mime: string; fileName: string; size: number }>;
-}
+export type { ReceiveRequestInfo } from './receive-request-panel';
 
 export function ReceiveForm({
   models,
   warehouses,
   initialSerials = [],
   request: initialRequest = null,
+  canSeeCost = true,
 }: {
   models: Option[];
   warehouses: Option[];
   initialSerials?: string[];
   request?: ReceiveRequestInfo | null;
+  /** Bez prava na nabavne cijene nabavna se ne upisuje (0). */
+  canSeeCost?: boolean;
 }) {
   const [request, setRequest] = useState(initialRequest);
   const [modelId, setModelId] = useState<string | null>(null);
@@ -53,6 +47,9 @@ export function ReceiveForm({
   const [importDate, setImportDate] = useState(today());
   const [docNo, setDocNo] = useState('');
   const [note, setNote] = useState(initialRequest?.note ?? '');
+  const [specs, setSpecs] = useState({ cpu: '', screen: '', os: '' });
+  const [book, setBook] = useState(true);
+  const hints = useReceiveHints(supplierId, modelId);
 
   const [mode, setMode] = useState<'paste' | 'range'>('paste');
   const [text, setText] = useState(initialSerials.join('\n'));
@@ -140,7 +137,10 @@ export function ReceiveForm({
   const ready = !!modelId && !!warehouseId && newCount > 0 && !tooMany && !checking && (skipExisting || !dupCount || !!dupNote.trim());
 
   const submit = () =>
-    run({ modelId, warehouseId, supplierId, cost, importDate, supplierDocNumber: docNo, note, serials, skipExisting, dupNote, requestId: request?.id ?? null });
+    run({
+      modelId, warehouseId, supplierId, cost: canSeeCost ? cost : '0', importDate, supplierDocNumber: docNo, note, serials, skipExisting, dupNote,
+      ...specs, bookExpense: book, requestId: request?.id ?? null,
+    });
 
   return (
     <>
@@ -181,12 +181,30 @@ export function ReceiveForm({
                 </Field>
               </FormGrid>
               <Field label="Dobavljač">
-                <PartnerPicker value={supplierId} onChange={setSupplierId} role="supplier" placeholder="— bez dobavljača —" />
+                <div className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <PartnerPicker value={supplierId} onChange={setSupplierId} role="supplier" placeholder="— bez dobavljača —" />
+                  </div>
+                  <SupplierVatBadge vat={hints.vat} />
+                </div>
               </Field>
-              <FormGrid>
-                <Field label="Nabavna cijena po komadu (€)">
-                  <Input inputMode="decimal" value={cost} onChange={(e) => setCost(e.target.value)} placeholder="0,00" className="text-right" />
+              <FormGrid cols={3}>
+                <Field label="Procesor" hint={hints.specs?.cpu ? 'Prazno = s modela' : undefined}>
+                  <Input value={specs.cpu} onChange={(e) => setSpecs({ ...specs, cpu: e.target.value })} placeholder={hints.specs?.cpu ?? ''} />
                 </Field>
+                <Field label="Ekran" hint={hints.specs?.screen ? 'Prazno = s modela' : undefined}>
+                  <Input value={specs.screen} onChange={(e) => setSpecs({ ...specs, screen: e.target.value })} placeholder={hints.specs?.screen ?? ''} />
+                </Field>
+                <Field label="OS" hint={hints.specs?.os ? 'Prazno = s modela' : undefined}>
+                  <Input value={specs.os} onChange={(e) => setSpecs({ ...specs, os: e.target.value })} placeholder={hints.specs?.os ?? ''} />
+                </Field>
+              </FormGrid>
+              <FormGrid>
+                {canSeeCost && (
+                  <Field label="Nabavna cijena po komadu (€)">
+                    <Input inputMode="decimal" value={cost} onChange={(e) => setCost(e.target.value)} placeholder="0,00" className="text-right" />
+                  </Field>
+                )}
                 <Field label="Broj dokumenta dobavljača">
                   <Input value={docNo} onChange={(e) => setDocNo(e.target.value)} placeholder="npr. otpremnica 123/26" />
                 </Field>
@@ -344,9 +362,11 @@ export function ReceiveForm({
 
           <Card>
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="text-base">
-                Zaprima se <b className="tnum">{integer(newCount)}</b> kom × {eur(unit)} = <b className="tnum">{eur(total)}</b>
-                <p className="text-xs text-fg-3">Nastaje primka i trošak „Nabava robe" u iznosu nabavne vrijednosti.</p>
+              <div className="space-y-2 text-base">
+                <p>
+                  Zaprima se <b className="tnum">{integer(newCount)}</b> kom{canSeeCost && <> × {eur(unit)} = <b className="tnum">{eur(total)}</b></>}
+                </p>
+                {canSeeCost ? <BookExpenseToggle checked={book} onChange={setBook} total={total} vat={hints.vat} /> : <p className="text-xs text-fg-3">Nastaje primka; nabavnu cijenu upisuje korisnik s pravom na nabavne cijene.</p>}
               </div>
               <Button variant="primary" size="lg" loading={pending} disabled={!ready} onClick={submit}>
                 Zaprimi {newCount > 0 ? `${integer(newCount)} kom` : ''}
@@ -359,36 +379,5 @@ export function ReceiveForm({
         </div>
       </div>
     </>
-  );
-}
-
-/** Podaci zahtjeva skladištara iznad obrasca: tko je poslao, što se vraća i slike naljepnica. */
-function RequestPanel({ request }: { request: ReceiveRequestInfo }) {
-  return (
-    <div className="mb-4 rounded-lg border-l-4 border-l-warn bg-warn-soft/60 px-4 py-3" data-receive-request={request.id}>
-      <p className="flex items-start gap-2 text-base">
-        <Inbox className="mt-1 size-4 shrink-0 text-warn" />
-        <span className="min-w-0">
-          Zaprimanje po zahtjevu <b>{request.requestedBy}</b> · {dateTime(request.createdAt)}
-        </span>
-      </p>
-      <p className="mt-1 text-sm text-fg-2">
-        Provjerite serijske brojeve i slike, odaberite model i zaprimite. Zahtjev se odobrava zajedno sa zaprimanjem
-        {request.returning.length > 0 && <>, a {request.returning.length} poznatih uređaja vraća se na odabrano skladište</>}.
-      </p>
-      {request.note && <p className="mt-1 text-sm text-fg-2">Napomena: {request.note}</p>}
-      {request.returning.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {request.returning.map((i) => (
-            <span key={i.id} className="rounded bg-panel px-1.5 py-0.5 font-mono text-xs" title={`Sada: ${i.status}`}>
-              {i.serial} <span className="font-sans text-fg-3">· {i.status}</span>
-            </span>
-          ))}
-        </div>
-      )}
-      {request.photos.length > 0 && (
-        <AttachmentGallery className="mt-3" items={request.photos.map((p) => ({ ...p, label: p.code, caption: p.code ? `Serijski: ${p.code}` : 'Općenita slika' }))} />
-      )}
-    </div>
   );
 }

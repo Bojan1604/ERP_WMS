@@ -15,10 +15,12 @@ import { PaidBar } from '@/components/purchasing/paid-bar';
 import { FetchEInvoicesButton } from '@/components/purchasing/inbound-actions';
 import { SupplierInvoiceSourceBadge, SupplierInvoiceStatusBadge } from '@/components/purchasing/supplier-invoice-badges';
 import { date, eur, integer } from '@/lib/format';
-import { fetchEInvoicesAction, supplierInvoicesPaidAction } from './actions';
+import { deleteSupplierInvoicesAction, fetchEInvoicesAction, supplierInvoicesPaidAction } from './actions';
+import { vatPctOf } from '@/domain/purchase-links';
 import { ExportButtons } from '@/components/ui/export-buttons';
 
 type Params = Record<string, string | string[] | undefined>;
+const pctLabel = (v: number | null) => (v === null ? '—' : `${String(v).replace('.', ',')} %`);
 const FILTERS = ['q', 'supplier', 'year', 'paid', 'status', 'source'];
 
 export default async function SupplierInvoicesPage({ searchParams }: { searchParams: Promise<Params> }) {
@@ -89,21 +91,24 @@ export default async function SupplierInvoicesPage({ searchParams }: { searchPar
       </FilterBar>
 
       <SelectionProvider ids={list.rows.map((r) => r.id)}>
-        {canEdit && <PaidBar action={supplierInvoicesPaidAction} today={t} />}
+        {canEdit && <PaidBar action={supplierInvoicesPaidAction} today={t} remove={deleteSupplierInvoicesAction} />}
         <TableWrap>
           {list.rows.length ? (
-            <table className="data-table sm:min-w-[1200px]">
+            <table className="data-table sm:min-w-[1400px]">
               <thead>
                 <tr>
                   <th className="w-8">{canEdit && <SelectAll />}</th>
                   <th>Interni br.</th>
                   <th>Broj računa</th>
                   <th>Dobavljač</th>
+                  <th>OIB</th>
+                  <th>Izvor</th>
                   <th>Datum</th>
                   <th>Dospijeće</th>
                   <th>Kategorija</th>
                   <th className="num">Osnovica</th>
                   <th className="num">PDV</th>
+                  <th className="num">PDV %</th>
                   <th className="num">Ukupno</th>
                   <th>Status</th>
                   <th>Plaćeno</th>
@@ -124,17 +129,20 @@ export default async function SupplierInvoicesPage({ searchParams }: { searchPar
                         </Link>
                       </td>
                       <td>
-                        <span className="flex items-center gap-1.5">
-                          {r.number}
-                          <SupplierInvoiceSourceBadge source={r.source} />
-                        </span>
+                        {r.number}
+                        {(r.orderId || r.receiptId) && <span className="block text-xs text-fg-3">iz nabave</span>}
                       </td>
                       <td>{r.supplier.name}</td>
+                      <td className="tnum text-fg-3">{r.supplierOib ?? r.supplier.oib ?? '—'}</td>
+                      <td>
+                        <SupplierInvoiceSourceBadge source={r.source} />
+                      </td>
                       <td className="whitespace-nowrap">{date(r.issueDate)}</td>
                       <td className={overdue ? 'whitespace-nowrap font-medium text-bad-strong' : 'whitespace-nowrap'}>{date(r.dueDate)}</td>
                       <td className="text-fg-3">{r.category ?? '—'}</td>
                       <td className="num">{eur(num(r.netAmount))}</td>
                       <td className="num">{eur(num(r.vatAmount))}</td>
+                      <td className="num text-fg-3">{pctLabel(r.vatPct !== null ? num(r.vatPct) : vatPctOf(num(r.netAmount), num(r.vatAmount)))}</td>
                       <td className={rejected ? 'num font-medium text-fg-4 line-through' : 'num font-medium'}>{eur(num(r.total))}</td>
                       <td>
                         <SupplierInvoiceStatusBadge status={r.status} paid={!!r.paidDate} />
@@ -156,12 +164,13 @@ export default async function SupplierInvoicesPage({ searchParams }: { searchPar
               <tfoot>
                 <tr>
                   <td />
-                  <td colSpan={6}>
+                  <td colSpan={8}>
                     {integer(list.total)} računa · neplaćeno {eur(list.sums.unpaid)}
                     {sp.status !== 'rejected' && <span className="text-fg-3"> · zbrojevi bez odbijenih</span>}
                   </td>
                   <td className="num">{eur(list.sums.net)}</td>
                   <td className="num">{eur(list.sums.vat)}</td>
+                  <td />
                   <td className="num">{eur(list.sums.total)}</td>
                   <td colSpan={3} />
                 </tr>

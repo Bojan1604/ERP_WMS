@@ -2,7 +2,7 @@ import 'server-only';
 import { revalidatePath } from 'next/cache';
 import { Prisma } from '@prisma/client';
 import { z, ZodError } from 'zod';
-import { requireAccess, type SessionUser } from './auth';
+import { requireAccess, requireUser, type SessionUser } from './auth';
 import { AuthError, DomainError } from './errors';
 import type { Level, Module } from '@/domain/permissions';
 
@@ -31,6 +31,30 @@ export function action<S extends z.ZodTypeAny, R>(
   return async (raw: unknown): Promise<ActionResult<R>> => {
     try {
       const user = await requireAccess(access.module, access.level ?? 'edit');
+      const input = schema.parse(raw instanceof FormData ? formDataToObject(raw) : raw);
+      const out = await handler(input, user);
+      const meta = isMeta(out) ? out : { data: out as R };
+      for (const p of meta.revalidate ?? ['/']) revalidatePath(p, 'layout');
+      return { ok: true, data: meta.data as R, message: meta.message, redirect: meta.redirect };
+    } catch (e) {
+      return toError(e);
+    }
+  };
+}
+
+/**
+ * Akcija bez prava modula: svaki prijavljeni korisnik (npr. vlastiti račun) ili
+ * uz vlastitu provjeru `guard` (npr. samo administrator / opasna zona). Inače kao `action`.
+ */
+export function userAction<S extends z.ZodTypeAny, R>(
+  schema: S,
+  handler: (input: z.infer<S>, user: SessionUser) => Promise<R | (ActionMeta & { data?: R })>,
+  guard?: (user: SessionUser) => void | Promise<void>,
+) {
+  return async (raw: unknown): Promise<ActionResult<R>> => {
+    try {
+      const user = await requireUser();
+      if (guard) await guard(user);
       const input = schema.parse(raw instanceof FormData ? formDataToObject(raw) : raw);
       const out = await handler(input, user);
       const meta = isMeta(out) ? out : { data: out as R };

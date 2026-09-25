@@ -17,6 +17,7 @@ const ENTITY_LABEL: Record<string, string> = {
   receipt: 'Primka', order: 'Narudžbenica', transfer: 'Međuskladišnica', service: 'Servis / usluga', serviceOrder: 'Servisni nalog',
   expense: 'Trošak', supplierInvoice: 'Ulazni račun', warehouse: 'Skladište', category: 'Kategorija', model: 'Model',
   status: 'Status', expenseCategory: 'Kategorija troška', request: 'Odobrenje', accountant: 'Knjigovođa',
+  job: 'Automatski posao', import: 'Uvoz i kopije', approvalRequest: 'Odobrenje',
 };
 const ACTION_LABEL: Record<string, string> = {
   create: 'novo', update: 'izmjena', delete: 'brisanje', issue: 'izdavanje', storno: 'storno', payment: 'uplata',
@@ -25,8 +26,14 @@ const ACTION_LABEL: Record<string, string> = {
   'rent-apply': 'najam na uređaje', 'rent-override': 'ručni najam', status: 'status', transfer: 'premještanje', pause: 'pauza naplate', resume: 'naplata vraćena',
   sent: 'poslano knjigovođi', unsent: 'nije poslano knjigovođi',
   fetch: 'preuzimanje eRačuna', receive: 'zaprimljen eRačun', accept: 'prihvaćeno', paid: 'plaćeno',
+  '2fa-on': '2FA uključena', '2fa-off': '2FA isključena', '2fa-reset': '2FA poništena', '2fa-codes': 'rezervni kodovi', '2fa-backup': 'prijava rezervnim kodom',
+  password: 'lozinka', switch: 'promjena firme', 'company-grant': 'pristup firmi', 'company-revoke': 'oduzet pristup firmi',
+  counter: 'numeracija', 'auto-issue': 'automatsko izdavanje', backup: 'sigurnosna kopija', 'backup-delete': 'brisanje kopije', 'backup-download': 'preuzeta kopija',
+  'wipe-transactions': 'brisanje prometa', 'wipe-all': 'brisanje svih podataka', 'log-clean': 'čišćenje dnevnika', 'integrity-fix': 'popravak dosljednosti', reset: 'vraćeno na zadano',
 };
-const ACTION_TONE: Record<string, 'ok' | 'bad' | 'info' | 'neutral' | 'warn'> = { create: 'ok', delete: 'bad', update: 'info', issue: 'ok', storno: 'warn', accept: 'ok', reject: 'bad' };
+const ACTION_TONE: Record<string, 'ok' | 'bad' | 'info' | 'neutral' | 'warn'> = {
+  create: 'ok', delete: 'bad', update: 'info', issue: 'ok', storno: 'warn', accept: 'ok', reject: 'bad', 'wipe-transactions': 'bad', 'wipe-all': 'bad', 'log-clean': 'warn', '2fa-reset': 'warn',
+};
 const isoDay = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
 
 export default async function AuditLogPage({ searchParams }: { searchParams: Promise<Params> }) {

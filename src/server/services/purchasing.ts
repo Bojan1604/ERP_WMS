@@ -8,6 +8,8 @@ import { statusFor, type Actor } from './items';
 import { fromISO, today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import { supplierVat } from '@/domain/tax';
+import { receiptBooksExpense } from '@/domain/purchase-links';
+import { syncOrderSupplierInvoice } from './supplier-invoices';
 
 // =============================================================================
 //  Nabava: narudžbenice i primke (zaprimanje robe). Ulazni računi (URA) → expenses.ts
@@ -141,6 +143,7 @@ export async function deleteOrder(tx: Tx, actor: Actor, id: string) {
   assert(order, 'Narudžbenica ne postoji.');
   const posted = await tx.goodsReceipt.count({ where: { orderId: id, status: 'POSTED' } });
   assert(!posted, 'Po narudžbenici postoje proknjižene primke — prvo ih stornirajte ili otkažite narudžbenicu.');
+  await tx.attachment.deleteMany({ where: { companyId: actor.companyId, entity: 'purchaseOrder', entityId: id } });
   await tx.purchaseOrder.delete({ where: { id } });
   await audit(tx, actor, { entity: 'purchaseOrder', entityId: id, action: 'delete', summary: `Narudžbenica ${order.number} obrisana` });
 }
@@ -164,6 +167,8 @@ export interface ReceiveInput {
   supplierDocNumber?: string | null;
   note?: string | null;
   lines: ReceiveLineInput[];
+  /** Knjiži nabavnu vrijednost kao trošak „Nabava robe" (zadano da). */
+  bookExpense?: boolean;
 }
 
 /**
@@ -192,7 +197,10 @@ export async function receiveGoods(tx: Tx, actor: Actor, input: ReceiveInput) {
     : null;
   assert(!input.supplierId || supplier, 'Dobavljač ne postoji.');
   const modelIds = [...new Set(lines.map((l) => l.modelId))];
-  assert((await tx.deviceModel.count({ where: { id: { in: modelIds }, companyId: actor.companyId } })) === modelIds.length, 'Neki modeli ne postoje.');
+  const models = await tx.deviceModel.findMany({ where: { id: { in: modelIds }, companyId: actor.companyId }, select: { id: true, cpu: true, screen: true, os: true } });
+  assert(models.length === modelIds.length, 'Neki modeli ne postoje.');
+  // specifikacije novih uređaja zadano s modela
+  const specs = new Map(models.map((m) => [m.id, { cpu: m.cpu, screen: m.screen, os: m.os }]));
 
   const order = input.orderId
     ? await tx.purchaseOrder.findFirst({
@@ -251,6 +259,7 @@ export async function receiveGoods(tx: Tx, actor: Actor, input: ReceiveInput) {
       supplierId,
       receiptId: receipt.id,
       cost: r2(l.unitCost),
+      ...specs.get(l.modelId),
       importDate: fromISO(input.date),
     })),
   );
@@ -278,8 +287,12 @@ export async function receiveGoods(tx: Tx, actor: Actor, input: ReceiveInput) {
     await recalcOrderStatus(tx, order.id);
   }
 
-  // primka bez vrijednosti ne knjiži trošak od 0 €
-  if (total > 0) {
+  // primka bez vrijednosti ne knjiži trošak od 0 €; ulazni račun narudžbenice s vlastitim troškom već je knjižio robu
+  const invoiceOwnExpenses = order
+    ? await tx.expense.count({ where: { companyId: actor.companyId, source: 'SUPPLIER_INVOICE', supplierInvoice: { orderId: order.id } } })
+    : 0;
+  const booked = receiptBooksExpense({ bookExpense: input.bookExpense !== false, total, invoiceOwnExpenses });
+  if (booked) {
     await tx.expense.create({
       data: {
         companyId: actor.companyId,
@@ -296,13 +309,16 @@ export async function receiveGoods(tx: Tx, actor: Actor, input: ReceiveInput) {
     });
   }
 
+  // račun dobavljača upisan na narudžbenici postaje ulazni račun (povezan, bez dvostrukog troška)
+  if (order?.supplierInvoiceNo) await syncOrderSupplierInvoice(tx, actor, order.id);
+
   await audit(tx, actor, {
     entity: 'receipt',
     entityId: receipt.id,
     action: 'create',
-    summary: `Primka ${number}: ${created.length} kom${vendor ? ` od ${vendor.name}` : ''}`,
+    summary: `Primka ${number}: ${created.length} kom${vendor ? ` od ${vendor.name}` : ''}${!booked && total > 0 ? ' — bez knjiženja troška' : ''}`,
   });
-  return { id: receipt.id, number, count: created.length };
+  return { id: receipt.id, number, count: created.length, booked };
 }
 
 /**

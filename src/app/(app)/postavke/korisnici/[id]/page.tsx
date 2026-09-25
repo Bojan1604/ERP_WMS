@@ -1,14 +1,15 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { LogOut } from 'lucide-react';
+import { LogOut, ShieldOff } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import type { Level } from '@/domain/permissions';
-import { PageHeader } from '@/components/ui/misc';
+import { Badge, PageHeader } from '@/components/ui/misc';
+import { inCompany } from '@/server/services/users';
 import { ActionButton } from '@/components/ui/action';
 import { UserForm } from '@/components/settings/user-form';
 import { dateTime } from '@/lib/format';
-import { revokeSessionsAction, saveUserAction } from '../actions';
+import { resetTotpAction, revokeSessionsAction, saveUserAction } from '../actions';
 
 export const metadata = { title: 'Korisnik' };
 
@@ -19,9 +20,13 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
   const u = isNew
     ? null
     : await db.user.findFirst({
-        where: { id, companyId: me.companyId, role: { notIn: ['DISTRIBUTOR', 'CLIENT'] } },
-        select: { id: true, name: true, email: true, role: true, active: true, oib: true, permissions: true, lastLoginAt: true, createdAt: true },
+        where: { id, ...inCompany(me.companyId), role: { notIn: ['DISTRIBUTOR', 'CLIENT'] } },
+        select: {
+          id: true, name: true, email: true, role: true, active: true, oib: true, permissions: true, lastLoginAt: true, createdAt: true,
+          canDanger: true, requireApproval: true, totpEnabled: true,
+        },
       });
+  const company = await db.company.findUniqueOrThrow({ where: { id: me.companyId }, select: { statusChangeNeedsApproval: true } });
   if (!isNew && !u) notFound();
   return (
     <>
@@ -35,6 +40,19 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
         subtitle={u ? `Otvoren ${dateTime(u.createdAt)} · zadnja prijava ${u.lastLoginAt ? dateTime(u.lastLoginAt) : 'nikad'}` : undefined}
         actions={
           u && u.id !== me.id ? (
+            <>
+            {u.totpEnabled && <Badge tone="ok">2FA uključena</Badge>}
+            {u.totpEnabled && me.role === 'ADMIN' && (
+              <ActionButton
+                action={resetTotpAction}
+                input={{ id: u.id }}
+                icon={<ShieldOff className="size-4" />}
+                confirm={`Poništiti prijavu u dva koraka za ${u.name}? Korisnik će se prijavljivati samo lozinkom (i odjavljuje se sa svih uređaja) dok je ponovno ne uključi.`}
+                confirmLabel="Poništi 2FA"
+              >
+                Poništi 2FA
+              </ActionButton>
+            )}
             <ActionButton
               action={revokeSessionsAction}
               input={{ id: u.id }}
@@ -44,16 +62,22 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
             >
               Odjavi sa svih uređaja
             </ActionButton>
+            </>
           ) : null
         }
       />
       <UserForm
         isSelf={u?.id === me.id}
+        actorIsAdmin={me.role === 'ADMIN'}
+        companyApproval={company.statusChangeNeedsApproval}
         save={saveUserAction}
         value={
           u
-            ? { id: u.id, name: u.name, email: u.email, role: u.role, active: u.active, oib: u.oib ?? '', permissions: (u.permissions ?? {}) as Record<string, Level> }
-            : { name: '', email: '', role: 'SALES', active: true, oib: '', permissions: {} }
+            ? {
+                id: u.id, name: u.name, email: u.email, role: u.role, active: u.active, oib: u.oib ?? '', permissions: (u.permissions ?? {}) as Record<string, Level>,
+                canDanger: u.canDanger, requireApproval: u.requireApproval,
+              }
+            : { name: '', email: '', role: 'SALES', active: true, oib: '', permissions: {}, canDanger: false, requireApproval: null }
         }
       />
     </>

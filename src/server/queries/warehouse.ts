@@ -5,6 +5,8 @@ import { toDevice, toTerms } from '../services/rentals';
 import { planSummary, returnReason } from '@/domain/billing';
 import { num } from '@/domain/money';
 import { today } from '@/domain/dates';
+import { inOrAll, parseMulti, parseSort, sortOrderBy } from '@/lib/list-params';
+import { ITEM_SORTS, type ItemSort } from '@/domain/warehouse-list';
 
 type Params = Record<string, string | string[] | undefined>;
 
@@ -12,32 +14,39 @@ const STATE_KINDS: StatusKind[] = ['IN_STOCK', 'RESERVED', 'SOLD', 'RENTED', 'SE
 
 export interface ItemFilters {
   q: string | null;
-  statusId: string | null;
+  statusIds: string[];
   state: StatusKind | null;
-  modelId: string | null;
-  categoryId: string | null;
-  warehouseId: string | null;
+  modelIds: string[];
+  categoryIds: string[];
+  warehouseIds: string[];
   supplierId: string | null;
   partnerId: string | null;
-  year: number | null;
+  years: number[];
+  cpu: string[];
+  screen: string[];
+  os: string[];
+  sort: { sort: ItemSort; dir: 'asc' | 'desc' } | null;
 }
 
 const str = (v: string | string[] | undefined) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 
-/** Filtri popisa uređaja iz URL-a. */
+/** Filtri popisa uređaja iz URL-a (više vrijednosti odvojeno zarezom). */
 export function parseItemFilters(p: Params): ItemFilters {
   const state = str(p.state);
-  const year = Number(str(p.year));
   return {
     q: str(p.q),
-    statusId: str(p.status),
+    statusIds: parseMulti(p, 'status'),
     state: state && (STATE_KINDS as string[]).includes(state) ? (state as StatusKind) : null,
-    modelId: str(p.model),
-    categoryId: str(p.category),
-    warehouseId: str(p.warehouse),
+    modelIds: parseMulti(p, 'model'),
+    categoryIds: parseMulti(p, 'category'),
+    warehouseIds: parseMulti(p, 'warehouse'),
     supplierId: str(p.supplier),
     partnerId: str(p.partner),
-    year: Number.isInteger(year) && year > 1900 && year < 3000 ? year : null,
+    years: parseMulti(p, 'year').map(Number).filter((y) => Number.isInteger(y) && y > 1900 && y < 3000),
+    cpu: parseMulti(p, 'cpu'),
+    screen: parseMulti(p, 'screen'),
+    os: parseMulti(p, 'os'),
+    sort: parseSort(p, ITEM_SORTS),
   };
 }
 
@@ -45,16 +54,19 @@ export function parseItemFilters(p: Params): ItemFilters {
 export interface SearchIds {
   modelIds: string[];
   partnerIds: string[];
+  /** Modeli odabranih kategorija (kategorija uređaja je vlastita ili modelova). */
+  categoryModelIds?: string[];
 }
 
-export async function resolveSearch(companyId: string, q: string | null): Promise<SearchIds | undefined> {
-  if (!q) return undefined;
-  const contains = { contains: q, mode: 'insensitive' as const };
-  const [models, partners] = await Promise.all([
-    db.deviceModel.findMany({ where: { companyId, OR: [{ name: contains }, { brand: contains }] }, select: { id: true }, take: 500 }),
-    db.partner.findMany({ where: { companyId, name: contains }, select: { id: true }, take: 500 }),
+export async function resolveSearch(companyId: string, q: string | null, categoryIds: string[] = []): Promise<SearchIds | undefined> {
+  if (!q && !categoryIds.length) return undefined;
+  const contains = q ? { contains: q, mode: 'insensitive' as const } : null;
+  const [models, partners, catModels] = await Promise.all([
+    contains ? db.deviceModel.findMany({ where: { companyId, OR: [{ name: contains }, { brand: contains }] }, select: { id: true }, take: 500 }) : [],
+    contains ? db.partner.findMany({ where: { companyId, name: contains }, select: { id: true }, take: 500 }) : [],
+    categoryIds.length ? db.deviceModel.findMany({ where: { companyId, categoryId: { in: categoryIds } }, select: { id: true } }) : [],
   ]);
-  return { modelIds: models.map((m) => m.id), partnerIds: partners.map((p) => p.id) };
+  return { modelIds: models.map((m) => m.id), partnerIds: partners.map((p) => p.id), categoryModelIds: catModels.map((m) => m.id) };
 }
 
 /**
@@ -71,18 +83,42 @@ export function itemWhere(companyId: string, f: ItemFilters, opts: { ignoreState
     if (opts.search?.partnerIds.length) or.push({ partnerId: { in: opts.search.partnerIds } });
     and.push({ OR: or });
   }
-  if (f.categoryId) and.push({ model: { categoryId: f.categoryId } });
-  if (f.year) and.push({ importDate: { gte: new Date(Date.UTC(f.year, 0, 1)), lt: new Date(Date.UTC(f.year + 1, 0, 1)) } });
+  if (f.categoryIds.length) {
+    // kategorija po komadu ima prednost; bez nje vrijedi kategorija modela
+    const or: Prisma.ItemWhereInput[] = [{ categoryId: { in: f.categoryIds } }];
+    const mids = opts.search?.categoryModelIds ?? [];
+    if (mids.length) or.push({ categoryId: null, modelId: { in: mids } });
+    and.push({ OR: or });
+  }
+  if (f.years.length) {
+    and.push({ OR: f.years.map((y) => ({ importDate: { gte: new Date(Date.UTC(y, 0, 1)), lt: new Date(Date.UTC(y + 1, 0, 1)) } })) });
+  }
   return {
     companyId,
-    ...(f.statusId ? { statusId: f.statusId } : {}),
+    ...(f.statusIds.length ? { statusId: inOrAll(f.statusIds) } : {}),
     ...(f.state && !opts.ignoreState ? { state: f.state } : {}),
-    ...(f.modelId ? { modelId: f.modelId } : {}),
-    ...(f.warehouseId ? { warehouseId: f.warehouseId } : {}),
+    ...(f.modelIds.length ? { modelId: inOrAll(f.modelIds) } : {}),
+    ...(f.warehouseIds.length ? { warehouseId: inOrAll(f.warehouseIds) } : {}),
     ...(f.supplierId ? { supplierId: f.supplierId } : {}),
     ...(f.partnerId ? { partnerId: f.partnerId } : {}),
+    ...(f.cpu.length ? { cpu: inOrAll(f.cpu) } : {}),
+    ...(f.screen.length ? { screen: inOrAll(f.screen) } : {}),
+    ...(f.os.length ? { os: inOrAll(f.os) } : {}),
     ...(and.length ? { AND: and } : {}),
   };
+}
+
+/** Redoslijed popisa: zadano najnoviji upis; sortiranje samo po stupcima uređaja (ITEM_SORTS). */
+function itemOrder(f: ItemFilters): Prisma.ItemOrderByWithRelationInput[] {
+  if (!f.sort) return [{ createdAt: 'desc' }, { id: 'desc' }];
+  const last = (dir: 'asc' | 'desc') => ({ sort: dir, nulls: 'last' as const });
+  const map: Record<ItemSort, (d: 'asc' | 'desc') => Prisma.ItemOrderByWithRelationInput> = {
+    serijski: (d) => ({ serial: d }),
+    uvoz: (d) => ({ importDate: last(d) }),
+    izdano: (d) => ({ issueDate: last(d) }),
+    nabavna: (d) => ({ cost: d }),
+  };
+  return sortOrderBy(f.sort, map, { id: 'desc' }) ?? [];
 }
 
 const listSelect = {
@@ -91,22 +127,33 @@ const listSelect = {
   dupNote: true,
   state: true,
   cost: true,
+  salePrice: true,
+  rentPrice: true,
+  marginPct: true,
+  cpu: true,
+  screen: true,
+  os: true,
   importDate: true,
   issueDate: true,
+  warrantyStart: true,
+  warrantyMonths: true,
   note: true,
-  model: { select: { brand: true, name: true, category: { select: { name: true } } } },
+  model: { select: { brand: true, name: true, salePrice: true, rentPrice: true, marginPct: true, warrantyMonths: true, category: { select: { name: true } } } },
+  category: { select: { name: true } },
   status: { select: { name: true, color: true } },
   warehouse: { select: { name: true } },
   partner: { select: { id: true, name: true } },
-  contractItem: { select: { contractId: true } },
+  invoice: { select: { id: true, number: true, date: true } },
+  contractItem: { select: { contractId: true, contract: { select: { number: true } } } },
 } satisfies Prisma.ItemSelect;
 
 /** Stranica popisa, ukupan broj, vrijednost filtriranog skupa i brojevi po stanju. */
 export async function listItems(companyId: string, f: ItemFilters, page: { skip: number; take: number }) {
-  const search = await resolveSearch(companyId, f.q);
+  const search = await resolveSearch(companyId, f.q, f.categoryIds);
   const where = itemWhere(companyId, f, { search });
+  const orderBy = itemOrder(f);
   const [rows, agg, byState] = await Promise.all([
-    db.item.findMany({ where, select: listSelect, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: page.skip, take: page.take }),
+    db.item.findMany({ where, select: listSelect, orderBy, skip: page.skip, take: page.take }),
     db.item.aggregate({ where, _count: { _all: true }, _sum: { cost: true } }),
     db.item.groupBy({ by: ['state'], where: itemWhere(companyId, f, { ignoreState: true, search }), _count: { _all: true } }),
   ]);
@@ -114,27 +161,39 @@ export async function listItems(companyId: string, f: ItemFilters, page: { skip:
   return { rows, total: agg._count._all, costSum: num(agg._sum.cost), counts };
 }
 
-/** Svi filtrirani uređaji za CSV (s gornjom granicom radi zaštite). */
+export type ItemListRow = Awaited<ReturnType<typeof listItems>>['rows'][number];
+
+/** Svi filtrirani uređaji za izvoz (s gornjom granicom radi zaštite). */
 export async function exportItems(companyId: string, f: ItemFilters) {
   return db.item.findMany({
-    where: itemWhere(companyId, f, { search: await resolveSearch(companyId, f.q) }),
-    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    where: itemWhere(companyId, f, { search: await resolveSearch(companyId, f.q, f.categoryIds) }),
+    orderBy: itemOrder(f),
     take: 100_000,
     select: {
-      serial: true,
-      dupNote: true,
-      cost: true,
-      rentPrice: true,
-      importDate: true,
-      issueDate: true,
-      note: true,
-      model: { select: { brand: true, name: true, category: { select: { name: true } } } },
-      status: { select: { name: true } },
-      warehouse: { select: { name: true } },
+      ...listSelect,
       supplier: { select: { name: true } },
-      partner: { select: { name: true } },
     },
   });
+}
+
+/**
+ * Vrijednosti za filtre (godine uvoza, procesor, ekran, OS) jednim prolazom
+ * kroz uređaje firme — zamjenjuje zaseban upit godina, pa popis nije sporiji.
+ */
+export async function itemFacets(companyId: string): Promise<{ years: number[]; cpu: string[]; screen: string[]; os: string[] }> {
+  const [r] = await db.$queryRaw<{ years: number[] | null; cpu: string[] | null; screen: string[] | null; os: string[] | null }[]>`
+    SELECT array_agg(DISTINCT EXTRACT(YEAR FROM "importDate")::int) FILTER (WHERE "importDate" IS NOT NULL) AS years,
+           (array_agg(DISTINCT "cpu") FILTER (WHERE "cpu" IS NOT NULL AND "cpu" <> ''))[1:200] AS cpu,
+           (array_agg(DISTINCT "screen") FILTER (WHERE "screen" IS NOT NULL AND "screen" <> ''))[1:200] AS screen,
+           (array_agg(DISTINCT "os") FILTER (WHERE "os" IS NOT NULL AND "os" <> ''))[1:200] AS os
+    FROM "Item" WHERE "companyId" = ${companyId}`;
+  const sortHr = (a: string[] | null | undefined) => [...(a ?? [])].sort((x, y) => x.localeCompare(y, 'hr'));
+  return {
+    years: [...(r?.years ?? [])].map(Number).sort((a, b) => b - a),
+    cpu: sortHr(r?.cpu),
+    screen: sortHr(r?.screen),
+    os: sortHr(r?.os),
+  };
 }
 
 /** Godine uvoza za filtar. */
@@ -150,7 +209,13 @@ export async function getItemCard(companyId: string, id: string) {
   const item = await db.item.findFirst({
     where: { id, companyId },
     include: {
-      model: { select: { id: true, brand: true, name: true, warrantyMonths: true, category: { select: { name: true } } } },
+      model: {
+        select: {
+          id: true, brand: true, name: true, warrantyMonths: true, salePrice: true, rentPrice: true, marginPct: true, cpu: true, screen: true, os: true,
+          category: { select: { id: true, name: true } },
+        },
+      },
+      category: { select: { id: true, name: true } },
       status: { select: { id: true, name: true, color: true, kind: true } },
       warehouse: { select: { id: true, name: true } },
       supplier: { select: { id: true, name: true } },
@@ -181,7 +246,7 @@ export async function getItemCard(companyId: string, id: string) {
     }),
     item.outPartnerId ? db.partner.findFirst({ where: { id: item.outPartnerId, companyId }, select: { id: true, name: true } }) : null,
     item.outById ? db.user.findFirst({ where: { id: item.outById, companyId }, select: { name: true } }) : null,
-    db.company.findUniqueOrThrow({ where: { id: companyId }, select: { defaultWarrantyMonths: true } }),
+    db.company.findUniqueOrThrow({ where: { id: companyId }, select: { defaultWarrantyMonths: true, defaultMarginPct: true } }),
   ]);
 
   const ci = item.contractItem;
@@ -209,6 +274,7 @@ export async function getItemCard(companyId: string, id: string) {
     outPartner,
     outByName: outBy?.name ?? null,
     defaultWarrantyMonths: company.defaultWarrantyMonths,
+    defaultMarginPct: num(company.defaultMarginPct),
   };
 }
 

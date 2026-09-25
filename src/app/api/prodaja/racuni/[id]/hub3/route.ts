@@ -22,7 +22,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       number: true,
       openAmount: true,
       paymentRef: true,
-      company: { select: { name: true, address: true, zip: true, city: true, iban: true, currency: true } },
+      company: { select: { name: true, address: true, zip: true, city: true, iban: true, currency: true, paymentModel: true } },
       partner: { select: { name: true, address: true, zip: true, city: true } },
     },
   });
@@ -33,7 +33,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     payer: { name: inv.partner.name, address: inv.partner.address ?? '', zip: inv.partner.zip ?? '', city: inv.partner.city ?? '' },
     payee: { name: inv.company.name, address: inv.company.address ?? '', zip: inv.company.zip ?? '', city: inv.company.city ?? '' },
     iban: inv.company.iban,
-    model: 'HR00',
+    model: inv.company.paymentModel || 'HR00',
     reference: inv.paymentRef ?? '',
     purpose: 'OTHR',
     description: `Racun ${inv.number ?? ''}`,

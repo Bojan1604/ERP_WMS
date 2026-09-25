@@ -8,6 +8,8 @@ import { warrantyEnd } from '@/domain/pricing';
 import { num } from '@/domain/money';
 import { PageHeader } from '@/components/ui/misc';
 import { PrintButton } from '@/components/ui/print-button';
+import { PdfButton } from '@/components/ui/pdf-button';
+import { can } from '@/domain/permissions';
 import { DocumentShell, DocTable } from '@/components/doc/document';
 import { decimal } from '@/lib/format';
 
@@ -34,7 +36,12 @@ export default async function DeliveryNotePage({ params }: { params: Promise<{ i
             ← Račun
           </Link>
         }
-        actions={<PrintButton />}
+        actions={
+          <>
+            <PrintButton />
+            <PdfButton kind="delivery" id={inv.id} send={inv.status === 'ISSUED' && can(user.perms, 'sales', 'edit')} />
+          </>
+        }
       />
       </div>
       <DocumentShell

@@ -1,14 +1,15 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import Link from 'next/link';
-import { FileSignature, PackageCheck, Receipt, Undo2 } from 'lucide-react';
+import { CalendarClock, FilePlus2, FileSignature, PackageCheck, Receipt, Undo2 } from 'lucide-react';
+import { Combobox, type ComboOption } from '@/components/ui/combobox';
 import { Button, buttonClass } from '@/components/ui/button';
 import { ActionButton, useAction, FormError } from '@/components/ui/action';
 import { Dialog } from '@/components/ui/dialog';
 import { Field, Select, type Option } from '@/components/ui/field';
 import { SelectionBar } from '@/components/ui/selection';
-import { cancelOutAction, receiveReturnedAction } from '@/app/(app)/skladiste/izlaz/actions';
+import { activeContractsAction, addOutToContractAction, cancelOutAction, receiveReturnedAction } from '@/app/(app)/skladiste/izlaz/actions';
 import { announceReturnAction } from '@/app/(app)/skladiste/actions';
 
 const barBtn = 'border-0 bg-white/10 text-white hover:bg-white/20';
@@ -27,10 +28,17 @@ export function ReservedBar({ partnerId, canOps, canSell, canRent }: { partnerId
                 Izdaj račun
               </Link>
             )}
+            {canSell && (
+              <Link prefetch={false} href={`/prodaja/racuni/novi?${qs}&vrsta=najam`} className={buttonClass('secondary', 'sm', barBtn)} title="Račun za najam s označenim uređajima">
+                <CalendarClock className="size-3.5" />
+                Račun za najam
+              </Link>
+            )}
+            {canRent && <ToContractButton ids={ids} partnerId={partnerId} onDone={clear} />}
             {canRent && (
               <Link prefetch={false} href={`/najam/ugovori/novi?${qs}`} className={buttonClass('secondary', 'sm', barBtn)}>
-                <FileSignature className="size-3.5" />
-                Dodaj na ugovor
+                <FilePlus2 className="size-3.5" />
+                Novi ugovor
               </Link>
             )}
             {canOps && (
@@ -51,6 +59,60 @@ export function ReservedBar({ partnerId, canOps, canSell, canRent }: { partnerId
         );
       }}
     </SelectionBar>
+  );
+}
+
+/** „Na postojeći ugovor": odabir aktivnog ugovora (zadano ugovori kupca izlaza) i dodavanje uređaja. */
+function ToContractButton({ ids, partnerId, onDone }: { ids: string[]; partnerId: string | null; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [contractId, setContractId] = useState<string | null>(null);
+  const { run, pending, error } = useAction(addOutToContractAction);
+  const onSearch = useCallback(async (q: string): Promise<ComboOption[]> => {
+    const r = await activeContractsAction({ q, partnerId });
+    return r.ok ? (r.data ?? []) : [];
+  }, [partnerId]);
+  return (
+    <>
+      <Button size="sm" className={barBtn} icon={<FileSignature className="size-3.5" />} onClick={() => setOpen(true)}>
+        Na postojeći ugovor
+      </Button>
+      <Dialog
+        open={open}
+        onClose={() => setOpen(false)}
+        title={`Dodati ${ids.length} uređaja na ugovor`}
+        size="sm"
+        footer={
+          <>
+            <Button onClick={() => setOpen(false)}>Odustani</Button>
+            <Button
+              variant="primary"
+              loading={pending}
+              disabled={!contractId}
+              onClick={async () => {
+                const r = await run({ contractId, itemIds: ids });
+                if (r.ok) {
+                  setOpen(false);
+                  onDone();
+                }
+              }}
+            >
+              Dodaj na ugovor
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-3 text-base text-fg-2">
+          <p>
+            Uređaji ulaze na odabrani aktivni ugovor s predloženom cijenom najma (cjenik kupca, cijena uređaja ili modela), dobivaju status „U najmu" i klijenta s
+            ugovora. Cijenu i plan naplate po potrebi dotjerajte na ugovoru.
+          </p>
+          <Field label="Aktivni ugovor" required hint={partnerId ? 'Prikazani su ugovori kupca izlaza — upišite broj ili naziv za druge.' : 'Upišite broj ugovora ili naziv klijenta.'}>
+            <Combobox options={[]} value={contractId} onChange={setContractId} onSearch={onSearch} placeholder="Odaberite ugovor…" />
+          </Field>
+          <FormError error={error} />
+        </div>
+      </Dialog>
+    </>
   );
 }
 

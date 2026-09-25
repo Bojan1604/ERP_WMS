@@ -33,6 +33,19 @@ export interface UblParty {
   zip?: string | null;
   city?: string | null;
   country?: string | null;
+  /** eRačun adresa „shema:id" (npr. 9934:12345678901 ili 0088:…); prazno = OIB u shemi 9934 (domaći). */
+  endpointId?: string | null;
+  /** Poslovna jedinica kupca: šifra (HR99) i naziv. */
+  branchCode?: string | null;
+  branchName?: string | null;
+}
+
+/** eRačun adresa „shema:id" → shema (EAS) i id; bez sheme = 9934 (OIB). */
+export function parseEndpoint(v: string | null | undefined): { scheme: string; id: string } | null {
+  const s = String(v ?? '').trim();
+  if (!s) return null;
+  const m = s.match(/^(\d{4}):(.+)$/);
+  return m ? { scheme: m[1], id: m[2].trim() } : { scheme: EAS_HR, id: s };
 }
 
 export interface UblLine {
@@ -195,6 +208,10 @@ function periodBounds(period: string | null | undefined) {
 
 function partyXml(p: {
   endpointId?: string | null;
+  endpointScheme?: string | null;
+  /** PartyIdentification (poslovna jedinica) i PartyName. */
+  branchId?: string | null;
+  branchName?: string | null;
   name: string;
   street?: string | null;
   zip?: string | null;
@@ -204,11 +221,14 @@ function partyXml(p: {
   taxScheme?: string;
   legalId?: string | null;
 }) {
-  const ep = p.endpointId ? `\n      <cbc:EndpointID schemeID="${EAS_HR}">${esc(p.endpointId)}</cbc:EndpointID>` : '';
+  const ep = p.endpointId ? `\n      <cbc:EndpointID schemeID="${esc(p.endpointScheme || EAS_HR)}">${esc(p.endpointId)}</cbc:EndpointID>` : '';
+  const branch = p.branchId
+    ? `\n      <cac:PartyIdentification><cbc:ID>${esc(p.branchId)}</cbc:ID></cac:PartyIdentification>${p.branchName ? `\n      <cac:PartyName><cbc:Name>${esc(p.branchName)}</cbc:Name></cac:PartyName>` : ''}`
+    : '';
   const tax = p.taxId
     ? `\n      <cac:PartyTaxScheme><cbc:CompanyID>${esc(p.taxId)}</cbc:CompanyID><cac:TaxScheme><cbc:ID>${esc(p.taxScheme ?? 'VAT')}</cbc:ID></cac:TaxScheme></cac:PartyTaxScheme>`
     : '';
-  return `<cac:Party>${ep}
+  return `<cac:Party>${ep}${branch}
       <cac:PostalAddress>
         <cbc:StreetName>${esc(p.street)}</cbc:StreetName>
         <cbc:CityName>${esc(p.city)}</cbc:CityName>
@@ -322,8 +342,14 @@ export function buildUbl(input: UblInput): { xml: string; root: 'Invoice' | 'Cre
   const buyerOib = digits(input.buyer.oib);
   const buyerDomestic = buyerCountry === 'HR';
   const buyerVat = buyerDomestic ? input.buyer.vatId || (buyerOib ? `HR${buyerOib}` : '') : input.buyer.vatId || buyerOib;
+  // eRačun adresa kupca: upisana na partneru, inače OIB (samo domaći); poslovna jedinica 9934:OIB::HR99:šifra
+  const buyerEp = parseEndpoint(input.buyer.endpointId) ?? (buyerDomestic && buyerOib ? { scheme: EAS_HR, id: buyerOib } : null);
+  const branchCode = String(input.buyer.branchCode ?? '').trim();
   const customer = partyXml({
-    endpointId: buyerDomestic ? buyerOib : null,
+    endpointId: buyerEp?.id ?? null,
+    endpointScheme: buyerEp?.scheme ?? null,
+    branchId: branchCode && buyerDomestic && buyerOib ? `${EAS_HR}:${buyerOib}::HR99:${branchCode}` : null,
+    branchName: branchCode ? input.buyer.branchName || null : null,
     name: input.buyer.name,
     street: input.buyer.address,
     zip: input.buyer.zip,

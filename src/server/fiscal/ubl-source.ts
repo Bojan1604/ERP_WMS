@@ -6,6 +6,7 @@ import { UBL_PAYMENT_MEANS } from '@/domain/fiscal';
 import { toISO } from '@/domain/dates';
 import { num } from '@/domain/money';
 import { readMeta } from './issue';
+import { defaultKpd, effectiveLineType } from '@/domain/sales-lines';
 
 const timeOf = (d: Date | null) =>
   d ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Zagreb', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(d) : undefined;
@@ -27,8 +28,10 @@ export async function invoiceUbl(companyId: string, id: string) {
           qty: true,
           unitPrice: true,
           discountPct: true,
+          kind: true,
+          lineType: true,
           item: { select: { serial: true } },
-          model: { select: { code: true, kpd: true } },
+          model: { select: { code: true, kpd: true, kpdRent: true } },
           service: { select: { kpd: true } },
         },
       },
@@ -60,6 +63,9 @@ export async function invoiceUbl(companyId: string, id: string) {
       zip: inv.partner.zip,
       city: inv.partner.city,
       country: inv.partner.country,
+      endpointId: inv.partner.endpointId,
+      branchCode: inv.partner.branchCode,
+      branchName: inv.partner.branchName,
     },
     vatRate: num(inv.vatRate),
     taxCategory: inv.taxCategory,
@@ -68,9 +74,10 @@ export async function invoiceUbl(companyId: string, id: string) {
     discountAmount: num(inv.discountAmount),
     charges: Array.isArray(inv.charges) ? (inv.charges as unknown as ChargeInput[]) : [],
     advanceAmount: num(inv.advanceAmount),
-    paymentModel: 'HR00',
+    // model poziva na broj i način plaćanja iz postavki firme (HR00 / 30 ili 58 za transakcijski račun)
+    paymentModel: c.paymentModel || 'HR00',
     paymentReference: inv.paymentRef,
-    paymentMeansCode: UBL_PAYMENT_MEANS[inv.paymentMethod],
+    paymentMeansCode: inv.paymentMethod === 'TRANSFER' ? c.eInvoicePaymentMeans || UBL_PAYMENT_MEANS.TRANSFER : UBL_PAYMENT_MEANS[inv.paymentMethod],
     billingReference: inv.refInvoice?.number ? { number: inv.refInvoice.number, date: toISO(inv.refInvoice.date), kind: inv.refInvoice.kind as UblKind } : null,
     // uređaji istog modela i cijene idu kao jedna stavka s količinom i popisom serijskih
     lines: groupLines(
@@ -78,7 +85,17 @@ export async function invoiceUbl(companyId: string, id: string) {
         description: l.description,
         serial: l.item?.serial ?? null,
         code: l.model?.code ?? null,
-        kpd: l.kpd ?? l.model?.kpd ?? l.service?.kpd ?? null,
+        // KPD sa stavke; stariji zapisi bez njega — model/usluga, pa zadana šifra firme po vrsti stavke
+        kpd:
+          l.kpd ??
+          defaultKpd({
+            lineType: effectiveLineType(l.lineType, inv.type),
+            kind: l.kind,
+            serviceKpd: l.service?.kpd,
+            modelKpd: l.model?.kpd,
+            modelKpdRent: l.model?.kpdRent,
+            company: c,
+          }),
         unit: l.unit,
         qty: num(l.qty),
         unitPrice: num(l.unitPrice),

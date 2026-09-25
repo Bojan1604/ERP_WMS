@@ -4,15 +4,26 @@ import { useState, type ReactNode } from 'react';
 import { Download, ExternalLink, FileText, Printer } from 'lucide-react';
 import { Button, buttonClass, type ButtonSize, type ButtonVariant } from './button';
 import { Dialog } from './dialog';
-import { PDF_KIND_LABEL, type PdfKind } from '@/domain/documents';
+import { PDF_KIND_LABEL, type MailKind, type PdfKind } from '@/domain/documents';
+import { SendEmailButton } from './send-email-button';
 
 /** Poveznica na PDF dokumenta (GET /api/pdf/[kind]/[id]); `download` = preuzimanje. */
 export const pdfUrl = (kind: PdfKind, id: string, download = false) => `/api/pdf/${kind}/${encodeURIComponent(id)}${download ? '?preuzmi' : ''}`;
 
+/** Vrsta poruke e-pošte za vrstu PDF-a (gumb „Pošalji" u pregledu). */
+const MAIL_FOR_PDF: Partial<Record<PdfKind, MailKind>> = {
+  invoice: 'invoice',
+  quote: 'quote',
+  proforma: 'proforma',
+  delivery: 'delivery',
+  service: 'service',
+  'service-delivery': 'service',
+};
+
 /**
  * Gumb „PDF": otvara pregled PDF-a dokumenta u dijalogu (iframe) s gumbima
- * Preuzmi / Ispis / Otvori. `extra` dodaje radnje u podnožje (npr. SendEmailButton).
- * Područje A ga dorađuje (A2); potpis ostaje.
+ * Spremi PDF / Ispis / Otvori i — uz `send` — „Pošalji" (e-pošta s PDF-om u
+ * privitku). `extra` dodaje druge radnje u podnožje.
  */
 export function PdfButton({
   kind,
@@ -22,6 +33,7 @@ export function PdfButton({
   variant = 'secondary',
   size = 'md',
   extra,
+  send,
 }: {
   kind: PdfKind;
   id: string;
@@ -31,6 +43,8 @@ export function PdfButton({
   variant?: ButtonVariant;
   size?: ButtonSize;
   extra?: ReactNode;
+  /** Prikaži „Pošalji" (korisnik mora imati pravo slanja te vrste). */
+  send?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const src = pdfUrl(kind, id);
@@ -55,6 +69,7 @@ export function PdfButton({
         title={title ?? PDF_KIND_LABEL[kind]}
         footer={
           <div className="flex w-full flex-wrap items-center gap-2">
+            {send && MAIL_FOR_PDF[kind] && <SendEmailButton kind={MAIL_FOR_PDF[kind]!} id={id} size="sm" />}
             {extra}
             <span className="flex-1" />
             <a href={pdfUrl(kind, id, true)} className={buttonClass('secondary', 'sm')}>

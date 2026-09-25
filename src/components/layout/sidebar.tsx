@@ -15,7 +15,7 @@ function Icon({ icon: I, active }: { icon: LucideIcon; active: boolean }) {
   return <I className={cn('size-4 shrink-0', active ? 'text-white' : 'text-nav-fg-2')} />;
 }
 
-export function Sidebar({ perms, isAdmin, company, badges }: { perms: PermissionMap; isAdmin: boolean; company: string; badges: Record<string, number> }) {
+export function Sidebar({ perms, isAdmin, canDanger = isAdmin, company, badges, alerts = [] }: { perms: PermissionMap; isAdmin: boolean; canDanger?: boolean; company: string; badges: Record<string, number>; alerts?: string[] }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   // donja traka na mobitelu otvara isti izbornik
@@ -24,7 +24,7 @@ export function Sidebar({ perms, isAdmin, company, badges }: { perms: Permission
     window.addEventListener('open-nav', onOpen);
     return () => window.removeEventListener('open-nav', onOpen);
   }, []);
-  const groups = NAV.map((g) => ({ ...g, items: g.items.filter((i) => can(perms, i.module, i.level ?? 'view') && (!i.adminOnly || isAdmin)) })).filter((g) => g.items.length);
+  const groups = NAV.map((g) => ({ ...g, items: g.items.filter((i) => can(perms, i.module, i.level ?? 'view') && (!i.adminOnly || isAdmin) && (!i.dangerOnly || isAdmin || canDanger)) })).filter((g) => g.items.length);
 
   // najdulja poklapajuća putanja je aktivna (/skladiste ne smije biti aktivan na /skladiste/izlaz)
   const all = groups.flatMap((g) => g.items.map((i) => i.href));
@@ -51,7 +51,7 @@ export function Sidebar({ perms, isAdmin, company, badges }: { perms: Permission
                     <Icon icon={i.icon} active={on} />
                     <span className="flex-1 truncate">{i.label}</span>
                     {!!badges[i.href] && (
-                      <span className={cn('rounded-full px-1.5 text-xs tnum', on ? 'bg-white/25 text-white' : 'bg-warn text-nav')}>{badges[i.href]}</span>
+                      <span className={cn('rounded-full px-1.5 text-xs tnum', on ? 'bg-white/25 text-white' : alerts.includes(i.href) ? 'bg-bad-strong text-white' : 'bg-warn text-nav')}>{badges[i.href]}</span>
                     )}
                   </Link>
                 </li>

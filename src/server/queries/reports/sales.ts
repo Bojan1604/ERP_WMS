@@ -2,9 +2,10 @@ import 'server-only';
 import { Prisma } from '@prisma/client';
 import { db } from '../../db';
 import { expensesByMonth, revenueByMonth } from './costs';
-import { margin, monthChart, monthRows, n, opt, revenueSql, saleLineSql, type ReportDef, type Row } from './types';
+import { inIds, itemFilterSql, margin, monthChart, monthRows, n, periodSql, r2, revenueSql, saleLineSql, typeSql, type ReportDef, type ReportFilters, type Row } from './types';
 
-const r2 = (v: number) => Math.round(v * 100) / 100;
+/** Kategorija stavke: po komadu (uređaj), inače modela. Traži aliase it (LEFT JOIN Item) i m. */
+const lineCatSql = (f: ReportFilters) => (f.categoryIds.length ? Prisma.sql`AND COALESCE(it."categoryId", m."categoryId") IN (${Prisma.join(f.categoryIds)})` : Prisma.empty);
 
 export const salesReports: ReportDef[] = [
   {
@@ -12,13 +13,13 @@ export const salesReports: ReportDef[] = [
     title: 'Prihod po mjesecima',
     area: 'Prodaja',
     description: 'Neto prihod iz izdanih računa (umanjen za storna i odobrenja), podijeljen na prodaju, najam i usluge.',
-    filters: ['year', 'partner'],
+    filters: ['year', 'range', 'partner', 'type'],
     run: async (companyId, f) => {
       const rows = await db.$queryRaw<Array<{ m: number; type: string; net: Prisma.Decimal; cnt: number }>>`
         SELECT EXTRACT(MONTH FROM i."date")::int AS m, i."type"::text AS type, SUM(i."netTotal") AS net,
                COUNT(*) FILTER (WHERE i."kind" = 'INVOICE')::int AS cnt
         FROM "Invoice" i JOIN "Partner" p ON p.id = i."partnerId"
-        WHERE ${revenueSql(companyId)} AND i."year" = ${f.year} ${opt(!!f.partnerId, Prisma.sql`AND i."partnerId" = ${f.partnerId}`)}
+        WHERE ${revenueSql(companyId)} ${periodSql('i."date"', f)} ${inIds('i."partnerId"', f.partnerIds)} ${typeSql('i."type"', f)}
         GROUP BY 1, 2`;
       const out = monthRows(f.year, (m) => {
         const of = (t: string) => n(rows.find((r) => r.m === m && r.type === t)?.net);
@@ -48,9 +49,11 @@ export const salesReports: ReportDef[] = [
     area: 'Prodaja',
     description: 'Prihod − nabavna vrijednost prodanog = bruto dobit; umanjena za troškove poslovanja daje profit.',
     filters: ['year'],
+    singleYear: true,
+    requiresCost: true,
     run: async (companyId, f) => {
       // nabava robe se ne oduzima dvaput: ulazi kroz nabavnu vrijednost prodanog
-      const [rev, exp] = await Promise.all([revenueByMonth(companyId, f.year), expensesByMonth(companyId, f.year, { excludePurchases: true })]);
+      const [rev, exp] = await Promise.all([revenueByMonth(companyId, f), expensesByMonth(companyId, f.displayYear, { excludePurchases: true })]);
       const rows = monthRows(f.year, (m) => {
         const r = rev.revenue[m - 1];
         const c = rev.cost[m - 1];
@@ -80,7 +83,7 @@ export const salesReports: ReportDef[] = [
     title: 'Top kupci',
     area: 'Prodaja',
     description: 'Kupci po neto prihodu u godini, s udjelom u ukupnom prihodu i otvorenim dugom.',
-    filters: ['year'],
+    filters: ['year', 'range', 'partner', 'type'],
     run: async (companyId, f) => {
       const rows = await db.$queryRaw<Array<{ id: string; name: string; city: string | null; net: Prisma.Decimal; sale: Prisma.Decimal; rent: Prisma.Decimal; cnt: number; share: number | null }>>`
         SELECT p.id, p.name, p.city, SUM(i."netTotal") AS net,
@@ -89,7 +92,7 @@ export const salesReports: ReportDef[] = [
                COUNT(*) FILTER (WHERE i."kind" = 'INVOICE')::int AS cnt,
                (SUM(i."netTotal") / NULLIF(SUM(SUM(i."netTotal")) OVER (), 0) * 100)::float8 AS share
         FROM "Invoice" i JOIN "Partner" p ON p.id = i."partnerId"
-        WHERE ${revenueSql(companyId)} AND i."year" = ${f.year}
+        WHERE ${revenueSql(companyId)} ${periodSql('i."date"', f)} ${inIds('i."partnerId"', f.partnerIds)} ${typeSql('i."type"', f)}
         GROUP BY p.id ORDER BY net DESC LIMIT 100`;
       const open = rows.length
         ? await db.invoice.groupBy({ by: ['partnerId'], where: { companyId, partnerId: { in: rows.map((r) => r.id) }, status: 'ISSUED', openAmount: { gt: 0 } }, _sum: { openAmount: true } })
@@ -130,7 +133,8 @@ export const salesReports: ReportDef[] = [
     title: 'Marža po modelu',
     area: 'Prodaja',
     description: 'Prodani uređaji po modelu: prihod iz stavki važećih računa prodaje, nabavna vrijednost i bruto marža.',
-    filters: ['year', 'category'],
+    filters: ['year', 'range', 'partner', 'category', 'model'],
+    requiresCost: true,
     run: async (companyId, f) => {
       const rows = await db.$queryRaw<Array<{ id: string; model: string; category: string | null; qty: number; revenue: Prisma.Decimal; cost: Prisma.Decimal }>>`
         SELECT m.id, concat_ws(' ', m.brand, m.name) AS model, c.name AS category,
@@ -139,9 +143,10 @@ export const salesReports: ReportDef[] = [
         JOIN "Invoice" i ON i.id = l."invoiceId"
         JOIN "Partner" p ON p.id = i."partnerId"
         JOIN "DeviceModel" m ON m.id = l."modelId"
+        LEFT JOIN "Item" it ON it.id = l."itemId"
         LEFT JOIN "Category" c ON c.id = m."categoryId"
-        WHERE ${saleLineSql(companyId)} AND l."kind" = 'DEVICE' AND i."year" = ${f.year}
-          ${opt(!!f.categoryId, Prisma.sql`AND m."categoryId" = ${f.categoryId}`)}
+        WHERE ${saleLineSql(companyId)} AND l."kind" = 'DEVICE' ${periodSql('i."date"', f)}
+          ${inIds('i."partnerId"', f.partnerIds)} ${inIds('m.id', f.modelIds)} ${lineCatSql(f)}
         GROUP BY m.id, c.name
         ORDER BY SUM(l."netAmount") - SUM(l."cost") DESC`;
       const out: Row[] = rows.map((r) => {
@@ -176,7 +181,7 @@ export const salesReports: ReportDef[] = [
     title: 'Prodaja po kategorijama',
     area: 'Prodaja',
     description: 'Stavke važećih računa prodaje po kategoriji modela, s maržom i udjelom u prodaji.',
-    filters: ['year'],
+    filters: ['year', 'range', 'partner', 'category', 'model'],
     run: async (companyId, f) => {
       const rows = await db.$queryRaw<Array<{ category: string; qty: Prisma.Decimal; revenue: Prisma.Decimal; cost: Prisma.Decimal }>>`
         SELECT COALESCE(c.name, CASE WHEN l."modelId" IS NULL THEN 'Usluge i ostale stavke' ELSE 'Bez kategorije' END) AS category,
@@ -184,9 +189,10 @@ export const salesReports: ReportDef[] = [
         FROM "InvoiceLine" l
         JOIN "Invoice" i ON i.id = l."invoiceId"
         JOIN "Partner" p ON p.id = i."partnerId"
+        LEFT JOIN "Item" it ON it.id = l."itemId"
         LEFT JOIN "DeviceModel" m ON m.id = l."modelId"
-        LEFT JOIN "Category" c ON c.id = m."categoryId"
-        WHERE ${saleLineSql(companyId)} AND i."year" = ${f.year}
+        LEFT JOIN "Category" c ON c.id = COALESCE(it."categoryId", m."categoryId")
+        WHERE ${saleLineSql(companyId)} ${periodSql('i."date"', f)} ${inIds('i."partnerId"', f.partnerIds)} ${inIds('m.id', f.modelIds)} ${lineCatSql(f)}
         GROUP BY 1 ORDER BY revenue DESC`;
       const total = rows.reduce((a, r) => a + n(r.revenue), 0);
       const out: Row[] = rows.map((r) => {
@@ -200,9 +206,9 @@ export const salesReports: ReportDef[] = [
           { key: 'category', label: 'Kategorija' },
           { key: 'qty', label: 'Količina', kind: 'int' },
           { key: 'revenue', label: 'Prihod', kind: 'money' },
-          { key: 'cost', label: 'Nabavna', kind: 'money' },
-          { key: 'profit', label: 'Bruto dobit', kind: 'money' },
-          { key: 'margin', label: 'Marža', kind: 'pct' },
+          { key: 'cost', label: 'Nabavna', kind: 'money', cost: true },
+          { key: 'profit', label: 'Bruto dobit', kind: 'money', cost: true },
+          { key: 'margin', label: 'Marža', kind: 'pct', cost: true },
           { key: 'share', label: 'Udio', kind: 'pct', sum: true },
         ],
         rows: out,
@@ -217,13 +223,14 @@ export const salesReports: ReportDef[] = [
     title: 'Zarada po uređaju',
     area: 'Prodaja',
     description: 'Sve stavke važećih računa po uređaju (prodaja i rate najma) u odnosu na nabavnu cijenu — 200 najprofitabilnijih.',
-    filters: ['category', 'model'],
+    filters: ['partner', 'category', 'model', 'status', 'warehouse', 'supplier'],
+    requiresCost: true,
     run: async (companyId, f) => {
       const rows = await db.$queryRaw<Array<{ id: string; serial: string; model: string; status: string; partner: string | null; cost: Prisma.Decimal; revenue: Prisma.Decimal; sale: Prisma.Decimal; rent: Prisma.Decimal; invoices: number }>>`
         SELECT it.id, it.serial, concat_ws(' ', m.brand, m.name) AS model, s.name AS status, hp.name AS partner, it."cost",
                SUM(l."netAmount") AS revenue,
-               SUM(l."netAmount") FILTER (WHERE i."type" = 'SALE') AS sale,
-               SUM(l."netAmount") FILTER (WHERE i."type" = 'RENT') AS rent,
+               SUM(l."netAmount") FILTER (WHERE COALESCE(l."lineType", i."type") = 'SALE') AS sale,
+               SUM(l."netAmount") FILTER (WHERE COALESCE(l."lineType", i."type") = 'RENT') AS rent,
                COUNT(DISTINCT i.id)::int AS invoices
         FROM "InvoiceLine" l
         JOIN "Invoice" i ON i.id = l."invoiceId"
@@ -233,8 +240,7 @@ export const salesReports: ReportDef[] = [
         JOIN "ItemStatus" s ON s.id = it."statusId"
         LEFT JOIN "Partner" hp ON hp.id = it."partnerId"
         WHERE i."companyId" = ${companyId} AND i."status" = 'ISSUED' AND i."kind" = 'INVOICE' AND i."stornoed" = false AND p."excluded" = false
-          ${opt(!!f.categoryId, Prisma.sql`AND m."categoryId" = ${f.categoryId}`)}
-          ${opt(!!f.modelId, Prisma.sql`AND m.id = ${f.modelId}`)}
+          ${itemFilterSql(f)}
         GROUP BY it.id, m.brand, m.name, s.name, hp.name
         ORDER BY SUM(l."netAmount") - it."cost" DESC
         LIMIT 200`;

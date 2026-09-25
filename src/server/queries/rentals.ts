@@ -11,81 +11,8 @@ import { today } from '@/domain/dates';
 type Params = Record<string, string | string[] | undefined>;
 const str = (v: string | string[] | undefined) => (typeof v === 'string' ? v.trim() : '');
 
-export const CONTRACT_STATUSES: ContractStatusCode[] = ['ACTIVE', 'PAUSED', 'EXPIRED', 'TERMINATED'];
-export const BILLINGS: BillingCode[] = ['MONTHLY', 'QUARTERLY', 'SEMIANNUAL', 'ANNUAL', 'ONCE'];
-
-// ---------------------------------------------------------------- popis ugovora
-
-/** Filtri popisa ugovora iz URL-a → Prisma where (sve u bazi). */
-export function contractWhere(companyId: string, params: Params): Prisma.ContractWhereInput {
-  const and: Prisma.ContractWhereInput[] = [{ companyId }];
-  const q = str(params.q);
-  const status = str(params.status);
-  const partner = str(params.partner);
-  const billing = str(params.billing);
-  if (q) and.push({ OR: [{ number: { contains: q, mode: 'insensitive' } }, { partner: { name: { contains: q, mode: 'insensitive' } } }] });
-  if (CONTRACT_STATUSES.includes(status as ContractStatusCode)) and.push({ status: status as ContractStatusCode });
-  if (partner) and.push({ partnerId: partner });
-  if (BILLINGS.includes(billing as BillingCode)) and.push({ billing: billing as BillingCode });
-  // isključeni partneri skriveni su, osim kad se izričito traže (ili se filtrira baš po njemu)
-  if (str(params.iskljuceni) !== '1' && !partner) and.push({ partner: { excluded: false } });
-  return { AND: and };
-}
-
-/**
- * Stranica popisa: zbrojevi po ugovoru iz baze (groupBy), a sljedeća naplata i
- * broj rata za izdati motorom naplate — samo za ugovore na ovoj stranici.
- */
-export async function listContracts(companyId: string, params: Params, page: { skip: number; take: number }) {
-  const where = contractWhere(companyId, params);
-  const [total, contracts, totals] = await Promise.all([
-    db.contract.count({ where }),
-    db.contract.findMany({
-      where,
-      orderBy: [{ startDate: 'desc' }, { number: 'desc' }],
-      skip: page.skip,
-      take: page.take,
-      include: { partner: { select: { id: true, name: true, excluded: true } } },
-    }),
-    db.contractItem.aggregate({ where: { contract: where }, _sum: { monthly: true }, _count: true }),
-  ]);
-  const ids = contracts.map((c) => c.id);
-  // rate za izdati imaju aktivni ugovori i oni zatvoreni u programu (zaostale rate)
-  const activeIds = contracts.filter((c) => c.status === 'ACTIVE' || (c.status !== 'PAUSED' && c.closedAt)).map((c) => c.id);
-  const now = today();
-  const [sums, items, returned, covered] = await Promise.all([
-    db.contractItem.groupBy({ by: ['contractId'], where: { contractId: { in: ids } }, _sum: { monthly: true }, _count: { _all: true } }),
-    db.contractItem.findMany({ where: { contractId: { in: activeIds } } }),
-    db.returnedContractItem.findMany({ where: { contractId: { in: activeIds }, ...returnedWhere(now) } }),
-    coveredPeriods(db, activeIds),
-  ]);
-  const sumBy = new Map(sums.map((s) => [s.contractId, { monthly: num(s._sum.monthly), count: s._count._all }]));
-  const itemsBy = new Map<string, ReturnType<typeof toDevice>[]>();
-  const push = (contractId: string, d: ReturnType<typeof toDevice>) => itemsBy.set(contractId, [...(itemsBy.get(contractId) ?? []), d]);
-  for (const ci of items) push(ci.contractId, toDevice(ci));
-  for (const r of returned) push(r.contractId, toReturnedDevice(r));
-  const rows = contracts.map((c) => {
-    const terms = toTerms(c);
-    const devices = itemsBy.get(c.id) ?? [];
-    return {
-      id: c.id,
-      number: c.number,
-      partner: c.partner,
-      status: c.status,
-      startDate: terms.startDate,
-      endDate: terms.endDate ?? null,
-      billing: c.billing,
-      billingMode: c.billingMode,
-      seasonFrom: c.seasonFrom,
-      seasonTo: c.seasonTo,
-      devices: sumBy.get(c.id)?.count ?? 0,
-      monthly: sumBy.get(c.id)?.monthly ?? 0,
-      nextBilling: c.status === 'ACTIVE' ? nextBillingDate(terms, devices, now) : null,
-      pending: activeIds.includes(c.id) ? pendingInstallments(terms, devices, covered.get(c.id) ?? new Set(), now).length : 0,
-    };
-  });
-  return { rows, total, summary: { devices: totals._count, monthly: num(totals._sum.monthly) } };
-}
+// popis ugovora je u contract-list.ts (pogledi, obračun/naplata u godini, podnožje)
+export { BILLINGS, CONTRACT_STATUSES, contractWhere, listContracts } from './contract-list';
 
 // ---------------------------------------------------------------- kartica ugovora
 
@@ -278,3 +205,7 @@ export async function deviceCandidates(
 }
 
 export type Candidate = Awaited<ReturnType<typeof deviceCandidates>>[number];
+
+/** Bez prava na nabavne cijene prijedlog iz „% nabavne" ne otkriva izvor (C11). */
+export const hideCostSource = (rows: Candidate[], canSeeCost: boolean): Candidate[] =>
+  canSeeCost ? rows : rows.map((r) => (r.source === 'cost' ? { ...r, source: 'default' as Candidate['source'] } : r));

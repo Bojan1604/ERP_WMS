@@ -60,7 +60,9 @@ export async function coveredPeriods(tx: Tx, contractIds: string[]): Promise<Map
   const lines = await tx.invoiceLine.findMany({
     where: {
       itemId: { not: null },
-      invoice: { contractId: { in: contractIds }, status: 'ISSUED', kind: 'INVOICE', stornoed: false, type: 'RENT' },
+      invoice: { contractId: { in: contractIds }, status: 'ISSUED', kind: 'INVOICE', stornoed: false },
+      // stavka najma: na računu za najam (osim prodajnih stavki) ili stavka najma na miješanom računu
+      OR: [{ lineType: 'RENT' }, { lineType: null, invoice: { type: 'RENT' } }],
     },
     select: { itemId: true, invoice: { select: { contractId: true, period: true, date: true } } },
   });

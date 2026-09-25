@@ -1,20 +1,23 @@
 import Link from 'next/link';
-import { CalendarClock, Plus, Receipt, RotateCcw } from 'lucide-react';
+import { CalendarClock, FileSignature, Paperclip, Plus, Receipt, RotateCcw } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import { can } from '@/domain/permissions';
 import { getPartnerOptions } from '@/server/queries/lookups';
-import { invoiceYears, listInvoices, readInvoiceFilters } from '@/server/queries/sales';
+import { invoiceYears, listInvoices, pendingOut, readInvoiceFilters, unsentCorrections } from '@/server/queries/sales';
 import { pendingForCompany } from '@/server/services/rentals';
+import { attachmentCounts } from '@/server/services/attachments';
 import { paymentState } from '@/domain/invoice';
 import { toISO, today } from '@/domain/dates';
 import { num } from '@/domain/money';
+import { EINVOICE_FILTER, EINVOICE_FILTER_LABEL, EINVOICE_STATUS_LABEL, EINVOICE_STATUS_TONE, type EInvoiceStatusCode } from '@/domain/sales-lines';
 import { PageHeader, Notice, TableWrap, Badge, Empty } from '@/components/ui/misc';
 import { LinkButton } from '@/components/ui/button';
-import { DateFilter, FilterBar, SearchFilter, SegmentFilter, SelectFilter, ToggleFilter } from '@/components/ui/filters';
+import { DateRangeFilter, FilterBar, MultiSelectFilter, SearchFilter, SegmentFilter, ToggleFilter } from '@/components/ui/filters';
 import { Pagination, readPage } from '@/components/ui/pagination';
 import { FISCAL_STATUS_LABEL, FISCAL_STATUS_TONE } from '@/domain/fiscal';
 import { KIND_SHORT, PayBadge, PAY_TONE, rowTone, SortHeader, TYPE_LABEL } from '@/components/sales/list-bits';
+import { PendingOutNotice } from '@/components/sales/pending-out';
 import { amount, date, eur, integer } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { ExportButtons } from '@/components/ui/export-buttons';
@@ -38,13 +41,16 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
   const sp = await searchParams;
   const f = readInvoiceFilters(sp);
   const page = readPage(sp, 50);
-  const [list, partners, years, pendingRent] = await Promise.all([
+  const edit = can(user.perms, 'sales', 'edit');
+  const [list, partners, years, pendingRent, unsent, out] = await Promise.all([
     listInvoices(user.companyId, f, page),
     getPartnerOptions(user.companyId, 'customer'),
     invoiceYears(user.companyId),
     can(user.perms, 'rentals', 'view') ? pendingRentCount(user.companyId) : Promise.resolve(0),
+    unsentCorrections(user.companyId),
+    edit ? pendingOut(user.companyId) : Promise.resolve({ total: 0, groups: [] }),
   ]);
-  const edit = can(user.perms, 'sales', 'edit');
+  const files = await attachmentCounts(db, user.companyId, 'invoice', list.rows.map((r) => r.id));
   const csv = new URLSearchParams();
   for (const [k, v] of Object.entries(sp)) if (typeof v === 'string' && v && k !== 'page') csv.set(k, v);
   const cur = today().slice(0, 4);
@@ -58,6 +64,11 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
           <>
             <ExportButtons href={`/api/prodaja/racuni/csv?${csv}`} />
             {edit && (
+              <LinkButton href={`${BASE}/novi?vrsta=najam`} icon={<FileSignature className="size-4" />}>
+                Račun za najam
+              </LinkButton>
+            )}
+            {edit && (
               <LinkButton href={`${BASE}/novi`} variant="primary" icon={<Plus className="size-4" />}>
                 Novi račun
               </LinkButton>
@@ -65,6 +76,15 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
           </>
         }
       />
+
+      {out.total > 0 && (
+        <PendingOutNotice
+          total={out.total}
+          groups={out.groups}
+          canRent={can(user.perms, 'rentals', 'edit')}
+          canReturn={can(user.perms, 'warehouse', 'ops')}
+        />
+      )}
 
       {pendingRent > 0 && (
         <Notice
@@ -79,27 +99,42 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
         </Notice>
       )}
 
+      {unsent.total > 0 && (
+        <Notice tone="warn">
+          <b>Nije poslano posredniku:</b> {unsent.total === 1 ? 'dokument' : `${integer(unsent.total)} dokumenata`} (storno / odobrenje) uz već poslane eRačune:{' '}
+          {unsent.rows.map((r, i) => (
+            <span key={r.id}>
+              {i > 0 && ', '}
+              <Link prefetch={false} href={`${BASE}/${r.id}`} className="link font-medium">
+                {KIND_SHORT[r.kind]} {r.number}
+              </Link>
+            </span>
+          ))}
+          {unsent.total > unsent.rows.length && ' …'}. Dok ne stigne posredniku, izvorni račun kod Porezne uprave vrijedi u punom iznosu.
+        </Notice>
+      )}
+
       <FilterBar>
         <SegmentFilter
           name="godina"
           options={[{ value: '', label: cur }, ...years.filter((y) => String(y) !== cur).slice(0, 5).map((y) => ({ value: String(y), label: String(y) })), { value: 'sve', label: 'Sve' }]}
         />
-        <SearchFilter placeholder="Broj, partner, opis…" />
+        <SearchFilter placeholder="Broj, partner, opis, serijski broj…" />
         {/* na računalu ostali filtri u drugom retku; na mobitelu su svi iza jednog gumba „Filtri" */}
         <div aria-hidden className="h-0 basis-full max-sm:hidden" />
-        <SelectFilter name="partner" placeholder="Svi partneri" options={partners.map((p) => ({ value: p.id, label: p.name }))} />
-        <SelectFilter
+        <MultiSelectFilter name="partner" label="Partner" options={partners.map((p) => ({ value: p.id, label: p.name }))} />
+        <MultiSelectFilter
           name="vrsta"
-          placeholder="Sve vrste"
+          label="Vrsta"
           options={[
             { value: 'SALE', label: 'Prodaja' },
             { value: 'RENT', label: 'Najam' },
             { value: 'SERVICE', label: 'Usluga' },
           ]}
         />
-        <SelectFilter
+        <MultiSelectFilter
           name="dokument"
-          placeholder="Svi dokumenti"
+          label="Dokument"
           options={[
             { value: 'INVOICE', label: 'Račun' },
             { value: 'ADVANCE', label: 'Račun za predujam' },
@@ -108,9 +143,9 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
             { value: 'STORNOED', label: 'Stornirani računi' },
           ]}
         />
-        <SelectFilter
+        <MultiSelectFilter
           name="naplata"
-          placeholder="Sva stanja"
+          label="Naplata"
           options={[
             { value: 'open', label: 'Nenaplaćeno (sve)' },
             { value: 'overdue', label: 'Kasni' },
@@ -120,8 +155,8 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
             { value: 'draft', label: 'Nacrti' },
           ]}
         />
-        <DateFilter name="od" label="Od" />
-        <DateFilter name="do" label="Do" />
+        <MultiSelectFilter name="eracun" label="eRačun" options={EINVOICE_FILTER.map((v) => ({ value: v, label: EINVOICE_FILTER_LABEL[v] }))} />
+        <DateRangeFilter label="Datum" />
         <ToggleFilter name="iskljuceni" label="Isključeni partneri" />
         {f.sort && (
           <Link prefetch={false} href={`${BASE}?${new URLSearchParams([...csv.entries()].filter(([k]) => k !== 'sort'))}`} className="inline-flex items-center gap-1 text-sm text-brand hover:underline">
@@ -140,6 +175,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
             <thead>
               <tr>
                 <SortHeader label="Broj" field="broj" params={sp} basePath={BASE} />
+                <th>Opis</th>
                 <SortHeader label="Datum" field="datum" params={sp} basePath={BASE} />
                 <SortHeader label="Dospijeće" field="dospijece" params={sp} basePath={BASE} />
                 <SortHeader label="Partner" field="partner" params={sp} basePath={BASE} />
@@ -150,6 +186,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
                 <SortHeader label="Otvoreno" field="otvoreno" params={sp} basePath={BASE} className="num" />
                 <th className="num">Dana</th>
                 <th>Stanje</th>
+                <th>Plaćeno</th>
               </tr>
             </thead>
             <tbody>
@@ -170,6 +207,9 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
                 );
                 const href = `${BASE}/${r.id}`;
                 const counting = r.status === 'ISSUED' && (r.kind === 'INVOICE' || r.kind === 'ADVANCE') && !r.stornoed;
+                const eStatus = r.eInvoiceStatus as EInvoiceStatusCode | null;
+                const unsentCorrection = (r.kind === 'STORNO' || r.kind === 'CREDIT_NOTE') && r.status === 'ISSUED' && !eStatus && !!r.refInvoice?.eInvoiceStatus;
+                const nFiles = files.get(r.id) ?? 0;
                 return (
                   <tr key={r.id} className={rowTone(st.key)}>
                     <td className="whitespace-nowrap font-medium">
@@ -177,11 +217,22 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
                         {r.refInvoiceId && <span className="mr-1 text-fg-3">↳</span>}
                         {r.number ?? 'Nacrt'}
                       </Link>
-                      {r.fiscalStatus !== 'NOT_REQUIRED' && (
+                      {r.fiscalStatus !== 'NOT_REQUIRED' && !eStatus && (
                         <Badge tone={FISCAL_STATUS_TONE[r.fiscalStatus]} className="ml-1.5" title={`Fiskalizacija: ${FISCAL_STATUS_LABEL[r.fiscalStatus]}`}>
                           {r.fiscalStatus === 'SENT' ? 'F' : r.fiscalStatus === 'PENDING' ? 'F čeka' : 'F greška'}
                         </Badge>
                       )}
+                      {nFiles > 0 && (
+                        <span className="ml-1.5 inline-flex items-center gap-0.5 text-xs text-fg-3" title={`Privitaka: ${nFiles}`}>
+                          <Paperclip className="size-3" />
+                          {nFiles > 1 && nFiles}
+                        </span>
+                      )}
+                    </td>
+                    <td className="max-w-56 text-fg-2 max-sm:col-span-2 max-sm:max-w-none">
+                      <span className="block truncate max-sm:whitespace-normal" title={r.description ?? undefined}>
+                        {r.description || '—'}
+                      </span>
                     </td>
                     <td className="whitespace-nowrap">{date(r.date)}</td>
                     <td className="whitespace-nowrap text-fg-2">{r.dueDate ? date(r.dueDate) : '—'}</td>
@@ -189,13 +240,17 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
                       <Link prefetch={false} href={href} className="block truncate hover:underline max-sm:whitespace-normal">
                         {r.partner.name}
                       </Link>
-                      {r.description && <span className="block truncate text-xs text-fg-3">{r.description}</span>}
                     </td>
                     <td className="whitespace-nowrap">
                       {TYPE_LABEL[r.type]}
                       {r.kind !== 'INVOICE' && (
                         <Badge tone={r.kind === 'STORNO' ? 'bad' : 'info'} className="ml-1.5">
                           {KIND_SHORT[r.kind]}
+                        </Badge>
+                      )}
+                      {r.period && (
+                        <Badge tone="info" className="ml-1.5" title="Razdoblje najma">
+                          {r.period}
                         </Badge>
                       )}
                     </td>
@@ -213,7 +268,22 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
                       )}
                     </td>
                     <td>
-                      <PayBadge state={st} />
+                      <span className="flex flex-wrap items-center gap-1">
+                        <PayBadge state={st} />
+                        {eStatus && (
+                          <Badge tone={EINVOICE_STATUS_TONE[eStatus]} title={`eRačun: ${EINVOICE_STATUS_LABEL[eStatus]}`}>
+                            e: {EINVOICE_STATUS_LABEL[eStatus].toLowerCase()}
+                          </Badge>
+                        )}
+                        {unsentCorrection && (
+                          <Badge tone="warn" title="Izvorni račun je poslan posredniku, a ovaj dokument još nije — otvorite ga i pošaljite">
+                            nije poslan posredniku
+                          </Badge>
+                        )}
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap text-sm text-fg-2">
+                      {r.paidDate ? date(r.paidDate) : num(r.paidTotal) > 0 ? `${amount(num(r.paidTotal))} / ${amount(num(r.grandTotal))}` : '—'}
                     </td>
                   </tr>
                 );
@@ -221,7 +291,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={6}>
+                <td colSpan={7}>
                   {integer(list.total)} dokumenata
                   {list.totals.overdueCount > 0 && (
                     <span className="ml-3 font-normal text-bad-strong">
@@ -232,7 +302,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
                 <td className="num">{amount(list.totals.net)}</td>
                 <td className="num">{amount(list.totals.issued)}</td>
                 <td className="num">{amount(list.totals.open)}</td>
-                <td colSpan={2} />
+                <td colSpan={3} />
               </tr>
             </tfoot>
           </table>

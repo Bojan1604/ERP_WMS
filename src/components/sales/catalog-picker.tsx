@@ -22,6 +22,7 @@ export function CatalogPicker({
   entries,
   onPick,
   empty = 'Šifrarnik je prazan.',
+  footer,
 }: {
   open: boolean;
   onClose: () => void;
@@ -29,6 +30,8 @@ export function CatalogPicker({
   entries: CatalogEntry[];
   onPick: (id: string) => void;
   empty?: string;
+  /** Dodatne radnje u podnožju (npr. „+ Nova usluga"). */
+  footer?: React.ReactNode;
 }) {
   const [q, setQ] = useState('');
   const [added, setAdded] = useState<string[]>([]);
@@ -42,7 +45,7 @@ export function CatalogPicker({
     onClose();
   };
   return (
-    <Dialog open={open} onClose={close} title={title} size="md">
+    <Dialog open={open} onClose={close} title={title} size="md" footer={footer}>
       <div className="relative mb-3">
         <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-fg-3" />
         <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Traži…" className={cn(controlClass, 'h-8 pl-8')} />

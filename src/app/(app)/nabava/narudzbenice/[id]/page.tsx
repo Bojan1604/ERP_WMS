@@ -4,9 +4,14 @@ import { Pencil, Printer, Send } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { getLookups, modelLabel } from '@/server/queries/lookups';
 import { getOrder } from '@/server/queries/purchasing';
-import { can } from '@/domain/permissions';
+import { can, canSeeCost } from '@/domain/permissions';
 import { num, r2 } from '@/domain/money';
-import { today } from '@/domain/dates';
+import { toISO, today } from '@/domain/dates';
+import { db } from '@/server/db';
+import { listAttachments } from '@/server/services/attachments';
+import { Attachments } from '@/components/ui/attachments';
+import { OrderInvoiceForm } from '@/components/purchasing/order-invoice-form';
+import { SupplierInvoiceStatusBadge } from '@/components/purchasing/supplier-invoice-badges';
 import { Badge, Card, Detail, PageHeader, TableWrap } from '@/components/ui/misc';
 import { LinkButton } from '@/components/ui/button';
 import { MoreMenu } from '@/components/ui/more-menu';
@@ -19,9 +24,12 @@ import { deleteOrderAction, orderStatusAction, receiveLineAction } from '../acti
 export default async function OrderPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await pageAccess('purchasing', 'view');
   const { id } = await params;
-  const [order, lookups] = await Promise.all([getOrder(user.companyId, id), getLookups(user.companyId)]);
+  const [order, lookups, files] = await Promise.all([getOrder(user.companyId, id), getLookups(user.companyId), listAttachments(db, user.companyId, 'purchaseOrder', [id])]);
   if (!order) notFound();
   const canEdit = can(user.perms, 'purchasing', 'edit');
+  const costs = canSeeCost(user.perms);
+  // ulazni račun narudžbenice s vlastitim troškom — primka tada ne knjiži trošak ponovno
+  const invoiceBooked = order.supplierInvoices.some((s) => s.expense);
   const st = ORDER_STATUS[order.status];
   const receivable = order.status === 'ORDERED' || order.status === 'PARTIAL';
   const editable = order.status !== 'RECEIVED' && order.status !== 'CANCELLED';
@@ -105,8 +113,8 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
                   <th className="num">Naručeno</th>
                   <th className="num">Zaprimljeno</th>
                   <th className="num">Preostalo</th>
-                  <th className="num">Nabavna</th>
-                  <th className="num">Iznos</th>
+                  {costs && <th className="num">Nabavna</th>}
+                  {costs && <th className="num">Iznos</th>}
                   <th />
                 </tr>
               </thead>
@@ -122,8 +130,8 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
                       <td className="num">{integer(l.qty)}</td>
                       <td className="num">{l.received >= l.qty ? <span className="text-ok">{integer(l.received)}</span> : integer(l.received)}</td>
                       <td className="num">{left ? <b>{integer(left)}</b> : '—'}</td>
-                      <td className="num">{eur(num(l.unitCost))}</td>
-                      <td className="num">{eur(r2(l.qty * num(l.unitCost)))}</td>
+                      {costs && <td className="num">{eur(num(l.unitCost))}</td>}
+                      {costs && <td className="num">{eur(r2(l.qty * num(l.unitCost)))}</td>}
                       <td className="num">
                         {canEdit && receivable && left > 0 && (
                           <ReceiveDialog
@@ -132,6 +140,8 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
                             warehouses={warehouses}
                             today={today()}
                             action={receiveLineAction}
+                            invoiceBooked={invoiceBooked}
+                            canSeeCost={costs}
                           />
                         )}
                       </td>
@@ -145,8 +155,8 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
                   <td className="num">{integer(qty)}</td>
                   <td className="num">{integer(received)}</td>
                   <td className="num">{integer(Math.max(0, qty - received))}</td>
-                  <td />
-                  <td className="num">{eur(num(order.total))}</td>
+                  {costs && <td />}
+                  {costs && <td className="num">{eur(num(order.total))}</td>}
                   <td />
                 </tr>
               </tfoot>
@@ -165,8 +175,9 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
                     <th>Datum</th>
                     <th>Skladište</th>
                     <th className="num">Kom</th>
-                    <th className="num">Iznos</th>
+                    {costs && <th className="num">Iznos</th>}
                     <th>Status</th>
+                    <th>Trošak</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -180,10 +191,11 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
                       <td>{date(r.date)}</td>
                       <td>{r.warehouse.name}</td>
                       <td className="num">{r._count.items}</td>
-                      <td className="num">{eur(num(r.total))}</td>
+                      {costs && <td className="num">{eur(num(r.total))}</td>}
                       <td>
                         <Badge tone={RECEIPT_STATUS[r.status].tone}>{RECEIPT_STATUS[r.status].label}</Badge>
                       </td>
+                      <td>{r.expense ? <Badge tone="info">knjižen</Badge> : <span className="text-fg-4">—</span>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -192,6 +204,74 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
               <p className="px-4 py-3 text-sm text-fg-3">Još ništa nije zaprimljeno.</p>
             )}
           </Card>
+
+          <Card title="Račun dobavljača" actions={<span className="text-xs text-fg-3">nakon primke postaje ulazni račun i ide knjigovođi</span>}>
+            <OrderInvoiceForm
+              orderId={id}
+              orderTotal={num(order.total)}
+              readOnly={!canEdit || !costs}
+              initial={{
+                supplierInvoiceNo: order.supplierInvoiceNo,
+                supplierInvoiceDate: order.supplierInvoiceDate ? toISO(order.supplierInvoiceDate) : null,
+                supplierInvoiceDueDate: order.supplierInvoiceDueDate ? toISO(order.supplierInvoiceDueDate) : null,
+                supplierInvoiceCurrency: order.supplierInvoiceCurrency,
+                supplierInvoiceNet: order.supplierInvoiceNet === null ? null : num(order.supplierInvoiceNet),
+                supplierInvoiceVat: order.supplierInvoiceVat === null ? null : num(order.supplierInvoiceVat),
+                supplierInvoiceTotal: order.supplierInvoiceTotal === null ? null : num(order.supplierInvoiceTotal),
+              }}
+            />
+          </Card>
+
+          <Card
+            title="Ulazni računi po narudžbenici"
+            padded={false}
+            actions={
+              canEdit && (
+                <LinkButton href={`/nabava/ulazni/novi?narudzbenica=${id}`} size="sm" variant="subtle">
+                  + Ulazni račun
+                </LinkButton>
+              )
+            }
+          >
+            {order.supplierInvoices.length ? (
+              <table className="data-table compact">
+                <thead>
+                  <tr>
+                    <th>Interni br.</th>
+                    <th>Broj računa</th>
+                    <th>Datum</th>
+                    {costs && <th className="num">Ukupno</th>}
+                    <th>Status</th>
+                    <th>Trošak</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {order.supplierInvoices.map((s) => (
+                    <tr key={s.id}>
+                      <td>
+                        <Link prefetch={false} href={`/nabava/ulazni/${s.id}`} className="link">
+                          {s.internalNo}
+                        </Link>
+                      </td>
+                      <td>{s.number}</td>
+                      <td>{date(s.issueDate)}</td>
+                      {costs && <td className="num">{eur(num(s.total))}</td>}
+                      <td>
+                        <SupplierInvoiceStatusBadge status={s.status} paid={!!s.paidDate} />
+                      </td>
+                      <td>{s.expense ? <Badge tone="info">vlastiti trošak</Badge> : <span className="text-fg-3">primkom</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p className="px-4 py-3 text-sm text-fg-3">Nema povezanog ulaznog računa.</p>
+            )}
+          </Card>
+
+          <Card title="Prilozi">
+            <Attachments entity="purchaseOrder" id={id} canEdit={canEdit} initial={files} empty="Nema priloga — priložite ponudu ili račun dobavljača (PDF, slika)." />
+          </Card>
         </div>
 
         <Card title="Podaci">
@@ -199,7 +279,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
             <Detail label="Dobavljač">{order.supplier.name}</Detail>
             <Detail label="Datum">{date(order.date)}</Detail>
             <Detail label="Očekivana isporuka">{date(order.expectedDate)}</Detail>
-            <Detail label="Iznos (bez PDV-a)">{eur(num(order.total))}</Detail>
+            {costs && <Detail label="Iznos (bez PDV-a)">{eur(num(order.total))}</Detail>}
             <Detail label="Upisao">{order.createdBy ?? '—'}</Detail>
             <Detail label="Upisano">{dateTime(order.createdAt)}</Detail>
           </dl>

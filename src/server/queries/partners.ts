@@ -17,6 +17,7 @@ export function partnerWhere(companyId: string, params: PartnerParams): Prisma.P
       { oib: { startsWith: q } },
       { vatId: { contains: q, mode: 'insensitive' } },
       { city: { contains: q, mode: 'insensitive' } },
+      { email: { contains: q, mode: 'insensitive' } },
     ];
   }
   if (type === 'kupci') where.isCustomer = true;
@@ -31,21 +32,45 @@ export const partnerListSelect = {
 } satisfies Prisma.PartnerSelect;
 
 /**
- * Brojke uz partnere na stranici — po jedan groupBy za otvorena potraživanja,
- * uređaje kod partnera i aktivne ugovore.
+ * Brojke uz partnere na stranici — po jedan groupBy za račune (broj, promet,
+ * otvoreno), uređaje kod partnera i aktivne ugovore.
  */
 export async function partnerStats(companyId: string, ids: string[]) {
-  if (!ids.length) return new Map<string, { open: number; devices: number; contracts: number }>();
-  const [open, devices, contracts] = await Promise.all([
-    db.invoice.groupBy({ by: ['partnerId'], where: { companyId, partnerId: { in: ids }, status: 'ISSUED', openAmount: { gt: 0 } }, _sum: { openAmount: true } }),
+  type S = { open: number; devices: number; contracts: number; invoices: number; turnover: number };
+  if (!ids.length) return new Map<string, S>();
+  const [inv, devices, contracts] = await Promise.all([
+    db.invoice.groupBy({
+      by: ['partnerId'],
+      where: { companyId, partnerId: { in: ids }, status: 'ISSUED' },
+      _sum: { openAmount: true, grandTotal: true },
+      _count: { _all: true },
+    }),
     db.item.groupBy({ by: ['partnerId'], where: { companyId, partnerId: { in: ids } }, _count: { _all: true } }),
     db.contract.groupBy({ by: ['partnerId'], where: { companyId, partnerId: { in: ids }, status: 'ACTIVE' }, _count: { _all: true } }),
   ]);
-  const out = new Map(ids.map((id) => [id, { open: 0, devices: 0, contracts: 0 }]));
-  for (const r of open) out.get(r.partnerId)!.open = num(r._sum.openAmount);
+  const out = new Map<string, S>(ids.map((id) => [id, { open: 0, devices: 0, contracts: 0, invoices: 0, turnover: 0 }]));
+  for (const r of inv) {
+    const s = out.get(r.partnerId)!;
+    s.open = num(r._sum.openAmount);
+    s.turnover = num(r._sum.grandTotal);
+    s.invoices = r._count._all;
+  }
   for (const r of devices) if (r.partnerId) out.get(r.partnerId)!.devices = r._count._all;
   for (const r of contracts) out.get(r.partnerId)!.contracts = r._count._all;
   return out;
+}
+
+/** Podnožje popisa partnera: promet i otvoreno za cijeli filtar (bez isključenih iz obračuna). */
+export async function partnerTotals(companyId: string, params: PartnerParams) {
+  const where = partnerWhere(companyId, params);
+  const [sums, excluded] = await Promise.all([
+    db.invoice.aggregate({
+      where: { companyId, status: 'ISSUED', partner: { AND: [where, { excluded: false }] } },
+      _sum: { grandTotal: true, openAmount: true },
+    }),
+    db.partner.count({ where: { AND: [where, { excluded: true }] } }),
+  ]);
+  return { turnover: num(sums._sum.grandTotal), open: num(sums._sum.openAmount), excluded };
 }
 
 export async function listPartners(companyId: string, params: PartnerParams, page: { skip: number; take: number }) {

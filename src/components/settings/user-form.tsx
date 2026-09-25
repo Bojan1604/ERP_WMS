@@ -19,11 +19,15 @@ export interface UserValue {
   /** OIB operatera za fiskalizirane račune. */
   oib: string;
   permissions: Partial<Record<string, Level>>;
+  /** Opasna zona (brisanje prometa, vraćanje kopije…). */
+  canDanger: boolean;
+  /** Promjena statusa na odobrenje: null = prati firmu. */
+  requireApproval: boolean | null;
 }
 
 const LEVELS: Level[] = ['none', 'view', 'ops', 'edit'];
 
-export function UserForm({ value, save, isSelf }: { value: UserValue; save: ServerAction<Record<string, unknown>>; isSelf: boolean }) {
+export function UserForm({ value, save, isSelf, actorIsAdmin, companyApproval }: { value: UserValue; save: ServerAction<Record<string, unknown>>; isSelf: boolean; actorIsAdmin: boolean; companyApproval: boolean }) {
   const [v, setV] = useState({ ...value, password: '', password2: '' });
   const [perms, setPerms] = useState<Record<Module, Level>>(() => ({ ...ROLE_DEFAULTS[value.role], ...(value.permissions as Record<Module, Level>) }));
   const [localError, setLocalError] = useState<string | null>(null);
@@ -47,7 +51,11 @@ export function UserForm({ value, save, isSelf }: { value: UserValue; save: Serv
       if (v.password.length < 8) return setLocalError('Lozinka mora imati barem 8 znakova.');
       if (v.password !== v.password2) return setLocalError('Lozinke se ne podudaraju.');
     } else if (!value.id) return setLocalError('Upišite lozinku za novog korisnika.');
-    run({ id: value.id ?? null, name: v.name, email: v.email, role: v.role, active: v.active, oib: v.oib.trim() || null, password: v.password || null, permissions: perms });
+    run({
+      id: value.id ?? null, name: v.name, email: v.email, role: v.role, active: v.active, oib: v.oib.trim() || null, password: v.password || null, permissions: perms,
+      ...(actorIsAdmin ? { canDanger: v.canDanger } : {}),
+      requireApproval: v.requireApproval === null ? '' : v.requireApproval ? 'yes' : 'no',
+    });
   };
 
   return (
@@ -98,7 +106,34 @@ export function UserForm({ value, save, isSelf }: { value: UserValue; save: Serv
             {!v.active && value.active && <p className="text-xs text-warn">Nakon spremanja korisnik se odjavljuje sa svih uređaja.</p>}
           </div>
         </Card>
-        <Card title={value.id ? 'Nova lozinka' : 'Lozinka'} className="xl:col-span-2">
+        <Card title="Posebna prava">
+          <div className="space-y-3">
+            <Field
+              label="Promjena statusa uređaja"
+              hint={admin ? 'Administrator mijenja statuse bez odobrenja.' : `Prati firmu: ${companyApproval ? 'korisnik bez punog prava na skladište šalje zahtjev na odobrenje' : 'bez odobrenja'}.`}
+            >
+              <Select
+                value={admin ? '' : v.requireApproval === null ? '' : v.requireApproval ? 'yes' : 'no'}
+                disabled={admin}
+                onChange={(e) => setV({ ...v, requireApproval: e.target.value === '' ? null : e.target.value === 'yes' })}
+                options={[
+                  { value: '', label: 'Prati postavku firme' },
+                  { value: 'yes', label: 'Uvijek ide na odobrenje' },
+                  { value: 'no', label: 'Bez odobrenja' },
+                ]}
+              />
+            </Field>
+            <Checkbox
+              label="Opasna zona — smije brisati promet, vraćati kopije i čistiti dnevnik"
+              checked={admin || v.canDanger}
+              disabled={admin || !actorIsAdmin}
+              onChange={(e) => setV({ ...v, canDanger: e.target.checked })}
+              title={!actorIsAdmin ? 'Dodjeljuje samo administrator' : admin ? 'Administrator uvijek smije' : undefined}
+            />
+            <p className="text-xs text-fg-3">Svaka radnja u opasnoj zoni traži lozinku i upis naziva firme.</p>
+          </div>
+        </Card>
+        <Card title={value.id ? 'Nova lozinka' : 'Lozinka'} className="xl:col-span-3">
           <FormGrid>
             <Field label="Lozinka" required={!value.id} hint={value.id ? 'Prazno = lozinka ostaje ista. Promjena odjavljuje korisnika sa svih uređaja.' : 'Najmanje 8 znakova.'} error={fields.password}>
               <Input type="password" value={v.password} onChange={(e) => setV({ ...v, password: e.target.value })} autoComplete="new-password" />

@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { Plus, Users } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
-import { listPartners } from '@/server/queries/partners';
+import { listPartners, partnerTotals } from '@/server/queries/partners';
 import { can } from '@/domain/permissions';
 import { Badge, Empty, PageHeader, TableWrap } from '@/components/ui/misc';
 import { LinkButton } from '@/components/ui/button';
@@ -18,7 +18,12 @@ export default async function PartnersPage({ searchParams }: { searchParams: Pro
   const user = await pageAccess('partners');
   const params = await searchParams;
   const page = readPage(params, 50);
-  const { rows, total } = await listPartners(user.companyId, params, page);
+  // promet, računi i otvoreno pripadaju prodaji
+  const canSales = can(user.perms, 'sales');
+  const [{ rows, total }, totals] = await Promise.all([
+    listPartners(user.companyId, params, page),
+    canSales ? partnerTotals(user.companyId, params) : null,
+  ]);
   const qs = new URLSearchParams(Object.entries(params).filter((e): e is [string, string] => typeof e[1] === 'string' && e[0] !== 'page')).toString();
 
   return (
@@ -38,7 +43,7 @@ export default async function PartnersPage({ searchParams }: { searchParams: Pro
         }
       />
       <FilterBar>
-        <SearchFilter placeholder="Naziv, OIB, mjesto…" />
+        <SearchFilter placeholder="Naziv, OIB, mjesto, e-adresa…" />
         <SegmentFilter
           name="tip"
           options={[
@@ -57,10 +62,17 @@ export default async function PartnersPage({ searchParams }: { searchParams: Pro
                 <th>Naziv</th>
                 <th>OIB</th>
                 <th>Mjesto</th>
+                <th>E-adresa / telefon</th>
                 <th>Uloga</th>
-                <th className="num">Otvoreno</th>
                 <th className="num">Uređaja</th>
                 <th className="num">Ugovora</th>
+                {canSales && (
+                  <>
+                    <th className="num">Računa</th>
+                    <th className="num">Promet</th>
+                    <th className="num">Otvoreno</th>
+                  </>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -80,20 +92,34 @@ export default async function PartnersPage({ searchParams }: { searchParams: Pro
                         napomena
                       </Badge>
                     )}
-                    {(p.email || p.phone) && <div className="truncate text-xs text-fg-3">{[p.email, p.phone].filter(Boolean).join(' · ')}</div>}
                   </td>
                   <td className="font-mono text-sm">{p.oib ?? <span className="text-fg-4">—</span>}</td>
                   <td>
                     {p.city ?? <span className="text-fg-4">—</span>}
                     {p.country !== 'HR' && <span className="ml-1.5 text-xs text-fg-3">{p.country}</span>}
                   </td>
+                  <td className="max-w-56 text-sm">
+                    {p.email ? (
+                      <a href={`mailto:${p.email}`} className="link block truncate">
+                        {p.email}
+                      </a>
+                    ) : null}
+                    {p.phone ? <span className="block truncate text-fg-3">{p.phone}</span> : null}
+                    {!p.email && !p.phone && <span className="text-fg-4">—</span>}
+                  </td>
                   <td className="space-x-1 whitespace-nowrap">
                     {p.isCustomer && <Badge tone="brand">kupac</Badge>}
                     {p.isSupplier && <Badge tone="info">dobavljač</Badge>}
                   </td>
-                  <td className="num">{p.open ? <span className="font-medium">{eur(p.open)}</span> : <span className="text-fg-4">—</span>}</td>
                   <td className="num">{p.devices ? integer(p.devices) : <span className="text-fg-4">—</span>}</td>
                   <td className="num">{p.contracts ? integer(p.contracts) : <span className="text-fg-4">—</span>}</td>
+                  {canSales && (
+                    <>
+                      <td className="num">{p.invoices ? integer(p.invoices) : <span className="text-fg-4">—</span>}</td>
+                      <td className="num">{p.turnover ? eur(p.turnover) : <span className="text-fg-4">—</span>}</td>
+                      <td className="num">{p.open ? <span className="font-medium">{eur(p.open)}</span> : <span className="text-fg-4">—</span>}</td>
+                    </>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -102,6 +128,24 @@ export default async function PartnersPage({ searchParams }: { searchParams: Pro
           <Empty icon={<Users className="size-5" />} title="Nema partnera" description="Promijenite filtre ili dodajte novog partnera." />
         )}
       </TableWrap>
+      {totals && total > 0 && (
+        <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm text-fg-3">
+          <span>
+            Partnera: <b className="text-fg">{integer(total)}</b>
+          </span>
+          <span>
+            Promet: <b className="tnum text-fg">{eur(totals.turnover)}</b>
+          </span>
+          <span>
+            Otvoreno: <b className={totals.open > 0 ? 'tnum text-bad-strong' : 'tnum text-fg'}>{eur(totals.open)}</b>
+          </span>
+          {totals.excluded > 0 && (
+            <span>
+              Isključeno iz obračuna: <b className="text-fg">{integer(totals.excluded)}</b>
+            </span>
+          )}
+        </div>
+      )}
       <Pagination page={page.page} pageSize={page.pageSize} total={total} params={params} basePath="/partneri" />
     </>
   );

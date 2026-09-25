@@ -6,7 +6,7 @@ import { transaction } from '@/server/db';
 import { zBool, zDate, zId, zMoney, zOptDate, zOptId, zOptText, zReq, zText } from '@/server/zod';
 import { deviceWarrantyEnd, itemForService, searchItems } from '@/server/queries/service';
 import { today } from '@/domain/dates';
-import { changeServiceStatus, createServiceOrder, replaceDevice, returnDevice, updateServiceOrder } from '@/server/services/service';
+import { changeServiceStatus, createServiceOrder, deleteServiceOrder, replaceDevice, returnDevice, updateServiceOrder } from '@/server/services/service';
 import { modelLabel } from '@/server/queries/lookups';
 import { STATUS_KIND_LABEL } from '@/server/services/items';
 
@@ -123,3 +123,11 @@ export const deviceInfoAction = action({ module: 'service', level: 'view' }, z.o
     },
   };
 });
+
+/** Brisanje naloga (C7) — ne za nalog zatvoren zamjenom ni dok je uređaj po njemu u servisu. */
+export const deleteServiceAction = action({ module: 'service', level: 'edit' }, z.object({ id: zId }), async ({ id }, user) =>
+  transaction(async (tx) => {
+    const number = await deleteServiceOrder(tx, user, id);
+    return { message: `Servisni nalog ${number} obrisan.`, redirect: '/servis' };
+  }),
+);

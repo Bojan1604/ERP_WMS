@@ -1,5 +1,7 @@
 import Link from 'next/link';
 import { pageAccess } from '@/server/auth';
+import { db } from '@/server/db';
+import { attachmentCounts } from '@/server/services/attachments';
 import { getCompany, getLookups } from '@/server/queries/lookups';
 import { expensePartners, expensesForYear, expenseYears, parseExpenseFilters } from '@/server/queries/expenses';
 import { can } from '@/domain/permissions';
@@ -32,6 +34,8 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
     getCompany(c),
   ]);
   const canEdit = can(user.perms, 'expenses', 'edit');
+  // oznaka priloga u tablici — jedan groupBy za prikazane troškove
+  const attachments = Object.fromEntries(await attachmentCounts(db, c, 'expense', [...new Set(data.rows.map((r) => r.expenseId))]));
 
   const href = (patch: Record<string, string | null>) => {
     const q = new URLSearchParams();
@@ -114,7 +118,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
       </FilterBar>
 
       <TableWrap>
-        <ExpensesTable rows={data.rows} manual={data.manual} totals={t} options={options} actions={actions} paidAction={expensesPaidAction} canEdit={canEdit} />
+        <ExpensesTable rows={data.rows} manual={data.manual} totals={t} options={options} actions={actions} paidAction={expensesPaidAction} canEdit={canEdit} attachments={attachments} />
       </TableWrap>
     </>
   );

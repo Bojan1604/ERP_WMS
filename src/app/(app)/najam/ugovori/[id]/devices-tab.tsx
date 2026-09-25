@@ -10,7 +10,7 @@ import { hasCustomPlan, planSummary, returnReason } from '@/domain/billing';
 import { today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import { toDevice, toTerms } from '@/server/services/rentals';
-import { deviceCandidates, type contractItems } from '@/server/queries/rentals';
+import { deviceCandidates, hideCostSource, type contractItems } from '@/server/queries/rentals';
 import { eur, integer } from '@/lib/format';
 import { SearchFilter } from '@/components/ui/filters';
 import { Pagination } from '@/components/ui/pagination';
@@ -27,6 +27,7 @@ export async function DevicesTab({
   companyId,
   prefill,
   params,
+  showCost,
 }: {
   contract: Contract & { partner: { name: string } };
   items: Items;
@@ -34,11 +35,13 @@ export async function DevicesTab({
   companyId: string;
   prefill: string;
   params: Record<string, string | string[] | undefined>;
+  /** Pravo na nabavne cijene (izvor prijedloga cijene „% nabavne"). */
+  showCost: boolean;
 }) {
   const terms = toTerms(c);
   const now = today();
   const ids = prefill ? prefill.split(',').filter(Boolean).slice(0, 500) : [];
-  const initial = canEdit && ids.length ? await deviceCandidates(companyId, c.id, { ids, limit: 500 }) : [];
+  const initial = canEdit && ids.length ? hideCostSource(await deviceCandidates(companyId, c.id, { ids, limit: 500 }), showCost) : [];
   const total = r2(items.reduce((a, i) => a + num(i.monthly), 0));
   const defaultFrom = `${now.slice(0, 7)}-01`;
   const q = typeof params.q === 'string' ? params.q.trim().toLowerCase() : '';

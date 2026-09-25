@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import { PackagePlus, ScanLine } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
-import { Field, FormGrid, Input, Select, Textarea } from '@/components/ui/field';
+import { Checkbox, Field, FormGrid, Input, Select, Textarea } from '@/components/ui/field';
 import { FormError, useAction, type ServerAction } from '@/components/ui/action';
 import { eur } from '@/lib/format';
 import { r2 } from '@/domain/money';
@@ -19,6 +19,7 @@ interface ReceiveInput {
   unitCost: number;
   supplierDocNumber: string;
   serials: string;
+  bookExpense: boolean;
 }
 
 /** „Zaprimi robu" na stavci narudžbenice: serijski brojevi (jedan po retku), skladište i datum. */
@@ -28,12 +29,17 @@ export function ReceiveDialog({
   warehouses,
   today,
   action,
+  invoiceBooked = false,
+  canSeeCost = true,
 }: {
   orderId: string;
   line: { id: string; model: string; remaining: number; unitCost: number };
   warehouses: Array<{ value: string; label: string }>;
   today: string;
   action: ServerAction<ReceiveInput>;
+  /** Ulazni račun narudžbenice već je knjižio trošak robe — primka ga ne knjiži ponovno. */
+  invoiceBooked?: boolean;
+  canSeeCost?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState('');
@@ -41,6 +47,7 @@ export function ReceiveDialog({
   const [date, setDate] = useState(today);
   const [unitCost, setUnitCost] = useState(line.unitCost);
   const [doc, setDoc] = useState('');
+  const [book, setBook] = useState(true);
   const [scanOpen, setScanOpen] = useState(false);
   const { run, pending, error } = useAction(action, {
     onSuccess: () => {
@@ -72,7 +79,7 @@ export function ReceiveDialog({
               variant="primary"
               loading={pending}
               disabled={!serials.length || over || dups.length > 0 || !warehouseId}
-              onClick={() => run({ orderId, lineId: line.id, warehouseId, date, unitCost, supplierDocNumber: doc, serials: text })}
+              onClick={() => run({ orderId, lineId: line.id, warehouseId, date, unitCost, supplierDocNumber: doc, serials: text, bookExpense: book })}
             >
               Zaprimi {serials.length || ''} kom
             </Button>
@@ -86,9 +93,11 @@ export function ReceiveDialog({
           <Field label="Datum uvoza" required>
             <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
           </Field>
-          <Field label="Nabavna cijena (kom)">
-            <Input type="number" step="0.01" min={0} value={unitCost} onChange={(e) => setUnitCost(Number(e.target.value))} />
-          </Field>
+          {canSeeCost && (
+            <Field label="Nabavna cijena (kom)">
+              <Input type="number" step="0.01" min={0} value={unitCost} onChange={(e) => setUnitCost(Number(e.target.value))} />
+            </Field>
+          )}
           <Field label="Broj dokumenta dobavljača" hint="Otpremnica ili račun — po želji" className="sm:col-span-2">
             <Input value={doc} onChange={(e) => setDoc(e.target.value)} />
           </Field>
@@ -106,9 +115,18 @@ export function ReceiveDialog({
             </Button>
           </div>
         </FormGrid>
-        <p className="mt-3 text-sm text-fg-3">
-          Vrijednost primke: <b className="text-fg">{eur(r2(serials.length * (unitCost || 0)))}</b> — knjiži se kao trošak „Nabava robe".
-        </p>
+        {canSeeCost && (
+          <div className="mt-3 space-y-1 text-sm text-fg-3">
+            <p>
+              Vrijednost primke: <b className="text-fg">{eur(r2(serials.length * (unitCost || 0)))}</b>
+            </p>
+            {invoiceBooked ? (
+              <p>Ulazni račun ove narudžbenice već je knjižen kao trošak — primka ne knjiži trošak ponovno.</p>
+            ) : (
+              <Checkbox checked={book} onChange={(e) => setBook(e.target.checked)} label={'Knjiži nabavu u troškove („Nabava robe")'} />
+            )}
+          </div>
+        )}
         <div className="mt-2">
           <FormError error={error} />
         </div>

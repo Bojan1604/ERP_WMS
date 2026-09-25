@@ -25,7 +25,8 @@ const PAGE = 2000;
 const ATTACHMENT_PAGE = 20;
 
 export const BACKUP_NOTES = [
-  'Lozinke korisnika, sesije, fiskalni certifikat (i lozinka) i API ključ posrednika nisu u kopiji.',
+  'Lozinke korisnika, sesije, fiskalni certifikat (i lozinka), API ključ posrednika i lozinka SMTP-a nisu u kopiji.',
+  'Korisnici portala za klijente su u kopiji sa sažetkom lozinke (bcrypt) — nakon vraćanja se prijavljuju istom lozinkom (ako e-adresa nije zauzeta).',
   'Zahtjevi na odobrenju, trag komunikacije s CIS-om i inventure nisu u kopiji.',
   'Prilozi su uključeni (sadržaj u base64).',
 ];
@@ -70,6 +71,9 @@ function tables(companyId: string): Array<[string, Fetch | (() => Promise<Row[]>
     ['attachments', byId((a) => db.attachment.findMany({ ...a, where: w }), ATTACHMENT_PAGE)],
     ['auditLogs', byId((a) => db.auditLog.findMany({ ...a, where: w }))],
     ['counters', () => db.documentCounter.findMany({ where: w, orderBy: [{ series: 'asc' }, { year: 'asc' }] })],
+    ['emailLogs', byId((a) => db.emailLog.findMany({ ...a, where: w }))],
+    // lozinke korisnika portala su bcrypt sažeci — uključeni da se klijenti nakon vraćanja mogu prijaviti
+    ['portalUsers', () => db.portalUser.findMany({ where: w, orderBy: { id: 'asc' } })],
   ];
 }
 
@@ -180,10 +184,9 @@ export function backupToPlan(raw: Row): ImportPlan {
   if (n(raw.version) > BACKUP_VERSION) throw new Error(`Kopija je iz novije verzije programa (${raw.version}).`);
   const co = isObj(raw.company) ? raw.company : {};
   const plan = emptyPlan({ format: 'erp-wms-backup', label: 'Sigurnosna kopija ove aplikacije', companyName: s(co.name), exportedAt: s(raw.exportedAt), version: n(raw.version) });
-  const pick = ['name', 'oib', 'vatId', 'address', 'zip', 'city', 'country', 'iban', 'bank', 'email', 'phone', 'web', 'logo', 'currency', 'vatRegistered', 'vatRate',
-    'overdueDays', 'paymentTermDays', 'quoteValidDays', 'defaultMarginPct', 'defaultWarrantyMonths', 'rentFallbackPct', 'invoicePremises', 'invoiceDevice',
-    'invoiceSeparator', 'invoiceFooter', 'statusChangeNeedsApproval'] as const;
-  const settings = sanitizeCompanySettings(Object.fromEntries(pick.filter((k) => co[k] !== undefined).map((k) => [k, co[k]])));
+  // postavke kroz popis dopuštenih polja; automatsko izdavanje rata i oznaka demo firme se ne vraćaju
+  // (vraćena kopija je nova firma — ne smije sama izdavati račune)
+  const settings = sanitizeCompanySettings(co);
   plan.company = settings.company;
   const W = (msg: string) => plan.warnings.push({ level: 'info', code: 'backup', entity: 'kopija', message: msg });
   for (const note of settings.notes) new Warnings(plan).warn('company-settings', 'Firma', note);
@@ -300,6 +303,16 @@ export function backupToPlan(raw: Row): ImportPlan {
     at: s(r.at)!, userName: s(r.userName), entity: s(r.entity) ?? 'staro', entityId: s(r.entityId), action: s(r.action) ?? '', summary: s(r.summary) ?? '', diff: r.diff ?? undefined,
   }));
   plan.counters = arr(raw, 'counters').map((r) => ({ series: r.series as PlanCounter['series'], year: n(r.year), last: n(r.last) }));
+  plan.emailLogs = arr(raw, 'emailLogs').map((r) => ({
+    kind: s(r.kind) ?? 'other', entityKey: s(r.entityId), to: s(r.to) ?? '', cc: s(r.cc), subject: s(r.subject) ?? '', status: s(r.status) === 'FAILED' ? 'FAILED' : 'SENT',
+    error: s(r.error), messageId: s(r.messageId), sentBy: s(r.sentBy), at: s(r.at) ?? new Date().toISOString(),
+  }));
+  plan.portalUsers = arr(raw, 'portalUsers')
+    .filter((r) => typeof r.passwordHash === 'string' && /^\$2[aby]\$\d{2}\$/.test(r.passwordHash) && typeof r.email === 'string' && typeof r.partnerId === 'string')
+    .map((r) => ({
+      partnerKey: s(r.partnerId)!, email: s(r.email)!.toLowerCase(), name: s(r.name), passwordHash: s(r.passwordHash)!, active: r.active !== false,
+      lastLoginAt: s(r.lastLoginAt), createdAt: s(r.createdAt),
+    }));
 
   if (plan.users.length) W(`Korisnici iz kopije (${plan.users.length}) nisu vraćeni — u novoj firmi dodajte ih u Postavke → Korisnici.`);
   for (const note of Array.isArray(raw.notes) ? raw.notes : []) if (typeof note === 'string') W(note);

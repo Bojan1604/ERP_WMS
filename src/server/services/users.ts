@@ -1,5 +1,5 @@
 import 'server-only';
-import type { Role } from '@prisma/client';
+import type { Prisma, Role } from '@prisma/client';
 import type { Tx } from '../db';
 import bcrypt from 'bcryptjs';
 import { audit } from '../audit';
@@ -18,7 +18,14 @@ export interface UserInput {
   password: string | null;
   /** Željena prava po modulu; spremaju se samo odstupanja od uloge. */
   permissions: Partial<Record<string, string>>;
+  /** Smije u opasnu zonu (administrator uvijek). undefined = bez promjene. */
+  canDanger?: boolean;
+  /** Promjena statusa na odobrenje: null = prati firmu, true = uvijek, false = nikad. undefined = bez promjene. */
+  requireApproval?: boolean | null;
 }
+
+/** Korisnik pripada firmi: matična (trenutno odabrana) ili ima pristup preko UserCompany. */
+export const inCompany = (companyId: string): Prisma.UserWhereInput => ({ OR: [{ companyId }, { companies: { some: { companyId } } }] });
 
 export const MIN_PASSWORD = 8;
 
@@ -52,8 +59,12 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
   if (oib) assert(/^\d{11}$/.test(oib), 'OIB mora imati 11 znamenki.');
 
   // samo administrator dodjeljuje ulogu administratora i uređuje administratore
-  const me = await tx.user.findFirst({ where: { id: actor.id, companyId: actor.companyId }, select: { role: true } });
+  const me = await tx.user.findFirst({ where: { id: actor.id }, select: { role: true } });
   const actorIsAdmin = me?.role === 'ADMIN';
+  // opasnu zonu i odobrenja statusa dodjeljuje samo administrator
+  if (!actorIsAdmin) {
+    assert(!input.canDanger, 'Pravo na opasnu zonu dodjeljuje samo administrator.');
+  }
   if (!actorIsAdmin) assert(input.role !== 'ADMIN', 'Samo administrator može dodijeliti ulogu administratora.');
 
   if (!id) {
@@ -67,7 +78,11 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
         active: input.active,
         oib,
         permissions,
+        canDanger: input.role !== 'ADMIN' && !!input.canDanger,
+        requireApproval: input.role === 'ADMIN' ? null : (input.requireApproval ?? null),
         passwordHash: await hashPassword(input.password),
+        // pristup firmi u kojoj je otvoren (više firmi: popis firmi korisnika)
+        companies: { create: { companyId: actor.companyId } },
       },
     });
     await audit(tx, actor, {
@@ -80,7 +95,7 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
     return u.id;
   }
 
-  const before = await tx.user.findFirst({ where: { id, companyId: actor.companyId } });
+  const before = await tx.user.findFirst({ where: { id, ...inCompany(actor.companyId) } });
   assert(before, 'Korisnik ne postoji.');
   if (!actorIsAdmin) assert(before.role !== 'ADMIN', 'Samo administrator može mijenjati podatke administratora.');
   if (id === actor.id) {
@@ -89,7 +104,7 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
   }
   // firma mora zadržati barem jednog aktivnog administratora
   if (before.role === 'ADMIN' && before.active && (input.role !== 'ADMIN' || !input.active)) {
-    const others = await tx.user.count({ where: { companyId: actor.companyId, role: 'ADMIN', active: true, id: { not: id } } });
+    const others = await tx.user.count({ where: { ...inCompany(actor.companyId), role: 'ADMIN', active: true, id: { not: id } } });
     assert(others > 0, 'Firma mora imati barem jednog aktivnog administratora.');
   }
 
@@ -102,6 +117,8 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
       active: input.active,
       oib,
       permissions,
+      ...(input.canDanger !== undefined && actorIsAdmin ? { canDanger: input.role !== 'ADMIN' && input.canDanger } : {}),
+      ...(input.requireApproval !== undefined ? { requireApproval: input.role === 'ADMIN' ? null : input.requireApproval } : {}),
       ...(input.password ? { passwordHash: await hashPassword(input.password) } : {}),
     },
   });
@@ -114,6 +131,10 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
   if (before.active !== input.active) changes.active = { from: before.active, to: input.active };
   if (JSON.stringify(before.permissions ?? {}) !== JSON.stringify(permissions)) changes.permissions = { from: before.permissions, to: permissions };
   if (input.password) changes.password = { from: '•••', to: 'nova lozinka' };
+  if (input.canDanger !== undefined && actorIsAdmin && before.canDanger !== (input.role !== 'ADMIN' && input.canDanger)) changes.canDanger = { from: before.canDanger, to: input.canDanger };
+  if (input.requireApproval !== undefined && (before.requireApproval ?? null) !== (input.role === 'ADMIN' ? null : input.requireApproval)) {
+    changes.requireApproval = { from: before.requireApproval, to: input.requireApproval };
+  }
 
   const revoke = (!input.active && before.active) || !!input.password;
   if (revoke) await revokeSessions(tx, id);
@@ -131,12 +152,38 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
 
 /** Odjava korisnika sa svih uređaja. */
 export async function revokeUserSessions(tx: Tx, actor: Actor, id: string) {
-  const u = await tx.user.findFirst({ where: { id, companyId: actor.companyId }, select: { name: true, role: true } });
+  const u = await tx.user.findFirst({ where: { id, ...inCompany(actor.companyId) }, select: { name: true, role: true } });
   if (!u) throw new DomainError('Korisnik ne postoji.');
   if (u.role === 'ADMIN' && id !== actor.id) {
-    const me = await tx.user.findFirst({ where: { id: actor.id, companyId: actor.companyId }, select: { role: true } });
+    const me = await tx.user.findFirst({ where: { id: actor.id }, select: { role: true } });
     assert(me?.role === 'ADMIN', 'Samo administrator može odjaviti administratora.');
   }
   await revokeSessions(tx, id);
   await audit(tx, actor, { entity: 'user', entityId: id, action: 'logout', summary: `Korisnik ${u.name} odjavljen sa svih uređaja` });
+}
+
+// ---------------------------------------------------------------- moj račun (F7)
+
+/** Korisnik mijenja svoje ime. */
+export async function updateOwnProfile(tx: Tx, actor: Actor, input: { name: string }) {
+  const name = input.name.trim();
+  assert(name.length >= 2, 'Upišite ime i prezime.');
+  const before = await tx.user.findUniqueOrThrow({ where: { id: actor.id }, select: { name: true } });
+  if (before.name === name) return;
+  await tx.user.update({ where: { id: actor.id }, data: { name } });
+  await audit(tx, actor, { entity: 'user', entityId: actor.id, action: 'update', summary: `Promijenjeno ime: ${before.name} → ${name}`, diff: { name: { from: before.name, to: name } } });
+}
+
+/**
+ * Korisnik mijenja svoju lozinku (uz trenutnu). Sve sesije se odjavljuju — akcija
+ * odmah otvara novu za ovaj uređaj.
+ */
+export async function changeOwnPassword(tx: Tx, actor: Actor, input: { current: string; next: string }) {
+  const u = await tx.user.findUniqueOrThrow({ where: { id: actor.id }, select: { passwordHash: true } });
+  assert(await bcrypt.compare(input.current, u.passwordHash), 'Trenutna lozinka nije ispravna.');
+  assert(input.next.length >= MIN_PASSWORD, `Nova lozinka mora imati barem ${MIN_PASSWORD} znakova.`);
+  assert(input.next !== input.current, 'Nova lozinka mora biti drukčija od trenutne.');
+  await tx.user.update({ where: { id: actor.id }, data: { passwordHash: await hashPassword(input.next) } });
+  await revokeSessions(tx, actor.id);
+  await audit(tx, actor, { entity: 'user', entityId: actor.id, action: 'password', summary: 'Korisnik je promijenio svoju lozinku — ostali uređaji odjavljeni' });
 }

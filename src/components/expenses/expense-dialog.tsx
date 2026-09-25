@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
+import { Attachments } from '@/components/ui/attachments';
 import { Checkbox, Field, FormGrid, Input, Select, Textarea } from '@/components/ui/field';
 import { Combobox } from '@/components/ui/combobox';
 import { FormError, useAction, type ServerAction } from '@/components/ui/action';
@@ -220,6 +221,14 @@ export function ExpenseDialog({
               </div>
             </div>
           )}
+          <div>
+            <p className="mb-1 text-sm font-medium text-fg-2">Priloženi račun (PDF ili slika)</p>
+            {value.id ? (
+              <Attachments entity="expense" id={value.id} canEdit empty="Nema priloga." />
+            ) : (
+              <p className="text-sm text-fg-3">Prilog se dodaje nakon spremanja troška.</p>
+            )}
+          </div>
           <FormError error={save.error ?? remove.error} />
         </div>
       )}

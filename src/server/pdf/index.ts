@@ -1,6 +1,13 @@
 import 'server-only';
+import type { TDocumentDefinitions } from 'pdfmake/interfaces';
 import { DomainError } from '../errors';
 import type { PdfKind } from '@/domain/documents';
+import { renderPdf } from './engine';
+import { renderDeliveryDefinition, renderInvoiceDefinition } from './invoice';
+import { renderQuoteDefinition } from './quote';
+import { renderServiceDefinition } from './service';
+import { renderOrderDefinition, renderReceiptDefinition } from './purchasing';
+import { renderContractListDefinition } from './contract';
 
 export { renderPdf, pdfResponse, BASE_DOC } from './engine';
 export { renderTablePdf, tableDocDefinition, formatCell, type TablePdfInput } from './table';
@@ -20,16 +27,43 @@ export interface RenderedDocument {
   fileName: string;
 }
 
+export interface RenderOptions {
+  /** Prikaži nabavne cijene (primka) — samo uz pravo `costs`. Zadano: ne. */
+  showCost?: boolean;
+}
+
+/** pdfmake definicija dokumenta i naziv datoteke (za testove i ugradnju u eRačun). */
+export async function documentDefinitionFor(kind: PdfKind, id: string, companyId: string, opts: RenderOptions = {}): Promise<{ def: TDocumentDefinitions; fileName: string }> {
+  switch (kind) {
+    case 'invoice':
+      return renderInvoiceDefinition(companyId, id);
+    case 'delivery':
+      return renderDeliveryDefinition(companyId, id);
+    case 'quote':
+      return renderQuoteDefinition(companyId, id, null);
+    case 'proforma':
+      return renderQuoteDefinition(companyId, id, 'proforma');
+    case 'service':
+      return renderServiceDefinition(companyId, id, false);
+    case 'service-delivery':
+      return renderServiceDefinition(companyId, id, true);
+    case 'order':
+      return renderOrderDefinition(companyId, id);
+    case 'receipt':
+      return renderReceiptDefinition(companyId, id, !!opts.showCost);
+    case 'contract-list':
+      return renderContractListDefinition(companyId, id);
+    default:
+      throw new PdfNotImplementedError(String(kind));
+  }
+}
+
 /**
  * PDF dokumenta (račun, ponuda, predračun, otpremnica, servisni nalog…) za
- * pregled, preuzimanje i privitak e-pošte. Zapis se uvijek traži unutar
- * `companyId`; nepostojeći zapis → DomainError (ruta vraća 404).
- *
- * UGOVOR (faza 0): potpis je konačan; predloške implementira područje A.
- * Dok vrsta nema predložak, baca `PdfNotImplementedError`.
+ * pregled, preuzimanje, privitak e-pošte, ZIP knjigovođe i eRačun. Zapis se
+ * uvijek traži unutar `companyId`; nepostojeći zapis → DomainError (ruta vraća 404).
  */
-export async function renderDocumentPdf(kind: PdfKind, id: string, companyId: string): Promise<RenderedDocument> {
-  void id;
-  void companyId;
-  throw new PdfNotImplementedError(kind);
+export async function renderDocumentPdf(kind: PdfKind, id: string, companyId: string, opts: RenderOptions = {}): Promise<RenderedDocument> {
+  const { def, fileName } = await documentDefinitionFor(kind, id, companyId, opts);
+  return { buffer: await renderPdf(def), fileName };
 }

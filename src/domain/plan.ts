@@ -105,3 +105,55 @@ export function seasonLabel(from?: number | null, to?: number | null): string {
   const s = (m: number) => MONTHS_HR[m - 1].slice(0, 3);
   return `${s(from)}–${s(to)}`;
 }
+
+// ---------------------------------------------------------------- skupne izmjene uvjeta (C6)
+
+/** Skupna sezona na uređajima: sezonski (tra–lis), cijela godina ili kao na ugovoru. */
+export type BulkSeason = 'summer' | 'year' | 'contract';
+
+export const BULK_SEASON_OPTIONS: { value: BulkSeason; label: string }[] = [
+  { value: 'summer', label: 'Sezonski (tra–lis)' },
+  { value: 'year', label: 'Cijela godina' },
+  { value: 'contract', label: 'Kao na ugovoru' },
+];
+
+/** Sezona „ljeto" iz starog programa: travanj–listopad. */
+export const SUMMER_SEASON = { from: 4, to: 10 } as const;
+
+/**
+ * Skupna izmjena naplate i/ili sezone na planu jednog uređaja. Plan bez
+ * razdoblja dobiva jedno razdoblje od početka naplate ugovora (`base`); izmjena
+ * vrijedi za sva razdoblja plana. „Kao na ugovoru" briše sezonu (a kod plana s
+ * jednim razdobljem i vlastitu naplatu); razdoblje koje više ništa ne mijenja
+ * vraća uređaj na uvjete ugovora (prazan plan).
+ */
+export function applyBulkTerms(
+  plan: PlanPeriodInput[] | null | undefined,
+  base: ISODate,
+  patch: { billing?: BillingCode | null; season?: BulkSeason | null },
+): PlanPeriodInput[] {
+  const rows: PlanPeriodInput[] = (plan?.length ? plan : [{ from: base }]).map((p) => ({ ...p }));
+  for (const p of rows) {
+    if (patch.billing) p.billing = patch.billing;
+    if (patch.season === 'summer') {
+      p.seasonFrom = SUMMER_SEASON.from;
+      p.seasonTo = SUMMER_SEASON.to;
+    } else if (patch.season === 'year') {
+      p.seasonFrom = 0;
+      p.seasonTo = 0;
+    } else if (patch.season === 'contract') {
+      delete p.seasonFrom;
+      delete p.seasonTo;
+      if (rows.length === 1 && !patch.billing) delete p.billing;
+    }
+  }
+  const only = rows.length === 1 ? rows[0] : null;
+  const trivial =
+    only &&
+    (!only.from || only.from === base) &&
+    !only.to &&
+    (only.price === null || only.price === undefined) &&
+    !only.billing &&
+    (only.seasonFrom === null || only.seasonFrom === undefined);
+  return trivial ? [] : rows;
+}

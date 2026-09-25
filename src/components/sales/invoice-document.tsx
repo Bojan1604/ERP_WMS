@@ -56,7 +56,7 @@ const time = (iso: string | null) =>
 const fullTime = (iso: string) =>
   new Intl.DateTimeFormat('hr-HR', { timeZone: 'Europe/Zagreb', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(iso));
 
-export function InvoiceDocument({ inv, company, party, currency = '€' }: { inv: InvoiceDocData; company: DocCompany; party: DocParty; currency?: string }) {
+export function InvoiceDocument({ inv, company, party, currency = '€' }: { inv: InvoiceDocData; company: DocCompany & { paymentModel?: string | null; swift?: string | null }; party: DocParty; currency?: string }) {
   const receivable = inv.kind === 'INVOICE' || inv.kind === 'ADVANCE';
   const linesNet = r2(inv.lines.reduce((a, l) => a + l.netAmount, 0));
   const discount = r2(linesNet - inv.netTotal);
@@ -175,9 +175,10 @@ export function InvoiceDocument({ inv, company, party, currency = '€' }: { inv
             <p className="mb-1 text-[10px] uppercase tracking-wider text-black/50">Podaci za plaćanje</p>
             <p>
               IBAN: <b>{company.iban ?? '—'}</b>
+              {company.swift && <> · SWIFT/BIC: <b>{company.swift}</b></>}
             </p>
             <p>
-              Model i poziv na broj: <b>HR00 {inv.paymentRef}</b>
+              Model i poziv na broj: <b>{company.paymentModel || 'HR00'} {inv.paymentRef}</b>
             </p>
             <p>
               Iznos: <b>{eur(inv.kind === 'ADVANCE' ? inv.grandTotal : payable)}</b>

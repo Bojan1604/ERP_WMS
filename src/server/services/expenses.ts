@@ -4,10 +4,8 @@ import type { Tx } from '../db';
 import { assert } from '../errors';
 import { audit } from '../audit';
 import type { Actor } from './items';
-import { fromISO, toISO, today } from '@/domain/dates';
+import { fromISO, today } from '@/domain/dates';
 import { r2 } from '@/domain/money';
-import { nextDocNumber } from '../numbering';
-import { expenseCategoryId } from './purchasing';
 
 // =============================================================================
 //  Troškovi: ručni i ponavljajući troškovi, izmjene pojedinih rata, kategorije.
@@ -76,6 +74,8 @@ export async function saveExpense(tx: Tx, actor: Actor, id: string | null, input
 
 export async function deleteExpense(tx: Tx, actor: Actor, id: string) {
   const e = await manualExpense(tx, actor, id);
+  // prilozi nisu vezani stranim ključem — brišu se s troškom
+  await tx.attachment.deleteMany({ where: { companyId: actor.companyId, entity: 'expense', entityId: id } });
   await tx.expense.delete({ where: { id } });
   await audit(tx, actor, { entity: 'expense', entityId: id, action: 'delete', summary: `Trošak „${e.description}" obrisan` });
 }
@@ -134,147 +134,8 @@ export async function saveExpenseCategory(tx: Tx, actor: Actor, id: string | nul
 }
 
 // ---------------------------------------------------------------- ulazni računi (knjiga URA)
-// Ulazni račun dobavljača po želji knjiži jedan povezani trošak.
+// Ulazni računi i njihov trošak → supplier-invoices.ts (ovdje ostaju izvozi zbog starih uvoza).
 
-export interface SupplierInvoiceInput {
-  supplierId: string;
-  number: string;
-  issueDate: string;
-  dueDate?: string | null;
-  netAmount: number;
-  vatAmount: number;
-  total?: number | null;
-  category?: string | null;
-  note?: string | null;
-  paidDate?: string | null;
-  /** Knjiži kao trošak (stvara ili ažurira povezani trošak). */
-  book: boolean;
-}
-
-export async function saveSupplierInvoice(tx: Tx, actor: Actor, id: string | null, input: SupplierInvoiceInput) {
-  const old = id
-    ? await tx.supplierInvoice.findFirst({
-        where: { id, companyId: actor.companyId },
-        select: { id: true, internalNo: true, source: true, status: true, paidDate: true, eInvoiceId: true, supplierId: true, number: true, issueDate: true, netAmount: true, vatAmount: true, total: true },
-      })
-    : null;
-  assert(!id || old, 'Ulazni račun ne postoji.');
-  if (old?.source === 'EINVOICE') {
-    // dobavljač, broj, datum i iznosi eRačuna dolaze iz XML-a (pravni original) i ne mijenjaju se
-    input = {
-      ...input,
-      supplierId: old.supplierId,
-      number: old.number,
-      issueDate: toISO(old.issueDate),
-      netAmount: Number(old.netAmount),
-      vatAmount: Number(old.vatAmount),
-      total: Number(old.total),
-    };
-  }
-  // eRačun se plaća tek nakon prihvaćanja: posrednik status „plaćen" prije „prihvaćen" odbija, a plaćeni se više ne može odbiti
-  assert(
-    !(old?.source === 'EINVOICE' && old.status === 'RECEIVED' && !old.paidDate && input.paidDate),
-    'Zaprimljeni eRačun prvo prihvatite, pa ga onda označite plaćenim.',
-  );
-  if (old?.status === 'REJECTED') {
-    assert(!input.paidDate, 'Odbijeni račun se ne može označiti plaćenim.');
-    assert(!input.book, 'Odbijeni račun se ne knjiži kao trošak.');
-  }
-  const supplier = await tx.partner.findFirst({ where: { id: input.supplierId, companyId: actor.companyId }, select: { id: true, name: true } });
-  assert(supplier, 'Dobavljač ne postoji.');
-  const number = input.number.trim();
-  assert(number, 'Broj računa dobavljača je obavezan.');
-  // eRačun je upisan preuzimanjem i može biti označen „Mogući duplikat" — broj mu se ne mijenja, pa ga provjera ne smije blokirati
-  if (old?.source !== 'EINVOICE') {
-    const dup = await tx.supplierInvoice.findFirst({
-      where: { companyId: actor.companyId, supplierId: supplier.id, number, ...(id ? { id: { not: id } } : {}) },
-      select: { internalNo: true },
-    });
-    assert(!dup, `Račun ${number} tog dobavljača već je upisan (${dup?.internalNo}).`);
-  }
-  const net = r2(input.netAmount);
-  const vat = r2(input.vatAmount);
-  const total = input.total ? r2(input.total) : r2(net + vat);
-  const data = {
-    supplierId: supplier.id,
-    number,
-    issueDate: fromISO(input.issueDate),
-    dueDate: input.dueDate ? fromISO(input.dueDate) : null,
-    netAmount: net,
-    vatAmount: vat,
-    total,
-    category: input.category ?? null,
-    note: input.note ?? null,
-    paidDate: input.paidDate ? fromISO(input.paidDate) : null,
-  };
-
-  let si: { id: string; internalNo: string };
-  if (id && old) {
-    await tx.supplierInvoice.update({ where: { id }, data });
-    si = { id: old.id, internalNo: old.internalNo };
-  } else {
-    const internalNo = await nextDocNumber(tx, actor.companyId, 'SUPPLIER_INVOICE', Number(input.issueDate.slice(0, 4)));
-    si = await tx.supplierInvoice.create({ data: { companyId: actor.companyId, internalNo, ...data }, select: { id: true, internalNo: true } });
-  }
-
-  if (input.book) {
-    const categoryId = input.category ? await expenseCategoryId(tx, actor.companyId, input.category) : null;
-    const expense = {
-      date: data.issueDate,
-      categoryId,
-      description: `Ulazni račun ${number} — ${supplier.name}`,
-      partnerId: supplier.id,
-      netAmount: net,
-      vatAmount: vat,
-      paid: !!data.paidDate,
-      paidDate: data.paidDate,
-      note: input.note ?? null,
-    };
-    await tx.expense.upsert({
-      where: { supplierInvoiceId: si.id },
-      update: expense,
-      create: { companyId: actor.companyId, ...expense, source: 'SUPPLIER_INVOICE', supplierInvoiceId: si.id, createdBy: actor.name },
-    });
-  } else {
-    await tx.expense.deleteMany({ where: { supplierInvoiceId: si.id, companyId: actor.companyId } });
-  }
-
-  await audit(tx, actor, {
-    entity: 'supplierInvoice',
-    entityId: si.id,
-    action: id ? 'update' : 'create',
-    summary: `Ulazni račun ${si.internalNo} (${number}, ${supplier.name}) ${id ? 'izmijenjen' : 'upisan'}`,
-  });
-  // eRačun koji je ovim spremanjem postao plaćen javlja se posredniku (nakon transakcije)
-  const newlyPaid = old?.source === 'EINVOICE' && !old.paidDate && !!data.paidDate;
-  return { ...si, newlyPaid, eInvoiceId: old?.eInvoiceId ?? null };
-}
-
-export async function setSupplierInvoicesPaid(tx: Tx, actor: Actor, ids: string[], paidDate: string | null) {
-  const found = await tx.supplierInvoice.findMany({ where: { id: { in: ids }, companyId: actor.companyId }, select: { id: true, status: true, source: true, internalNo: true } });
-  assert(found.length === ids.length, 'Neki računi ne postoje.');
-  const rejected = found.filter((f) => f.status === 'REJECTED');
-  assert(!paidDate || !rejected.length, `Odbijeni računi se ne mogu označiti plaćenima: ${rejected.map((r) => r.internalNo).slice(0, 10).join(', ')}`);
-  const pending = found.filter((f) => f.source === 'EINVOICE' && f.status === 'RECEIVED');
-  assert(!paidDate || !pending.length, `Zaprimljene eRačune prvo prihvatite, pa ih onda označite plaćenima: ${pending.map((r) => r.internalNo).slice(0, 10).join(', ')}`);
-  const d = paidDate ? fromISO(paidDate) : null;
-  await tx.supplierInvoice.updateMany({ where: { id: { in: ids }, companyId: actor.companyId }, data: { paidDate: d } });
-  await tx.expense.updateMany({ where: { supplierInvoiceId: { in: ids }, companyId: actor.companyId }, data: { paid: !!d, paidDate: d } });
-  await audit(tx, actor, {
-    entity: 'supplierInvoice',
-    action: d ? 'paid' : 'unpaid',
-    summary: `${ids.length} ulaznih računa označeno kao ${d ? `plaćeno (${paidDate})` : 'neplaćeno'}`,
-  });
-  return ids.length;
-}
-
-export async function deleteSupplierInvoice(tx: Tx, actor: Actor, id: string) {
-  const si = await tx.supplierInvoice.findFirst({ where: { id, companyId: actor.companyId }, select: { id: true, internalNo: true, number: true, source: true, status: true } });
-  assert(si, 'Ulazni račun ne postoji.');
-  // prihvaćen/odbijen eRačun je javljen posredniku (i Poreznoj upravi) — zapis ostaje
-  assert(si.source !== 'EINVOICE' || si.status === 'RECEIVED', 'eRačun koji je prihvaćen ili odbijen kod posrednika se ne briše.');
-  await tx.expense.deleteMany({ where: { supplierInvoiceId: id, companyId: actor.companyId } });
-  await tx.attachment.deleteMany({ where: { companyId: actor.companyId, entity: 'supplierInvoice', entityId: id } });
-  await tx.supplierInvoice.delete({ where: { id } });
-  await audit(tx, actor, { entity: 'supplierInvoice', entityId: id, action: 'delete', summary: `Ulazni račun ${si.internalNo} (${si.number}) obrisan` });
-}
+export {
+  saveSupplierInvoice, setSupplierInvoicesPaid, deleteSupplierInvoice, deleteSupplierInvoices, rebookSupplierInvoice, type SupplierInvoiceInput,
+} from './supplier-invoices';

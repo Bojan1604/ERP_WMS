@@ -97,6 +97,8 @@ async function main() {
   const company = await db.company.create({
     data: {
       name: 'Demo Oprema d.o.o.',
+      // samo demo firma smije „Vrati demo podatke" (Postavke → Podaci)
+      isDemo: true,
       oib: '12345678903',
       vatId: 'HR12345678903',
       address: 'Radnička cesta 80',

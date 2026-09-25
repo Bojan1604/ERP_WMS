@@ -130,6 +130,13 @@ export interface PlanItemEvent { itemKey: Key; at: string; type: string; message
 export interface PlanAttachment { entity: string; entityKey: Key; fileName: string; mime: string; size: number; base64: string; createdBy: string | null; createdAt: string | null }
 export interface PlanUser { name: string; email: string | null; role: string; active: boolean; note?: string }
 export interface PlanCounter { series: Series; year: number; last: number }
+/** Dnevnik poslane e-pošte (sigurnosna kopija ovog programa). */
+export interface PlanEmailLog {
+  kind: string; entityKey: Key | null; to: string; cc: string | null; subject: string; status: 'SENT' | 'FAILED'; error: string | null;
+  messageId: string | null; sentBy: string | null; at: string;
+}
+/** Korisnik portala za klijente — s bcrypt sažetkom lozinke, da se nakon vraćanja može prijaviti. */
+export interface PlanPortalUser { partnerKey: Key; email: string; name: string | null; passwordHash: string; active: boolean; lastLoginAt: string | null; createdAt: string | null }
 
 export type SourceFormat = 'legacy-db' | 'legacy-wrapped' | 'legacy-backup' | 'legacy-split' | 'erp-wms-backup';
 
@@ -162,6 +169,9 @@ export interface ImportPlan {
   attachments: PlanAttachment[];
   users: PlanUser[];
   counters: PlanCounter[];
+  /** Samo sigurnosna kopija ovog programa (stara verzija ih nema). */
+  emailLogs?: PlanEmailLog[];
+  portalUsers?: PlanPortalUser[];
   warnings: PlanWarning[];
   /** Broj upozorenja po šifri (i onih koja nisu zapamćena zbog ograničenja). */
   warningCounts: Record<string, number>;
@@ -201,6 +211,7 @@ export const ENTITY_LABEL: Record<string, string> = {
   rentOverrides: 'Ručni upisi najma', quotes: 'Ponude', orders: 'Narudžbenice', receipts: 'Primke', transfers: 'Međuskladišnice',
   serviceOrders: 'Servisni nalozi', supplierInvoices: 'Ulazni računi', expenses: 'Troškovi', audit: 'Dnevnik (stari zapisi)',
   itemEvents: 'Povijest uređaja', attachments: 'Prilozi', users: 'Korisnici (samo popis)',
+  emailLogs: 'Dnevnik e-pošte', portalUsers: 'Korisnici portala',
 };
 
 export function planCounts(p: ImportPlan): Record<string, number> {
@@ -213,6 +224,7 @@ export function planCounts(p: ImportPlan): Record<string, number> {
     quotes: p.quotes.length, orders: p.orders.length, receipts: p.receipts.length, transfers: p.transfers.length,
     serviceOrders: p.serviceOrders.length, supplierInvoices: p.supplierInvoices.length, expenses: p.expenses.length,
     audit: p.audit.length, itemEvents: p.itemEvents.length, attachments: p.attachments.length, users: p.users.length,
+    emailLogs: p.emailLogs?.length ?? 0, portalUsers: p.portalUsers?.length ?? 0,
   };
 }
 

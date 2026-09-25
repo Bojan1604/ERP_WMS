@@ -4,9 +4,11 @@ import { z } from 'zod';
 import { action } from '@/server/action';
 import { transaction } from '@/server/db';
 import { assert } from '@/server/errors';
-import { zDate, zId, zInt, zMoney, zOptDate, zOptId, zOptText, zText } from '@/server/zod';
+import { zBool, zDate, zId, zInt, zMoney, zOptDate, zOptId, zOptMoney, zOptText, zText } from '@/server/zod';
+import { canSeeCost } from '@/domain/permissions';
 import { deleteOrder, receiveGoods, saveOrder, setOrderStatus } from '@/server/services/purchasing';
 import { parseSerials } from '@/components/purchasing/labels';
+import { saveOrderInvoice } from '@/server/services/supplier-invoices';
 
 const orderSchema = z.object({
   id: zOptId,
@@ -51,12 +53,13 @@ export const receiveLineAction = action(
     unitCost: zMoney,
     supplierDocNumber: zOptText,
     serials: zText,
+    bookExpense: zBool.optional(),
   }),
   async (input, user) =>
     transaction(async (tx) => {
       const line = await tx.purchaseOrderLine.findFirst({
         where: { id: input.lineId, orderId: input.orderId, order: { companyId: user.companyId } },
-        select: { modelId: true },
+        select: { modelId: true, unitCost: true },
       });
       assert(line, 'Stavka narudžbenice ne postoji.');
       const r = await receiveGoods(tx, user, {
@@ -64,8 +67,29 @@ export const receiveLineAction = action(
         warehouseId: input.warehouseId,
         date: input.date,
         supplierDocNumber: input.supplierDocNumber,
-        lines: [{ modelId: line.modelId, unitCost: input.unitCost, serials: parseSerials(input.serials), orderLineId: input.lineId }],
+        bookExpense: input.bookExpense,
+        lines: [{ modelId: line.modelId, unitCost: canSeeCost(user.perms) ? input.unitCost : Number(line.unitCost), serials: parseSerials(input.serials), orderLineId: input.lineId }],
       });
-      return { message: `Primka ${r.number}: zaprimljeno ${r.count} kom.`, data: r };
+      return { message: `Primka ${r.number}: zaprimljeno ${r.count} kom.${r.booked ? '' : ' Trošak nabave nije knjižen.'}`, data: r };
+    }),
+);
+
+/** Račun dobavljača upisan na narudžbenici (broj, datum, dospijeće, valuta, osnovica, PDV); po zaprimanju postaje ulazni račun. */
+export const saveOrderInvoiceAction = action(
+  { module: 'purchasing', level: 'edit' },
+  z.object({
+    orderId: zId,
+    supplierInvoiceNo: zOptText,
+    supplierInvoiceDate: zOptDate,
+    supplierInvoiceDueDate: zOptDate,
+    supplierInvoiceCurrency: zOptText,
+    supplierInvoiceNet: zOptMoney,
+    supplierInvoiceVat: zOptMoney,
+    supplierInvoiceTotal: zOptMoney,
+  }),
+  async ({ orderId, ...input }, user) =>
+    transaction(async (tx) => {
+      const siId = await saveOrderInvoice(tx, user, orderId, input);
+      return { message: siId ? 'Račun dobavljača spremljen — povezan je ulazni račun.' : 'Račun dobavljača spremljen. Ulazni račun nastaje kad se roba zaprimi.' };
     }),
 );

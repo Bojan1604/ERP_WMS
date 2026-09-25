@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { FileCode2, Trash2, Truck } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
-import { can } from '@/domain/permissions';
+import { can, canSeeCost } from '@/domain/permissions';
 import { getCompany } from '@/server/queries/lookups';
 import { getInvoice, getSalesLookups, type InvoiceDetail } from '@/server/queries/sales';
 import { INVOICE_KIND_LABEL, paymentState, type ChargeInput } from '@/domain/invoice';
@@ -12,12 +12,18 @@ import { PageHeader, Card, Badge } from '@/components/ui/misc';
 import { buttonClass, LinkButton } from '@/components/ui/button';
 import { ActionButton } from '@/components/ui/action';
 import { PrintButton } from '@/components/ui/print-button';
+import { PdfButton } from '@/components/ui/pdf-button';
+import { SendEmailButton } from '@/components/ui/send-email-button';
 import { InvoiceEditor, type InvoiceEditorValue } from '@/components/sales/invoice-editor';
 import { InvoiceDocument, toDocData } from '@/components/sales/invoice-document';
 import { CorrectionButtons, PaymentsCard, type PanelInvoice } from '@/components/sales/invoice-panel';
 import { KIND_SHORT, PayBadge, TYPE_LABEL } from '@/components/sales/list-bits';
 import { date, eur } from '@/lib/format';
 import { FiscalCard, type FiscalCardData } from '@/components/sales/fiscal-card';
+import { Attachments } from '@/components/ui/attachments';
+import { ClientSheetButton } from '@/components/partners/client-sheet-link';
+import type { EInvoiceStatusCode } from '@/domain/sales-lines';
+import type { BillingCode } from '@/domain/billing';
 import { isDomesticBusiness } from '@/domain/fiscal';
 import { readMeta } from '@/server/fiscal/issue';
 import { deleteInvoiceDraft } from '../actions';
@@ -59,7 +65,10 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
             </ActionButton>
           }
         />
-        <InvoiceEditor initial={editorValue(inv)} lookups={lookups} />
+        <InvoiceEditor initial={editorValue(inv, canSeeCost(user.perms))} lookups={lookups} showCost={canSeeCost(user.perms)} canCreateService={edit} />
+        <Card title="Prilozi" className="mt-4">
+          <Attachments entity="invoice" id={inv.id} canEdit={edit} empty="Nema priloga — npr. vanjski PDF računa ili narudžbenica kupca." />
+        </Card>
       </>
     );
   }
@@ -95,6 +104,8 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
   const meta = readMeta(inv.eInvoice);
   const fiscal: FiscalCardData = {
     id: inv.id,
+    number: inv.number,
+    kind: inv.kind,
     route: meta.route ?? (inv.zki ? 'CIS' : 'NONE'),
     paymentMethod: inv.paymentMethod,
     status: inv.fiscalStatus,
@@ -104,8 +115,20 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
     error: inv.fiscalError,
     attempts: inv.fiscalAttempts,
     demo: !!meta.cis?.demo || meta.provider === 'demo',
-    eInvoice: { id: meta.id ?? null, status: meta.status ?? null, provider: meta.provider ?? null, sentAt: meta.sentAt ?? null },
+    eInvoice: {
+      id: meta.id ?? null,
+      status: meta.status ?? null,
+      provider: meta.provider ?? null,
+      sentAt: meta.sentAt ?? null,
+      statusText: meta.statusText ?? null,
+      checkedAt: meta.checkedAt ?? null,
+      reportType: meta.reportType ?? null,
+    },
+    eInvoiceStatus: (inv.eInvoiceStatus as EInvoiceStatusCode | null) ?? null,
     canSendEInvoice: !inv.zki && isDomesticBusiness(inv.partner),
+    foreign: (inv.partner.country || 'HR').toUpperCase() !== 'HR',
+    providerSet: company.eInvoiceProvider !== 'none' && !!company.eInvoiceProvider,
+    refSent: !!inv.refInvoice?.eInvoiceStatus,
   };
   const devices = inv.lines.filter((l) => l.item);
   const receivable = inv.kind === 'INVOICE' || inv.kind === 'ADVANCE';
@@ -120,11 +143,13 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
             <PayBadge state={st} />
           </span>
         }
-        subtitle={`${TYPE_LABEL[inv.type]} · ${inv.partner.name} · ${date(inv.date)}`}
+        subtitle={`${TYPE_LABEL[inv.type]}${inv.type !== 'RENT' && inv.lines.some((l) => l.lineType === 'RENT') ? ' + najam' : ''} · ${inv.partner.name} · ${date(inv.date)}${inv.period ? ` · razdoblje ${inv.period}` : ''}`}
         back={back}
         actions={
           <>
             <PrintButton />
+            <PdfButton kind="invoice" id={inv.id} send={edit && inv.status === 'ISSUED'} />
+            {edit && inv.status === 'ISSUED' && <SendEmailButton kind="invoice" id={inv.id} />}
             {devices.length > 0 && (
               <LinkButton href={`/prodaja/racuni/${inv.id}/otpremnica`} icon={<Truck className="size-4" />}>
                 Otpremnica
@@ -159,6 +184,9 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
           {receivable && <PaymentsCard inv={panel} canEdit={edit} />}
           <FiscalCard f={fiscal} canEdit={edit} canSeeLog={can(user.perms, 'settings', 'view')} />
           <LinksCard inv={inv} />
+          <Card title="Prilozi">
+            <Attachments entity="invoice" id={inv.id} canEdit={edit} empty="Nema priloga." />
+          </Card>
           {devices.length > 0 && (
             <Card title={`Uređaji (${devices.length})`} padded={false}>
               <ul className="max-h-72 overflow-y-auto scroll-slim">
@@ -239,6 +267,12 @@ function LinksCard({ inv }: { inv: InvoiceDetail }) {
       )}
     </li>,
   );
+  // uređaji kod klijenta (u najmu / prodani) — popis za klijenta
+  items.push(
+    <li key="sheet" className="pt-1">
+      <ClientSheetButton partnerId={inv.partner.id} contractId={inv.contractId} label="Uređaji kod klijenta" size="sm" />
+    </li>,
+  );
   if (inv.stornoed) items.unshift(<li key="st" className="font-medium text-bad-strong">Račun je storniran i ne ulazi u naplatu.</li>);
   return (
     <Card title="Veze">
@@ -248,7 +282,12 @@ function LinksCard({ inv }: { inv: InvoiceDetail }) {
   );
 }
 
-function editorValue(inv: InvoiceDetail): InvoiceEditorValue {
+function editorValue(inv: InvoiceDetail, showCost: boolean): InvoiceEditorValue {
+  // rata iz modula Najam: račun za najam s ugovorom i razdobljem čiji su svi uređaji već na tom ugovoru
+  const devs = inv.lines.filter((l) => l.kind === 'DEVICE');
+  const rentLocked = inv.type === 'RENT' && !!inv.contract && !!inv.period && devs.length > 0 && devs.every((l) => l.item?.contractItem?.contractId === inv.contractId);
+  const months = inv.lines.find((l) => l.months)?.months ?? 1;
+  const billing: BillingCode = months === 3 ? 'QUARTERLY' : months === 6 ? 'SEMIANNUAL' : months === 12 ? 'ANNUAL' : 'MONTHLY';
   return {
     id: inv.id,
     type: inv.type,
@@ -272,6 +311,11 @@ function editorValue(inv: InvoiceDetail): InvoiceEditorValue {
     paymentMethod: inv.paymentMethod,
     description: inv.description ?? '',
     note: inv.note ?? '',
+    contractId: inv.contractId,
+    period: inv.period ?? '',
+    rent: { startDate: toISO(inv.date), billing, months: 24, seasonFrom: null, seasonTo: null },
+    rentLocked,
+    contract: inv.contract,
     lines: inv.lines.map((l) => ({
       key: l.id,
       kind: l.kind,
@@ -288,8 +332,10 @@ function editorValue(inv: InvoiceDetail): InvoiceEditorValue {
       agreedPrice: l.agreedPrice,
       monthly: l.monthly === null ? null : num(l.monthly),
       months: l.months,
+      lineType: l.lineType === 'SERVICE' ? null : l.lineType,
       serial: l.item?.serial ?? null,
-      cost: l.kind === 'DEVICE' ? num(l.cost) : null,
+      // bez prava „costs" nabavna vrijednost ne ide u preglednik
+      cost: l.kind === 'DEVICE' && showCost ? num(l.cost) : null,
     })),
   };
 }

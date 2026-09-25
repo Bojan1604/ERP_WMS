@@ -94,8 +94,8 @@ test('pdf: generička tablica s hrvatskim znakovima (Roboto, UTF-8)', async () =
   assert.equal(formatCell('2026-03-05', 'date'), '05.03.2026.');
 });
 
-test('pdf: renderDocumentPdf je ugovor (stub) do implementacije u fazi 1', async () => {
-  await assert.rejects(renderDocumentPdf('invoice', 'x', 'c'), PdfNotImplementedError);
+test('pdf: renderDocumentPdf odbija nepoznatu vrstu (predlošci: tests/integration/a-pdf-mail.test.ts)', async () => {
+  await assert.rejects(renderDocumentPdf('nepostojeca' as never, 'x', 'c'), PdfNotImplementedError);
   assert.ok(isPdfKind('invoice') && !isPdfKind('../etc'));
   assert.ok(isMailKind('accountant-zip') && !isMailKind('x'));
 });

@@ -4,11 +4,13 @@ import { z } from 'zod';
 import { action } from '@/server/action';
 import { transaction } from '@/server/db';
 import { assert } from '@/server/errors';
-import { zId } from '@/server/zod';
+import { zId, zOptId } from '@/server/zod';
 import {
   addDevices, createContract, removeFromContract, setContractStatus, setPausedPeriod, terminateContract, updateContractItems, updateContractTerms,
 } from '@/server/services/rentals';
-import { deviceCandidates, type Candidate } from '@/server/queries/rentals';
+import { deleteContract, unskipInstallment } from '@/server/services/contract-admin';
+import { deviceCandidates, hideCostSource, type Candidate } from '@/server/queries/rentals';
+import { canSeeCost } from '@/domain/permissions';
 import { validatePlan } from '@/domain/plan';
 import type { PlanPeriodInput } from '@/domain/billing';
 import { addSchema, createSchema, itemsPatchSchema, termsSchema } from '../schemas';
@@ -67,6 +69,8 @@ export const itemsPatchAction = action({ module: 'rentals', level: 'edit' }, ite
   if (input.monthly !== undefined) patch.monthly = input.monthly;
   if (input.plan !== undefined) patch.plan = cleanPlan(input.plan);
   if (input.status !== undefined) patch.status = input.status === 'PAUSED' ? 'PAUSED' : null;
+  if (input.billing !== undefined) patch.billing = input.billing;
+  if (input.season !== undefined) patch.season = input.season;
   await transaction((tx) => updateContractItems(tx, user, input.contractId, input.ids, patch));
   return { message: `Izmijenjeno uređaja: ${input.ids.length}.` };
 });
@@ -103,5 +107,25 @@ export const addDevicesAction = action({ module: 'rentals', level: 'edit' }, add
 export const searchCandidatesAction = action(
   { module: 'rentals', level: 'view' },
   z.object({ contractId: zId, source: z.enum(['stock', 'partner', 'all']), q: z.string().max(100) }),
-  async (input, user): Promise<Candidate[]> => deviceCandidates(user.companyId, input.contractId, input),
+  async (input, user): Promise<Candidate[]> => hideCostSource(await deviceCandidates(user.companyId, input.contractId, input), canSeeCost(user.perms)),
+);
+
+/** Brisanje ugovora bez računa (C5); `warehouseId` = uređaji se vraćaju na skladište (ugovor otvoren greškom). */
+export const deleteContractAction = action(
+  { module: 'rentals', level: 'edit' },
+  z.object({ id: zId, warehouseId: zOptId }),
+  async ({ id, warehouseId }, user) => {
+    const r = await transaction((tx) => deleteContract(tx, user, id, { warehouseId }));
+    return { message: `Ugovor ${r.number} obrisan.`, redirect: '/najam/ugovori' };
+  },
+);
+
+/** „Vrati u izdavanje": rata označena kao izdana izvan programa ponovno se traži. */
+export const unskipAction = action(
+  { module: 'rentals', level: 'edit' },
+  z.object({ contractId: zId, period: z.string().regex(/^\d{4}-\d{2}$/, 'Neispravno razdoblje') }),
+  async ({ contractId, period }, user) => {
+    const n = await transaction((tx) => unskipInstallment(tx, user, contractId, period));
+    return { message: `Rata vraćena u izdavanje (${n} uređaja).` };
+  },
 );

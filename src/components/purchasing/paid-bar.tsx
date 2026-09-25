@@ -5,11 +5,20 @@ import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { Field, Input } from '@/components/ui/field';
 import { SelectionBar } from '@/components/ui/selection';
-import { useAction, type ServerAction } from '@/components/ui/action';
+import { ActionButton, useAction, type ServerAction } from '@/components/ui/action';
 import { useToast } from '@/components/ui/toast';
 
 /** Skupno označavanje plaćenosti označenih redaka (ulazni računi). */
-export function PaidBar({ action, today }: { action: ServerAction<{ ids: string[]; paidDate: string | null }, unknown>; today: string }) {
+export function PaidBar({
+  action,
+  today,
+  remove,
+}: {
+  action: ServerAction<{ ids: string[]; paidDate: string | null }, unknown>;
+  today: string;
+  /** Skupno brisanje (ulazni računi) — neobavezno. */
+  remove?: ServerAction<{ ids: string[] }, unknown>;
+}) {
   const [ask, setAsk] = useState<{ ids: string[]; clear: () => void } | null>(null);
   const [d, setD] = useState(today);
   const toast = useToast();
@@ -40,6 +49,19 @@ export function PaidBar({ action, today }: { action: ServerAction<{ ids: string[
               >
                 Označi neplaćeno
               </Button>
+              {remove && (
+                <ActionButton
+                  size="sm"
+                  variant="danger"
+                  action={remove}
+                  input={{ ids }}
+                  confirm={`Obrisati ${ids.length} ulaznih računa i njihove knjižene troškove? Prihvaćeni i odbijeni eRačuni se ne brišu (javljeni su posredniku) — tada se ne briše ništa.`}
+                  confirmLabel="Obriši"
+                  onSuccess={clear}
+                >
+                  Obriši ({ids.length})
+                </ActionButton>
+              )}
             </>
           )}
         </SelectionBar>

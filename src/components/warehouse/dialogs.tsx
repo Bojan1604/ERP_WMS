@@ -35,6 +35,8 @@ export interface Perms {
   canEdit: boolean;
   canOps: boolean;
   needsApproval: boolean;
+  /** Pravo na nabavne cijene i marže (undefined = da, stari pozivi). */
+  canSeeCost?: boolean;
 }
 
 /** Sažetak odabranih uređaja potreban dijalozima (upozorenja). */
@@ -269,9 +271,9 @@ export function WriteOffDialog({ meta, ...base }: Base & { meta: SelectedMeta })
   );
 }
 
-export function BulkEditDialog({ warehouses, models, count, ...base }: Base & { warehouses: Option[]; models: Option[]; count: number }) {
+export function BulkEditDialog({ warehouses, models, count, canSeeCost = true, ...base }: Base & { warehouses: Option[]; models: Option[]; count: number; canSeeCost?: boolean }) {
   const [on, setOn] = useState<Record<string, boolean>>({});
-  const [v, setV] = useState({ warehouseId: '', supplierId: null as string | null, cost: '', modelId: '', note: '' });
+  const [v, setV] = useState({ warehouseId: '', supplierId: null as string | null, cost: '', modelId: '', note: '', partnerId: null as string | null, marginPct: '' });
   const toggle = (k: string) => setOn((o) => ({ ...o, [k]: !o[k] }));
   // označeno polje mora imati vrijednost (prazna nabavna cijena ne smije postati 0 na svim uređajima)
   const missing = on.cost && !v.cost.trim()
@@ -299,6 +301,8 @@ export function BulkEditDialog({ warehouses, models, count, ...base }: Base & { 
         ...(on.cost ? { cost: v.cost } : {}),
         ...(on.modelId ? { modelId: v.modelId } : {}),
         ...(on.note ? { note: v.note } : {}),
+        ...(on.partnerId ? { partnerId: v.partnerId } : {}),
+        ...(on.marginPct ? { marginPct: v.marginPct } : {}),
       })}
       confirmLabel="Spremi izmjene"
       disabled={!Object.values(on).some(Boolean) || !!missing}
@@ -307,7 +311,9 @@ export function BulkEditDialog({ warehouses, models, count, ...base }: Base & { 
       {missing && <p className="text-sm text-warn">{missing}</p>}
       {row('warehouseId', 'Skladište', <Select value={v.warehouseId} onChange={(e) => setV({ ...v, warehouseId: e.target.value })} placeholder="Odaberite…" options={warehouses} />)}
       {row('supplierId', 'Dobavljač', <PartnerPicker value={v.supplierId} onChange={(x) => setV({ ...v, supplierId: x })} role="supplier" placeholder="— bez dobavljača —" />)}
-      {row('cost', 'Nabavna cijena', <Input inputMode="decimal" value={v.cost} onChange={(e) => setV({ ...v, cost: e.target.value })} placeholder="0,00" />)}
+      {canSeeCost && row('cost', 'Nabavna cijena', <Input inputMode="decimal" value={v.cost} onChange={(e) => setV({ ...v, cost: e.target.value })} placeholder="0,00" />)}
+      {canSeeCost && row('marginPct', 'Bruto marža %', <Input inputMode="decimal" value={v.marginPct} onChange={(e) => setV({ ...v, marginPct: e.target.value })} placeholder="prazno = prati model / firmu" />)}
+      {row('partnerId', 'Klijent', <PartnerPicker value={v.partnerId} onChange={(x) => setV({ ...v, partnerId: x })} role="customer" placeholder="— ukloni klijenta —" />)}
       {row('modelId', 'Model', <Select value={v.modelId} onChange={(e) => setV({ ...v, modelId: e.target.value })} placeholder="Odaberite…" options={models} />)}
       {row('note', 'Napomena', <Input value={v.note} onChange={(e) => setV({ ...v, note: e.target.value })} placeholder="prazno = briše napomenu" />)}
     </ActionDialog>

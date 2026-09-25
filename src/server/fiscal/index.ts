@@ -13,6 +13,7 @@ import { providerFor } from './einvoice';
 import { readMeta, type InvoiceFiscalMeta } from './issue';
 import { claimSend, ownsClaim } from './claim';
 import { invoiceUbl } from './ubl-source';
+import { withInvoicePdf } from '../pdf/einvoice';
 
 /**
  * Fiskalizacija nakon izdavanja. Sve ovdje radi IZVAN transakcije izdavanja
@@ -165,7 +166,7 @@ export async function sendEInvoice(invoiceId: string, actor: Actor, opts: { rese
   const inv = await db.invoice
     .findFirst({
       where: { id: invoiceId, companyId: actor.companyId },
-      include: { company: { select: { id: true, oib: true, eInvoiceProvider: true, eInvoiceApiKey: true, fiscalEnv: true } }, partner: { select: { oib: true, country: true } } },
+      include: { company: { select: { id: true, oib: true, eInvoiceProvider: true, eInvoiceApiKey: true, fiscalEnv: true, eInvoiceAttachPdf: true } }, partner: { select: { oib: true, country: true } } },
     })
     .catch(() => null);
   if (!inv) return { ok: false, message: 'Račun ne postoji.' };
@@ -194,7 +195,16 @@ export async function sendEInvoice(invoiceId: string, actor: Actor, opts: { rese
     // ne prepisuje eRačun koji je u međuvremenu upisan kao poslan (zastarjelo zauzimanje)
     const saved = await db.invoice.updateMany({
       where: { id: inv.id, fiscalStatus: { not: 'SENT' } },
-      data: { eInvoice: next as Prisma.InputJsonValue, fiscalStatus: 'SENT', fiscalizedAt: new Date(), fiscalError: null, fiscalAttempts: { increment: 1 } },
+      data: {
+        eInvoice: next as Prisma.InputJsonValue,
+        fiscalStatus: 'SENT',
+        fiscalizedAt: new Date(),
+        fiscalError: null,
+        fiscalAttempts: { increment: 1 },
+        // preslika za filtre popisa (Invoice.eInvoiceStatus)
+        eInvoiceStatus: 'SENT',
+        eInvoiceStatusAt: new Date(),
+      },
     });
     if (!saved.count) {
       await log(c.id, inv.id, 'EINVOICE', false, { request, response, error: `Posrednik je vratio ${id}, ali eRačun je već upisan kao poslan — provjerite duplikat kod posrednika.` });
@@ -227,7 +237,9 @@ export async function sendEInvoice(invoiceId: string, actor: Actor, opts: { rese
     const ubl = await invoiceUbl(actor.companyId, inv.id);
     if (!ubl?.xml) throw new Error('eRačun XML se ne može izraditi.');
     request = `${provider.code === 'demo' ? '[DEMO — nije poslano] ' : ''}${ubl.fileName}\n${ubl.xml}`;
-    const r = await provider.send(ubl.xml, { number: inv.number ?? '', buyerOib: inv.partner.oib, sellerOib: c.oib });
+    // PDF računa ugrađen u UBL (postavka „prilaži PDF"); u dnevnik ide XML bez njega
+    const xml = await withInvoicePdf(ubl.xml, actor.companyId, inv.id, inv.company.eInvoiceAttachPdf);
+    const r = await provider.send(xml, { number: inv.number ?? '', buyerOib: inv.partner.oib, sellerOib: c.oib });
     response = r.raw ?? null;
     if (r.unreachable) throw new UnreachableError(r.error || 'Posrednik nije dostupan.', !!r.uncertain);
     if (!r.ok || !r.id) throw new Error(r.error || 'Posrednik nije prihvatio dokument.');
@@ -240,7 +252,14 @@ export async function sendEInvoice(invoiceId: string, actor: Actor, opts: { rese
     await db.invoice
       .updateMany({
         where: { id: inv.id, fiscalStatus: { not: 'SENT' }, ...ownsClaim(claim.token) },
-        data: { eInvoice: next as Prisma.InputJsonValue, fiscalStatus: 'FAILED', fiscalError: error.slice(0, 1000), fiscalAttempts: { increment: 1 } },
+        data: {
+          eInvoice: next as Prisma.InputJsonValue,
+          fiscalStatus: 'FAILED',
+          fiscalError: error.slice(0, 1000),
+          fiscalAttempts: { increment: 1 },
+          eInvoiceStatus: 'ERROR',
+          eInvoiceStatusAt: new Date(),
+        },
       })
       .catch((x) => console.error('[fiscal]', x));
     await log(c.id, inv.id, 'EINVOICE', false, { request, response, error });
@@ -260,14 +279,15 @@ export async function reportLatestPayment(invoiceId: string, actor: Actor): Prom
     const inv = await db.invoice.findFirst({
       where: { id: invoiceId, companyId: actor.companyId },
       include: {
-        company: { select: { id: true, oib: true, eInvoiceProvider: true, eInvoiceApiKey: true, fiscalEnv: true } },
+        company: { select: { id: true, oib: true, eInvoiceProvider: true, eInvoiceApiKey: true, fiscalEnv: true, eReportingEnabled: true } },
         partner: { select: { oib: true, vatId: true } },
         payments: { orderBy: { createdAt: 'desc' }, take: 1 },
       },
     });
     const meta = readMeta(inv?.eInvoice);
     const pay = inv?.payments[0];
-    if (!inv || !pay || !meta.id || meta.status !== 'SENT') return null;
+    // eIzvještavanje o naplati može se isključiti u postavkama (Company.eReportingEnabled)
+    if (!inv || !pay || !meta.id || meta.status !== 'SENT' || !inv.company.eReportingEnabled) return null;
     const provider = providerFor(meta.provider ?? inv.company.eInvoiceProvider, decryptSecret(inv.company.eInvoiceApiKey), meta.env ?? inv.company.fiscalEnv);
     if (!provider) return null;
     const report = {

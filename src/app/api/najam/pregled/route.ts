@@ -18,10 +18,11 @@ export async function GET(req: Request) {
       { label: 'Model', value: (r) => r.model },
       { label: 'Kategorija', value: (r) => r.category },
       { label: 'Status', value: (r) => r.status.name },
+      { label: 'Vrsta', value: (r) => (r.contract ? 'najam' : 'prodaja') },
       { label: 'Ugovor', value: (r) => r.contract?.number },
-      { label: 'Mjesečno', value: (r) => r.monthly || null },
-      ...MONTHS_SHORT.map((m, i): CsvColumn<Row> => ({ label: m, value: (r) => r.cells[i].v })),
-      { label: 'Ukupno', value: (r) => r.total },
+      { label: 'Mjesečno', value: (r) => r.monthly || null, type: 'money' },
+      ...MONTHS_SHORT.map((m, i): CsvColumn<Row> => ({ label: m, value: (r) => r.cells[i].v, type: 'money' })),
+      { label: 'Ukupno', value: (r) => r.total, type: 'money' },
     ];
     return await csvOrXlsx(req, rows, cols, `najam-${f.year}`, `Najam ${f.year}`);
   } catch (e) {

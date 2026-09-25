@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { FileText, Printer, Truck } from 'lucide-react';
+import { FileText, Printer, Trash2, Truck } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import { getLookups, modelLabel } from '@/server/queries/lookups';
@@ -12,17 +12,27 @@ import { daysBetween, formatDate, toISO, today } from '@/domain/dates';
 import { num } from '@/domain/money';
 import { Badge, COLOR_TONE, Card, Detail, PageHeader } from '@/components/ui/misc';
 import { LinkButton } from '@/components/ui/button';
+import { PdfButton } from '@/components/ui/pdf-button';
+import { SendEmailButton } from '@/components/ui/send-email-button';
 import { ServiceEditForm } from '@/components/service/service-edit-form';
 import { ReplaceDialog, ReturnDialog, StatusControl } from '@/components/service/service-actions';
 import { Timeline } from '@/components/service/timeline';
 import { LONG_SERVICE_DAYS, SERVICE_STATUS, isOpenService, type TimelineEntry } from '@/components/service/labels';
 import { eur } from '@/lib/format';
-import { replaceDeviceAction, returnDeviceAction, searchDevicesAction, serviceStatusAction, updateServiceAction } from '../actions';
+import { ActionButton } from '@/components/ui/action';
+import { Attachments } from '@/components/ui/attachments';
+import { plain } from '@/server/plain';
+import { canAttachment, listAttachments } from '@/server/services/attachments';
+import { deleteServiceAction, replaceDeviceAction, returnDeviceAction, searchDevicesAction, serviceStatusAction, updateServiceAction } from '../actions';
 
 export default async function ServiceOrderPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await pageAccess('service', 'view');
   const { id } = await params;
-  const [o, lookups] = await Promise.all([getServiceOrder(user.companyId, id), getLookups(user.companyId)]);
+  const [o, lookups, photos] = await Promise.all([
+    getServiceOrder(user.companyId, id),
+    getLookups(user.companyId),
+    listAttachments(db, user.companyId, 'serviceOrder', [id]),
+  ]);
   if (!o) notFound();
   const canEdit = can(user.perms, 'service', 'edit');
   const timeline = (Array.isArray(o.timeline) ? o.timeline : []) as unknown as TimelineEntry[];
@@ -53,6 +63,11 @@ export default async function ServiceOrderPage({ params }: { params: Promise<{ i
         title={
           <span className="flex items-center gap-3">
             Servisni nalog {o.number} <Badge tone={st.tone}>{st.label}</Badge>
+            {o.source === 'PORTAL' && (
+              <Badge tone="brand" title="Kvar je prijavio klijent kroz portal">
+                portal
+              </Badge>
+            )}
           </span>
         }
         subtitle={`${o.serial ?? ''}${item ? ` · ${modelLabel(item.model)}` : ''}${o.partner ? ` · ${o.partner.name}` : ''}`}
@@ -69,6 +84,22 @@ export default async function ServiceOrderPage({ params }: { params: Promise<{ i
             <LinkButton href={`/servis/${id}/ispis?vrsta=dostava`} icon={<Truck className="size-4" />}>
               Nalog za dostavu
             </LinkButton>
+            <PdfButton kind={open ? 'service' : 'service-delivery'} id={id} send={canEdit} />
+            {canEdit && <SendEmailButton kind="service" id={id} />}
+            {canEdit && o.status !== 'REPLACED' && (
+              <ActionButton
+                action={deleteServiceAction}
+                input={{ id }}
+                variant="ghost"
+                className="text-bad-strong"
+                icon={<Trash2 className="size-4" />}
+                confirmTitle={`Obrisati nalog ${o.number}?`}
+                confirmLabel="Obriši nalog"
+                confirm="Nalog se briše s tijekom i fotografijama (npr. otvoren greškom ili dvostruka prijava). Nalog po kojem je uređaj još na servisu ne može se obrisati — uređaj prvo vratite."
+              >
+                Obriši
+              </ActionButton>
+            )}
           </>
         }
       />
@@ -97,6 +128,15 @@ export default async function ServiceOrderPage({ params }: { params: Promise<{ i
                 reportedAt: toISO(o.reportedAt),
                 receivedAt: o.receivedAt ? toISO(o.receivedAt) : null,
               }}
+            />
+          </Card>
+          <Card title="Fotografije i dokumenti">
+            <Attachments
+              entity="serviceOrder"
+              id={id}
+              canEdit={canAttachment(user.perms, 'serviceOrder', 'add')}
+              initial={plain(photos)}
+              empty="Nema fotografija — dodajte slike kvara, naljepnice ili dokumente."
             />
           </Card>
           <Card title="Tijek naloga">
@@ -154,6 +194,8 @@ export default async function ServiceOrderPage({ params }: { params: Promise<{ i
                   </Link>
                 </Detail>
               )}
+              {o.source === 'PORTAL' && <Detail label="Izvor">portal za klijente</Detail>}
+              {o.contact && <Detail label="Kontakt">{o.contact}</Detail>}
               <Detail label="Prijavljeno">{formatDate(o.reportedAt)}</Detail>
               <Detail label="Zaprimljeno">{formatDate(o.receivedAt)}</Detail>
               <Detail label="Zatvoreno">{formatDate(o.closedAt)}</Detail>

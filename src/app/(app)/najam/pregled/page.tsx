@@ -2,13 +2,14 @@ import { Table2 } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { can } from '@/domain/permissions';
 import { getLookups, getPartnerOptions } from '@/server/queries/lookups';
-import { FilterBar, SearchFilter, SelectFilter, ToggleFilter } from '@/components/ui/filters';
+import { FilterBar, MultiSelectFilter, SearchFilter, SelectFilter, ToggleFilter } from '@/components/ui/filters';
 import { Pagination, readPage } from '@/components/ui/pagination';
 import { Empty, PageHeader, TableWrap } from '@/components/ui/misc';
 import { OverviewGrid } from '@/components/rentals/overview-grid';
 import { today } from '@/domain/dates';
 import { loadOverview, readFilters } from './data';
 import { ExportButtons } from '@/components/ui/export-buttons';
+import { ClientSheetButton } from '@/components/partners/client-sheet-link';
 
 export const metadata = { title: 'Pregled najma' };
 
@@ -34,7 +35,10 @@ export default async function RentOverviewPage({ searchParams }: { searchParams:
         title="Pregled najma"
         subtitle={`Iznosi naplate po mjesecima za ${f.year}. — ručni upis ima prednost pred izračunom s ugovora`}
         actions={
-          <ExportButtons href={`/api/najam/pregled${qs ? `?${qs}` : ''}`} />
+          <>
+            {f.partner && <ClientSheetButton partnerId={f.partner} />}
+            <ExportButtons href={`/api/najam/pregled${qs ? `?${qs}` : ''}`} />
+          </>
         }
       />
       <FilterBar>
@@ -43,6 +47,15 @@ export default async function RentOverviewPage({ searchParams }: { searchParams:
         <SelectFilter name="partner" placeholder="Svi klijenti" options={partners.map((p) => ({ value: p.id, label: p.name }))} />
         <SelectFilter name="kategorija" placeholder="Sve kategorije" options={lookups.categories.map((c) => ({ value: c.id, label: c.name }))} />
         <SelectFilter name="model" placeholder="Svi modeli" options={lookups.models.map((m) => ({ value: m.id, label: [m.brand, m.name].filter(Boolean).join(' ') }))} />
+        <MultiSelectFilter name="status" label="Status" options={lookups.statuses.map((st) => ({ value: st.id, label: st.name }))} />
+        <MultiSelectFilter
+          name="vrsta"
+          label="Vrsta"
+          options={[
+            { value: 'najam', label: 'Najam' },
+            { value: 'prodaja', label: 'Prodaja' },
+          ]}
+        />
         <ToggleFilter name="naplata" label={`Samo s naplatom u ${f.year}.`} />
         <ToggleFilter name="prodani" label="Prodani u godini" />
         <ToggleFilter name="iskljuceni" label="Isključeni partneri" />

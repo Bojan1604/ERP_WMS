@@ -6,6 +6,7 @@ import { History, ListChecks, Loader2, PackagePlus, ScanLine, SearchX, Send } fr
 import { Button, buttonClass } from '@/components/ui/button';
 import { Scanner, beep, vibrate } from '@/components/scan/scanner';
 import { ScanInput, useWedgeScanner } from '@/components/scan/scan-input';
+import { ImageScan } from '@/components/scan/image-scan';
 import { cn } from '@/lib/cn';
 import { ScanBatch, entryDevice, type BatchEntry } from './scan-batch';
 import { ScanDeviceCard, VariantPicker } from './scan-device-card';
@@ -191,6 +192,13 @@ export function ScanStation({ perms, options }: { perms: Perms; options: Warehou
         </div>
         <Scanner onCode={handle} beepOnRead={false} height="h-44 sm:h-64" />
         <ScanInput onScan={handle} camera={false} size="lg" submitLabel="Traži" placeholder="Upišite ili očitajte čitačem…" />
+        <ImageScan
+          onCodes={(codes) => {
+            // više kodova sa slike ide u serijski popis
+            if (codes.length > 1 && modeRef.current === 'single') setMode('batch');
+            for (const c of codes) handle(c);
+          }}
+        />
         <p className="text-xs text-fg-3">
           Ručni čitač barkodova radi uvijek — samo skenirajte. Čita se serijski broj, GS1 kod (AI 21) i QR s naljepnice ovog programa.
         </p>

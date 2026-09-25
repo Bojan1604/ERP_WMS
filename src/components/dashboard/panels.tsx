@@ -94,3 +94,37 @@ export function PanelRow({ href, left, sub, right }: { href?: string; left: Reac
     </li>
   );
 }
+
+const NOTICE_TONE: Record<'bad' | 'warn' | 'info' | 'brand', { bar: string; pill: string }> = {
+  bad: { bar: 'border-l-bad-strong', pill: 'bg-bad-soft text-bad-strong' },
+  warn: { bar: 'border-l-warn', pill: 'bg-warn-soft text-warn' },
+  info: { bar: 'border-l-info', pill: 'bg-info-soft text-info' },
+  brand: { bar: 'border-l-brand', pill: 'bg-brand/10 text-brand' },
+};
+
+/** Traka obavijesti na vrhu ploče (nove prijave, povrat s terena, zaprimanje, sigurnosna kopija). */
+export function NoticeBar({ tone, tag, title, detail, href, linkLabel }: { tone: keyof typeof NOTICE_TONE; tag: string; title: ReactNode; detail?: ReactNode; href?: string; linkLabel?: string }) {
+  const t = NOTICE_TONE[tone];
+  const inner = (
+    <>
+      <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-xs font-medium', t.pill)}>{tag}</span>
+      <span className="min-w-0 flex-1">
+        <span className="font-medium text-fg">{title}</span>
+        {detail && <span className="block truncate text-xs text-fg-3 sm:ml-2 sm:inline">{detail}</span>}
+      </span>
+      {href && (
+        <span className="hidden shrink-0 items-center gap-1 text-sm text-brand sm:inline-flex">
+          {linkLabel ?? 'Otvori'} <ArrowRight className="size-3.5" />
+        </span>
+      )}
+    </>
+  );
+  const cls = cn('flex items-center gap-3 rounded-lg border-l-4 bg-panel px-4 py-2.5 text-sm shadow-[var(--shadow-panel)]', t.bar);
+  return href ? (
+    <Link prefetch={false} href={href} className={cn(cls, 'hover:bg-panel-2')}>
+      {inner}
+    </Link>
+  ) : (
+    <div className={cls}>{inner}</div>
+  );
+}

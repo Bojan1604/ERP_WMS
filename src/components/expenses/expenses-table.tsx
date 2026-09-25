@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { Plus, Repeat } from 'lucide-react';
+import { Paperclip, Plus, Repeat } from 'lucide-react';
 import { Badge, Empty } from '@/components/ui/misc';
 import { Button } from '@/components/ui/button';
 import { ActionButton, type ServerAction } from '@/components/ui/action';
@@ -76,6 +76,7 @@ export function ExpensesTable({
   actions,
   paidAction,
   canEdit,
+  attachments = {},
 }: {
   rows: OccurrenceRow[];
   manual: Record<string, ExpenseValue>;
@@ -85,6 +86,8 @@ export function ExpensesTable({
   /** Plaćeno/neplaćeno za troškove primki i otpisa (ulazni račun se plaća na računu, ručni u obrascu). */
   paidAction: ServerAction<{ ids: string[]; paid: boolean }, unknown>;
   canEdit: boolean;
+  /** Broj priloga po trošku (oznaka spajalice). */
+  attachments?: Record<string, number>;
 }) {
   const [edit, setEdit] = useState<{ value: ExpenseValue; period: string | null } | null>(null);
   if (!rows.length) return <Empty title="Nema troškova za zadane filtre" description="Nabava se knjiži sama iz primki, ostalo upisujete ovdje." />;
@@ -126,6 +129,11 @@ export function ExpensesTable({
                     )}
                     {r.description}
                     {r.overridden && <Badge tone="warn">izmijenjena rata</Badge>}
+                    {(attachments[r.expenseId] ?? 0) > 0 && (
+                      <span title={`Priloga: ${attachments[r.expenseId]}`} className="inline-flex items-center text-fg-3">
+                        <Paperclip className="size-3.5" />
+                      </span>
+                    )}
                   </span>
                 </td>
                 <td className="max-w-48 truncate">{r.partner ?? '—'}</td>

@@ -1,7 +1,7 @@
 import {
-  ArrowLeftRight, BarChart3, Boxes, Building2, CalendarClock, ClipboardList, FileSignature, FileText, History, Inbox, LayoutDashboard, ListTree, PackageCheck, PackagePlus, Receipt, ShieldCheck, Table2, Truck, UserCog, Users, Wallet, Wrench,
-  ScanLine, ClipboardCheck, Stamp, DatabaseBackup,
-  MonitorSmartphone, Smartphone, QrCode, SlidersHorizontal, AppWindow, FolderOpen, Network, BookOpen, Calculator,
+  ArrowLeftRight, BarChart3, Building, HardDrive, Boxes, Building2, CalendarClock, ClipboardList, FileSignature, FileText, History, Inbox, LayoutDashboard, ListTree, PackageCheck, PackagePlus, Receipt, ShieldCheck, Table2, Truck, UserCog, Users, Wallet, Wrench,
+  ScanLine, ClipboardCheck, Stamp, DatabaseBackup, Mail,
+  MonitorSmartphone, Smartphone, QrCode, SlidersHorizontal, AppWindow, FolderOpen, Network, BookOpen, Calculator, TrendingUp,
   type LucideIcon,
 } from 'lucide-react';
 import type { Module } from '@/domain/permissions';
@@ -14,6 +14,8 @@ export interface NavItem {
   level?: 'view' | 'ops' | 'edit';
   /** Samo za ulogu administratora (stranica to i sama provjerava). */
   adminOnly?: boolean;
+  /** Administrator ili korisnik s pravom na opasnu zonu (User.canDanger). */
+  dangerOnly?: boolean;
 }
 
 export interface NavGroup {
@@ -44,6 +46,7 @@ export const NAV: NavGroup[] = [
     items: [
       { href: '/prodaja/racuni', label: 'Računi', icon: Receipt, module: 'sales' },
       { href: '/prodaja/ponude', label: 'Ponude', icon: FileText, module: 'sales' },
+      { href: '/prodaja/marze', label: 'Marže i profit', icon: TrendingUp, module: 'costs' },
     ],
   },
   {
@@ -91,7 +94,10 @@ export const NAV: NavGroup[] = [
       { href: '/postavke', label: 'Firma', icon: Building2, module: 'settings' },
       { href: '/postavke/sifrarnici', label: 'Šifrarnici', icon: ListTree, module: 'settings' },
       { href: '/postavke/fiskalizacija', label: 'Fiskalizacija', icon: Stamp, module: 'settings' },
+      { href: '/postavke/posta', label: 'E-pošta', icon: Mail, module: 'settings' },
       { href: '/postavke/uvoz', label: 'Uvoz i izvoz', icon: DatabaseBackup, module: 'settings', level: 'edit', adminOnly: true },
+      { href: '/postavke/podaci', label: 'Podaci i kopije', icon: HardDrive, module: 'settings', dangerOnly: true },
+      { href: '/postavke/firme', label: 'Firme', icon: Building, module: 'settings', adminOnly: true },
       { href: '/postavke/korisnici', label: 'Korisnici', icon: UserCog, module: 'users' },
       { href: '/postavke/dnevnik', label: 'Dnevnik promjena', icon: History, module: 'log' },
     ],

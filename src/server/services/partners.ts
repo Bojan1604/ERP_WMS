@@ -3,6 +3,7 @@ import type { Tx } from '../db';
 import { audit, diff } from '../audit';
 import { DomainError, assert } from '../errors';
 import type { Actor } from './items';
+import { isVatOverride } from '@/domain/tax';
 
 export interface PartnerInput {
   name: string;
@@ -21,6 +22,11 @@ export interface PartnerInput {
   excluded: boolean;
   paymentTermDays: number | null;
   note: string | null;
+  /** eRačun (C8): adresa „shema:id", ručna PDV kategorija, poslovna jedinica. Izostavljeno = bez promjene. */
+  endpointId?: string | null;
+  vatCategoryOverride?: string | null;
+  branchCode?: string | null;
+  branchName?: string | null;
 }
 
 export async function savePartner(tx: Tx, actor: Actor, id: string | null, input: PartnerInput) {
@@ -31,6 +37,20 @@ export async function savePartner(tx: Tx, actor: Actor, id: string | null, input
     iban: input.iban?.replace(/\s+/g, '').toUpperCase() || null,
   };
   assert(data.isCustomer || data.isSupplier, 'Partner mora biti kupac, dobavljač ili oboje.');
+  if (input.endpointId !== undefined) {
+    const ep = input.endpointId?.replace(/\s+/g, '') || null;
+    assert(!ep || /^(\d{4}:)?[A-Za-z0-9._\-]{2,60}$/.test(ep), 'eRačun adresa mora biti oblika „shema:id" (npr. 9934:12345678901) ili samo id.');
+    data.endpointId = ep;
+  }
+  if (input.vatCategoryOverride !== undefined) {
+    const v = input.vatCategoryOverride?.trim().toUpperCase() || null;
+    assert(!v || isVatOverride(v), 'Nepoznata PDV kategorija.');
+    // O = „nije predmet PDV-a" ne vrijedi za domaćeg kupca (obrt/paušalist dobiva račun s PDV-om)
+    assert(v !== 'O' || data.country !== 'HR', 'Kategorija O („nije predmet PDV-a") ne vrijedi za kupca u Hrvatskoj — kupac izvan sustava PDV-a dobiva račun s PDV-om (S).');
+    data.vatCategoryOverride = v;
+  }
+  if (input.branchCode !== undefined) data.branchCode = input.branchCode?.trim() || null;
+  if (input.branchName !== undefined) data.branchName = input.branchCode?.trim() ? input.branchName?.trim() || null : null;
   if (data.oib) {
     const dup = await tx.partner.findFirst({ where: { companyId: actor.companyId, oib: data.oib, ...(id ? { id: { not: id } } : {}) }, select: { name: true } });
     assert(!dup, `Partner s OIB-om ${data.oib} već postoji: ${dup?.name}.`);

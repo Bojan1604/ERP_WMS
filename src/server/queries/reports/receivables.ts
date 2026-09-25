@@ -2,7 +2,7 @@ import 'server-only';
 import { Prisma } from '@prisma/client';
 import { db } from '../../db';
 import { today } from '@/domain/dates';
-import { n, opt, type ReportDef, type Row } from './types';
+import { inIds, n, periodSql, typeSql, type ReportDef, type Row } from './types';
 
 /** Otvoreni računi (potraživanja) — bez storniranih i bez isključenih partnera. */
 const openSql = (companyId: string) =>
@@ -22,14 +22,14 @@ export const receivableReports: ReportDef[] = [
     title: 'Starost potraživanja',
     area: 'Naplata',
     description: 'Otvoreni iznosi po kupcu, razvrstani po danima kašnjenja nakon dospijeća.',
-    filters: ['partner'],
+    filters: ['partner', 'type'],
     run: async (companyId, f) => {
       const now = today();
       const rows = await db.$queryRaw<Array<{ id: string; name: string; cnt: number; notDue: Prisma.Decimal; d30: Prisma.Decimal; d60: Prisma.Decimal; d90: Prisma.Decimal; d90p: Prisma.Decimal; total: Prisma.Decimal; maxLate: number | null }>>`
         WITH o AS (
           SELECT i."partnerId", i."openAmount" AS amt, (${now}::date - COALESCE(i."dueDate", i."date")) AS late
           FROM "Invoice" i JOIN "Partner" p ON p.id = i."partnerId"
-          WHERE ${openSql(companyId)} ${opt(!!f.partnerId, Prisma.sql`AND i."partnerId" = ${f.partnerId}`)}
+          WHERE ${openSql(companyId)} ${inIds('i."partnerId"', f.partnerIds)} ${typeSql('i."type"', f)}
         )
         SELECT p.id, p.name, COUNT(*)::int AS cnt,
                COALESCE(SUM(amt) FILTER (WHERE late <= 0), 0) AS "notDue",
@@ -64,14 +64,14 @@ export const receivableReports: ReportDef[] = [
     title: 'Nenaplaćeni računi',
     area: 'Naplata',
     description: 'Svi izdani računi s otvorenim iznosom, od najstarijeg dospijeća.',
-    filters: ['partner'],
+    filters: ['range', 'partner', 'type'],
     run: async (companyId, f) => {
       const now = today();
       const rows = await db.$queryRaw<Array<{ id: string; number: string | null; partner: string; date: Date; dueDate: Date | null; total: Prisma.Decimal; paid: Prisma.Decimal; open: Prisma.Decimal; late: number }>>`
         SELECT i.id, i."number", p.name AS partner, i."date", i."dueDate", i."grandTotal" AS total, i."paidTotal" + i."advanceAmount" + i."creditedTotal" AS paid,
                i."openAmount" AS open, (${now}::date - COALESCE(i."dueDate", i."date"))::int AS late
         FROM "Invoice" i JOIN "Partner" p ON p.id = i."partnerId"
-        WHERE ${openSql(companyId)} ${opt(!!f.partnerId, Prisma.sql`AND i."partnerId" = ${f.partnerId}`)}
+        WHERE ${openSql(companyId)} ${inIds('i."partnerId"', f.partnerIds)} ${typeSql('i."type"', f)} ${periodSql('i."date"', { year: null, from: f.from, to: f.to })}
         ORDER BY COALESCE(i."dueDate", i."date"), i."seq"
         LIMIT 2000`;
       return {
@@ -98,7 +98,7 @@ export const receivableReports: ReportDef[] = [
     title: 'Brzina naplate po kupcu',
     area: 'Naplata',
     description: 'Prosječan broj dana od datuma računa do potpune naplate, i koliko kupac kasni nakon dospijeća.',
-    filters: ['year'],
+    filters: ['year', 'range', 'partner', 'type'],
     run: async (companyId, f) => {
       const rows = await db.$queryRaw<Array<{ id: string; name: string; paid: number; avgDays: number | null; avgLate: number | null; lateShare: number | null; maxDays: number | null; amount: Prisma.Decimal }>>`
         SELECT p.id, p.name, COUNT(*)::int AS paid,
@@ -109,7 +109,7 @@ export const receivableReports: ReportDef[] = [
                SUM(i."grandTotal") AS amount
         FROM "Invoice" i JOIN "Partner" p ON p.id = i."partnerId"
         WHERE i."companyId" = ${companyId} AND i."status" = 'ISSUED' AND i."kind" IN ('INVOICE','ADVANCE') AND i."stornoed" = false
-          AND i."paidDate" IS NOT NULL AND p."excluded" = false AND i."year" = ${f.year}
+          AND i."paidDate" IS NOT NULL AND p."excluded" = false ${periodSql('i."date"', f)} ${inIds('i."partnerId"', f.partnerIds)} ${typeSql('i."type"', f)}
         GROUP BY p.id ORDER BY "avgDays" DESC`;
       const all = rows.reduce((a, r) => a + r.paid, 0);
       const wAvg = (k: 'avgDays' | 'avgLate') => (all ? rows.reduce((a, r) => a + (r[k] ?? 0) * r.paid, 0) / all : null);

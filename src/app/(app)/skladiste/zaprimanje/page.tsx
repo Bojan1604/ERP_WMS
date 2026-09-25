@@ -7,6 +7,7 @@ import { listAttachments } from '@/server/services/attachments';
 import { Notice, PageHeader } from '@/components/ui/misc';
 import { ReceiveForm, type ReceiveRequestInfo } from '@/components/warehouse/receive-form';
 import { MAX_RECEIVE, parseSerials } from '@/domain/warehouse';
+import { canSeeCost } from '@/domain/permissions';
 
 type Params = Record<string, string | string[] | undefined>;
 
@@ -62,6 +63,7 @@ export default async function ReceivePage({ searchParams }: { searchParams: Prom
         warehouses={lookups.warehouses.map((w) => ({ value: w.id, label: w.name }))}
         initialSerials={initialSerials}
         request={request}
+        canSeeCost={canSeeCost(user.perms)}
       />
     </>
   );

@@ -3,7 +3,10 @@ import { notFound } from 'next/navigation';
 import { pageAccess } from '@/server/auth';
 import { getCompany } from '@/server/queries/lookups';
 import { getReceipt } from '@/server/queries/purchasing';
-import { can } from '@/domain/permissions';
+import { can, canSeeCost } from '@/domain/permissions';
+import { db } from '@/server/db';
+import { listAttachments } from '@/server/services/attachments';
+import { Attachments } from '@/components/ui/attachments';
 import { num } from '@/domain/money';
 import { Badge, Notice } from '@/components/ui/misc';
 import { ActionButton } from '@/components/ui/action';
@@ -11,15 +14,19 @@ import { PrintButton } from '@/components/ui/print-button';
 import { DocTable, DocTotals, DocumentShell, docDate } from '@/components/doc/document';
 import { RECEIPT_STATUS } from '@/components/purchasing/labels';
 import { amount, dateTime, eur } from '@/lib/format';
-import { cancelReceiptAction } from '../actions';
+import { bookReceiptExpenseAction, cancelReceiptAction } from '../actions';
 
 export default async function ReceiptPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await pageAccess('purchasing', 'view');
   const { id } = await params;
-  const [data, company] = await Promise.all([getReceipt(user.companyId, id), getCompany(user.companyId)]);
+  const [data, company, files] = await Promise.all([getReceipt(user.companyId, id), getCompany(user.companyId), listAttachments(db, user.companyId, 'receipt', [id])]);
   if (!data) notFound();
   const { receipt, groups, count, blocked } = data;
   const canEdit = can(user.perms, 'purchasing', 'edit');
+  const costs = canSeeCost(user.perms);
+  // ulazni računi povezani s primkom izravno ili preko narudžbenice
+  const invoices = [...receipt.supplierInvoices, ...(receipt.order?.supplierInvoices ?? [])].filter((s, i, a) => a.findIndex((x) => x.id === s.id) === i);
+  const invoiceOwn = invoices.find((s) => s.expense);
   const cancelled = receipt.status === 'CANCELLED';
   const st = RECEIPT_STATUS[receipt.status];
 
@@ -43,13 +50,31 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
               Narudžbenica {receipt.order.number}
             </Link>
           )}
-          {receipt.expense && (
+          {invoices.map((s) => (
+            <Link key={s.id} prefetch={false} href={`/nabava/ulazni/${s.id}`} className="link text-sm">
+              Ulazni račun {s.internalNo} ({s.number})
+            </Link>
+          ))}
+          {costs && receipt.expense && (
             <span className="text-sm text-fg-3">
               Trošak: {eur(num(receipt.expense.netAmount))} + PDV {eur(num(receipt.expense.vatAmount))}
             </span>
           )}
+          {costs && !receipt.expense && !cancelled && (
+            <span className="text-sm text-fg-3">{invoiceOwn ? `Trošak robe knjižen je ulaznim računom ${invoiceOwn.internalNo}.` : 'Trošak nabave nije knjižen.'}</span>
+          )}
         </div>
         <div className="flex gap-2">
+          {canEdit && !cancelled && receipt.supplierId && (
+            <Link prefetch={false} href={`/nabava/ulazni/novi?primka=${id}`} className="link self-center text-sm">
+              + Ulazni račun
+            </Link>
+          )}
+          {canEdit && costs && !cancelled && !receipt.expense && !invoiceOwn && num(receipt.total) > 0 && (
+            <ActionButton action={bookReceiptExpenseAction} input={{ id }} confirm={`Knjižiti trošak nabave ${eur(num(receipt.total))} (primka ${receipt.number})?`} confirmLabel="Knjiži trošak">
+              Knjiži trošak
+            </ActionButton>
+          )}
           {canEdit && !cancelled && (
             <ActionButton
               action={cancelReceiptAction}
@@ -92,7 +117,7 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
       >
         {groups.length ? (
           <DocTable
-            head={['R. br.', 'Artikl', 'Serijski brojevi', 'Kol.', 'Nabavna', 'Iznos']}
+            head={['R. br.', 'Artikl', 'Serijski brojevi', 'Kol.', ...(costs ? ['Nabavna', 'Iznos'] : [])]}
             align={['left', 'left', 'left', 'right', 'right', 'right']}
             rows={groups.map((g, i) => [
               `${i + 1}.`,
@@ -104,8 +129,7 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
                 {g.serials.join(', ')}
               </span>,
               `${g.qty} kom`,
-              amount(g.unitCost),
-              amount(g.total),
+              ...(costs ? [amount(g.unitCost), amount(g.total)] : []),
             ])}
           />
         ) : (
@@ -114,11 +138,15 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
         <DocTotals
           rows={[
             ['Količina', `${count} kom`],
-            ['Ukupno nabavna vrijednost (EUR)', amount(num(receipt.total)), true],
+            ...(costs ? ([['Ukupno nabavna vrijednost (EUR)', amount(num(receipt.total)), true]] as Array<[string, string, boolean]>) : []),
           ]}
         />
         {receipt.note && <p className="mt-6 whitespace-pre-line text-[11px]">{receipt.note}</p>}
       </DocumentShell>
+      <div className="no-print mx-auto mt-4 max-w-[210mm] rounded-lg bg-panel p-4 shadow-[var(--shadow-panel)]">
+        <p className="mb-2 text-sm font-medium text-fg-2">Prilozi (otpremnica, sken)</p>
+        <Attachments entity="receipt" id={id} canEdit={canEdit} initial={files} />
+      </div>
     </>
   );
 }

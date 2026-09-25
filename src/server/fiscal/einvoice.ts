@@ -68,6 +68,12 @@ export interface EInvoiceProvider {
   ping(): Promise<ProviderResult>;
   /** AMS (adresar primatelja eRačuna): može li primatelj s tim OIB-om primati eRačune. */
   amsCheck?(oib: string): Promise<ProviderResult & { registered?: boolean }>;
+  /** Provjera UBL-a kod posrednika bez slanja (document/validate). */
+  validate?(xml: string): Promise<ProviderResult & { errors?: string[] }>;
+  /** PDF (vizualizacija) poslanog dokumenta, base64. */
+  visualization?(id: string): Promise<ProviderResult & { pdfBase64?: string }>;
+  /** Fiskalizacija računa koji ne ide kao eRačun: IR (kupac izvan AMS-a) ili I (eIzvještavanje, strani kupac). */
+  reportDocument?(xml: string, type: 'IR' | 'I', meta: SendMeta): Promise<ProviderResult>;
 
   // ---- ulazni eRačuni (kupac)
   /** Primljeni dokumenti (najnoviji prvi, koliko posrednik vrati). */
@@ -100,6 +106,20 @@ export const demoProvider: EInvoiceProvider = {
   },
   async amsCheck(oib) {
     return { ok: true, registered: true, demo: true, raw: JSON.stringify({ demo: true, oib, registered: true }) };
+  },
+  async validate(xml) {
+    // demo: samo osnovna provjera oblika (UBL Invoice/CreditNote)
+    const ok = /<(?:\w+:)?(Invoice|CreditNote)[\s>]/.test(xml);
+    return ok
+      ? { ok: true, demo: true, errors: [], raw: JSON.stringify({ demo: true, valid: true }) }
+      : { ok: false, demo: true, errors: ['Dokument nije UBL Invoice ni CreditNote.'], error: 'Dokument nije UBL Invoice ni CreditNote.' };
+  },
+  async visualization(id) {
+    return { ok: true, demo: true, id, pdfBase64: DEMO_PDF, raw: JSON.stringify({ demo: true, id }) };
+  },
+  async reportDocument(xml, type, meta) {
+    const id = `DEMO-${type}-${randomUUID()}`;
+    return { ok: true, id, status: 'REPORTED', demo: true, raw: JSON.stringify({ demo: true, id, type, number: meta.number, bytes: xml.length }) };
   },
   async incoming() {
     const docs = demoIncoming().map((d) => d.doc);
@@ -201,6 +221,26 @@ export function eposlovanjeProvider(apiKey: string, env: 'TEST' | 'PROD', timeou
       const r = await call('GET', 'document/outgoing?limit=1&offset=0');
       return { ...r, status: r.ok ? 'OK' : undefined };
     },
+    async validate(xml) {
+      const r = await call('POST', 'document/validate', { document: xml });
+      const d = r.data as Record<string, unknown> | undefined;
+      const msgs = errorList(d).filter((m) => !/^(ok|valid|success)/i.test(m));
+      const valid = r.ok && d?.valid !== false && d?.isValid !== false && !msgs.length;
+      return valid ? { ...r, ok: true, errors: [] } : { ...r, ok: false, errors: msgs.length ? msgs : [r.error || 'Provjera nije prošla.'], error: (msgs.length ? msgs : [r.error || 'Provjera nije prošla.']).join('; ') };
+    },
+    async visualization(id) {
+      const r = await call('GET', `document/visualization/${encodeURIComponent(id)}`);
+      if (!r.ok) return { ...r, id };
+      const d = r.data as Record<string, unknown> | undefined;
+      const pick = (v: unknown) => (typeof v === 'string' && v.length > 100 ? v : '');
+      const b64 = pick(d?.raw) || pick(d?.pdf) || pick(d?.content) || pick(d?.data) || pick(d?.visualization);
+      return b64 ? { ...r, id, pdfBase64: b64.replace(/^data:.*?;base64,/, '') } : { ...r, id, ok: false, error: 'Posrednik nije vratio PDF.' };
+    },
+    async reportDocument(xml, type) {
+      const r = await call('POST', 'ereporting/reportdocument', { document: xml, type, softwareId });
+      const id = r.data?.id ?? r.data?.documentId;
+      return { ...r, id: id != null ? String(id) : undefined, status: r.ok ? 'REPORTED' : undefined, ...(r.ok && id == null ? { ok: false, error: 'Posrednik nije vratio id dokumenta.' } : {}) };
+    },
     async amsCheck(oib) {
       // 9934 = shema hrvatskog OIB-a u AMS-u
       const r = await call('POST', 'ams/check', { schema: '9934', identifier: oib });
@@ -247,6 +287,17 @@ export function eposlovanjeProvider(apiKey: string, env: 'TEST' | 'PROD', timeou
 
 const httpStatus = (r: ProviderResult & { httpStatus?: number }) => r.httpStatus;
 
+/** Sve poruke iz odgovora posrednika (validacija). */
+function errorList(data: unknown): string[] {
+  const t = errorText(data);
+  return t ? t.split('; ') : [];
+}
+
+/** Najmanji ispravan PDF (demo „vizualizacija" posrednika). */
+const DEMO_PDF = Buffer.from(
+  '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj 3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj 4 0 obj<</Length 58>>stream\nBT /F1 18 Tf 72 760 Td (eRacun - demo vizualizacija) Tj ET\nendstream endobj 5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n',
+).toString('base64');
+
 function errorText(data: unknown): string {
   const out: string[] = [];
   const walk = (v: unknown, depth = 0) => {
@@ -265,7 +316,7 @@ function errorText(data: unknown): string {
 
 const failing = (code: string, error: string): EInvoiceProvider => {
   const no = async (): Promise<ProviderResult> => ({ ok: false, error });
-  return { code, send: no, status: no, reportPayment: no, ping: no, incoming: no, documentXml: no, changeStatus: no, reportRejected: no };
+  return { code, send: no, status: no, reportPayment: no, ping: no, incoming: no, documentXml: no, changeStatus: no, reportRejected: no, validate: no, visualization: no, reportDocument: no };
 };
 
 /** Posrednik prema postavkama firme (ključ je već dešifriran). */

@@ -7,6 +7,8 @@ import { Topbar } from '@/components/layout/topbar';
 import { MobileNav } from '@/components/layout/mobile-nav';
 import { ResponsiveTables } from '@/components/layout/responsive-tables';
 import { ToastProvider } from '@/components/ui/toast';
+import { portalNewCount } from '@/server/portal/count';
+import { currentBuildId, onlineUsers } from '@/server/queries/presence';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await getUser();
@@ -14,13 +16,23 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   const c = user.companyId;
   // vanjski korisnici MDM-a ne vide ERP brojače
-  const [approvals, reserved, returning] = user.mdmOrgId
-    ? [0, 0, 0]
+  const [approvals, reserved, returning, portalNew] = user.mdmOrgId
+    ? [0, 0, 0, 0]
     : await Promise.all([
         db.approvalRequest.count({ where: { companyId: c, status: 'PENDING' } }),
         db.item.count({ where: { companyId: c, state: 'RESERVED' } }),
         db.item.count({ where: { companyId: c, state: 'RETURNING' } }),
+        // nove prijave kvara s portala za klijente (crvena značka uz Servis)
+        portalNewCount(c),
       ]);
+
+  // zaglavlje: firme za prebacivanje (više firmi), tko je prijavljen, izdanje programa (obavijest o novoj verziji)
+  const [access, online, buildId] = await Promise.all([
+    user.mdmOrgId ? [] : db.userCompany.findMany({ where: { userId: user.id }, select: { company: { select: { id: true, name: true } } } }),
+    user.mdmOrgId ? [] : onlineUsers(c),
+    currentBuildId(),
+  ]);
+  const companies = [{ id: c, name: user.companyName }, ...access.map((a) => a.company).filter((x) => x.id !== c)].sort((a, b) => a.name.localeCompare(b.name, 'hr'));
 
   return (
     <ToastProvider>
@@ -28,11 +40,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <Sidebar
           perms={user.perms}
           isAdmin={user.role === 'ADMIN'}
+          canDanger={!!user.canDanger}
           company={user.mdmOrgName ?? user.companyName}
-          badges={{ '/skladiste/odobrenja': approvals, '/skladiste/izlaz': reserved + returning }}
+          badges={{ '/skladiste/odobrenja': approvals, '/skladiste/izlaz': reserved + returning, '/servis': portalNew }}
+          alerts={['/servis']}
         />
         <div className="flex min-w-0 flex-1 flex-col">
-          <Topbar user={{ name: user.name, role: ROLE_LABEL[user.role] }} />
+          <Topbar user={{ id: user.id, name: user.name, role: ROLE_LABEL[user.role] }} companies={companies} companyId={c} online={online} buildId={buildId} />
           <main className="min-h-0 flex-1 overflow-y-auto scroll-slim p-3 pb-24 sm:p-5 lg:pb-5">{children}</main>
         </div>
       </div>

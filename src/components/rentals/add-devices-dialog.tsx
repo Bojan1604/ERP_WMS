@@ -21,7 +21,7 @@ const SOURCES: { value: CandidateSource; label: string; hint: string }[] = [
   { value: 'all', label: 'Svi uređaji', hint: 'Svi raspoloživi uređaji koji nisu na ugovoru' },
 ];
 
-const SOURCE_LABEL: Record<string, string> = { agreed: 'dogovorena', item: 'uređaj', model: 'model', cost: '% nabavne' };
+const SOURCE_LABEL: Record<string, string> = { agreed: 'dogovorena', item: 'uređaj', model: 'model', cost: '% nabavne', default: 'zadano' };
 
 /**
  * Dodavanje uređaja na ugovor u skupini s istim uvjetima: tri izvora,

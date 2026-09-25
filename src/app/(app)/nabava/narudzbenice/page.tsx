@@ -3,7 +3,8 @@ import { ClipboardList, Plus, TriangleAlert } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { listOrders, lowStock, orderYears, supplierOptions } from '@/server/queries/purchasing';
 import { modelLabel } from '@/server/queries/lookups';
-import { can } from '@/domain/permissions';
+import { can, canSeeCost } from '@/domain/permissions';
+import { ExportButtons } from '@/components/ui/export-buttons';
 import { num } from '@/domain/money';
 import { Badge, Card, Empty, PageHeader, TableWrap } from '@/components/ui/misc';
 import { FilterBar, SearchFilter, SelectFilter } from '@/components/ui/filters';
@@ -23,6 +24,9 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
   const canEdit = can(user.perms, 'purchasing', 'edit');
   const filtered = ['q', 'status', 'supplier', 'year'].some((k) => typeof sp[k] === 'string' && sp[k]);
   const toOrder = low.filter((m) => m.missing > 0);
+  const costs = canSeeCost(user.perms);
+  const qs = new URLSearchParams();
+  for (const k of ['q', 'status', 'supplier', 'year']) if (typeof sp[k] === 'string' && sp[k]) qs.set(k, sp[k] as string);
   const prefill = (rows: typeof low) => `/nabava/narudzbenice/novi?lines=${rows.map((m) => `${m.id}:${Math.max(1, m.missing)}`).join(',')}`;
 
   return (
@@ -31,11 +35,14 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
         title="Narudžbenice"
         subtitle="Narudžbe robe od dobavljača"
         actions={
-          canEdit && (
-            <LinkButton href="/nabava/narudzbenice/novi" variant="primary" icon={<Plus className="size-4" />}>
-              Nova narudžbenica
-            </LinkButton>
-          )
+          <>
+            <ExportButtons href={`/api/nabava/narudzbenice?${qs}`} />
+            {canEdit && (
+              <LinkButton href="/nabava/narudzbenice/novi" variant="primary" icon={<Plus className="size-4" />}>
+                Nova narudžbenica
+              </LinkButton>
+            )}
+          </>
         }
       />
 
@@ -116,7 +123,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
                 <th>Dobavljač</th>
                 <th>Očekivano</th>
                 <th className="num">Zaprimljeno / naručeno</th>
-                <th className="num">Iznos</th>
+                {costs && <th className="num">Iznos</th>}
                 <th>Status</th>
               </tr>
             </thead>
@@ -138,7 +145,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
                     <td className="num">
                       {integer(rec)} / {integer(qty)}
                     </td>
-                    <td className="num">{eur(num(o.total))}</td>
+                    {costs && <td className="num">{eur(num(o.total))}</td>}
                     <td>
                       <Badge tone={st.tone}>{st.label}</Badge>
                     </td>
@@ -149,7 +156,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
             <tfoot>
               <tr>
                 <td colSpan={5}>Ukupno: {integer(list.total)} narudžbenica</td>
-                <td className="num">{eur(list.sum)}</td>
+                {costs && <td className="num">{eur(list.sum)}</td>}
                 <td />
               </tr>
             </tfoot>

@@ -13,7 +13,7 @@ import {
 } from '@/domain/billing';
 import { addMonths, formatDate, fromISO, periodLabel, toISO, today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
-import { pastPeriods } from '@/domain/plan';
+import { applyBulkTerms, BULK_SEASON_OPTIONS, pastPeriods, validatePlan, type BulkSeason } from '@/domain/plan';
 import { customerVat } from '@/domain/tax';
 
 export { toDevice, toReturnedDevice, toTerms } from './contract-items';
@@ -134,7 +134,7 @@ export async function draftInstallment(tx: Tx, actor: Actor, contractId: string,
       unitPrice: l.amount,
     };
   });
-  const vat = customerVat(c.partner.country, { vatRegistered: c.company.vatRegistered, vatRate: num(c.company.vatRate), country: c.company.country });
+  const vat = customerVat(c.partner, { vatRegistered: c.company.vatRegistered, vatRate: num(c.company.vatRate), country: c.company.country });
   // datum rate, ali ne kasniji od danas ni raniji od zadnjeg izdanog računa
   let date = installmentDate(toTerms(c), period);
   if (date > today()) date = today();
@@ -249,6 +249,18 @@ export interface ContractTermsInput {
   seasonFrom: number | null;
   seasonTo: number | null;
   note: string | null;
+  /** Ručni broj ugovora (C5); prazno = automatski iz brojača (kod izmjene: ostaje postojeći). */
+  number?: string | null;
+}
+
+/** Ručni broj ugovora: očišćen, jedinstven u firmi. */
+async function manualNumber(tx: Tx, companyId: string, raw: string | null | undefined, exceptId?: string) {
+  const number = String(raw ?? '').trim().replace(/\s+/g, ' ');
+  if (!number) return null;
+  assert(number.length <= 40, 'Broj ugovora može imati najviše 40 znakova.');
+  const dup = await tx.contract.findFirst({ where: { companyId, number, ...(exceptId ? { id: { not: exceptId } } : {}) }, select: { id: true } });
+  assert(!dup, `Ugovor s brojem ${number} već postoji.`);
+  return number;
 }
 
 function termsData(t: ContractTermsInput) {
@@ -284,7 +296,8 @@ export async function createContract(tx: Tx, actor: Actor, input: ContractTermsI
   const partner = await tx.partner.findFirst({ where: { id: input.partnerId, companyId: actor.companyId }, select: { id: true, name: true } });
   assert(partner, 'Klijent ne postoji.');
   const data = termsData(input);
-  const number = await nextDocNumber(tx, actor.companyId, 'CONTRACT', Number(input.startDate.slice(0, 4)));
+  const number =
+    (await manualNumber(tx, actor.companyId, input.number)) ?? (await nextDocNumber(tx, actor.companyId, 'CONTRACT', Number(input.startDate.slice(0, 4))));
   const c = await tx.contract.create({
     data: { companyId: actor.companyId, number, partnerId: partner.id, status: 'ACTIVE', ...data, createdBy: actor.name },
   });
@@ -295,7 +308,8 @@ export async function createContract(tx: Tx, actor: Actor, input: ContractTermsI
 export async function updateContractTerms(tx: Tx, actor: Actor, id: string, input: ContractTermsInput) {
   const c = await ownContract(tx, actor, id);
   assert(editable(c.status), 'Uvjeti raskinutog ili isteklog ugovora se ne mijenjaju.');
-  const data = termsData(input);
+  const number = await manualNumber(tx, actor.companyId, input.number, id);
+  const data = { ...termsData(input), ...(number && number !== c.number ? { number } : {}) };
   const changes = diff(c as unknown as Record<string, unknown>, data as unknown as Record<string, unknown>);
   await tx.contract.update({ where: { id }, data });
   if (Object.keys(changes).length) {
@@ -309,7 +323,7 @@ export async function updateContractTerms(tx: Tx, actor: Actor, id: string, inpu
 
 const TERM_LABEL: Record<string, string> = {
   startDate: 'početak', endDate: 'kraj', firstBillingDate: 'prva naplata', billingDay: 'dan naplate',
-  billing: 'naplata', billingMode: 'način', seasonFrom: 'sezona od', seasonTo: 'sezona do', note: 'napomena',
+  billing: 'naplata', billingMode: 'način', seasonFrom: 'sezona od', seasonTo: 'sezona do', note: 'napomena', number: 'broj',
 };
 
 /**
@@ -428,7 +442,7 @@ export async function updateContractItems(
   actor: Actor,
   contractId: string,
   ids: string[],
-  patch: { monthly?: number; plan?: PlanPeriodInput[]; status?: 'PAUSED' | null },
+  patch: { monthly?: number; plan?: PlanPeriodInput[]; status?: 'PAUSED' | null; billing?: BillingCode; season?: BulkSeason },
 ) {
   const c = await ownContract(tx, actor, contractId);
   assert(editable(c.status), 'Uređaji raskinutog ili isteklog ugovora se ne mijenjaju.');
@@ -449,7 +463,31 @@ export async function updateContractItems(
     data.status = patch.status;
     what.push(patch.status === 'PAUSED' ? 'pauzirano' : 'nastavljeno');
   }
+  // skupna naplata i/ili sezona (C6): plan svakog uređaja mijenja se zasebno, upis po skupinama istog plana
+  const bulkPlan = patch.plan === undefined && (patch.billing || patch.season);
+  if (bulkPlan) {
+    if (patch.billing) what.push(`naplata ${BILLING_LABEL[patch.billing].toLowerCase()}`);
+    if (patch.season) what.push(`sezona: ${BULK_SEASON_OPTIONS.find((o) => o.value === patch.season)?.label.toLowerCase()}`);
+  }
   assert(what.length, 'Nema promjene.');
+  if (bulkPlan) {
+    const terms = toTerms(c);
+    const base = terms.firstBillingDate || terms.startDate;
+    const cur = await tx.contractItem.findMany({ where: { contractId, id: { in: ids } }, select: { id: true, plan: true } });
+    const groups = new Map<string, { plan: PlanPeriodInput[]; ids: string[] }>();
+    for (const r of cur) {
+      const next = applyBulkTerms((r.plan as unknown as PlanPeriodInput[]) ?? [], base, { billing: patch.billing, season: patch.season });
+      const err = validatePlan(next);
+      assert(!err, err ?? '');
+      const key = JSON.stringify(next);
+      const g = groups.get(key) ?? { plan: next, ids: [] };
+      g.ids.push(r.id);
+      groups.set(key, g);
+    }
+    for (const g of groups.values()) {
+      await tx.contractItem.updateMany({ where: { contractId, id: { in: g.ids } }, data: { plan: g.plan as unknown as Prisma.InputJsonValue } });
+    }
+  }
   const t = today();
   if (patch.status === 'PAUSED') {
     // početak pauze pamti se samo za uređaje koji još nisu pauzirani

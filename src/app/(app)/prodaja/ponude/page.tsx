@@ -6,7 +6,9 @@ import { getPartnerOptions } from '@/server/queries/lookups';
 import { listQuotes, readQuoteFilters } from '@/server/queries/sales';
 import { toISO, today } from '@/domain/dates';
 import { num } from '@/domain/money';
-import { PageHeader, TableWrap, Empty } from '@/components/ui/misc';
+import { PageHeader, TableWrap, Empty, Badge } from '@/components/ui/misc';
+import { ExportButtons } from '@/components/ui/export-buttons';
+import { getCompany } from '@/server/queries/lookups';
 import { LinkButton } from '@/components/ui/button';
 import { FilterBar, SearchFilter, SegmentFilter, SelectFilter } from '@/components/ui/filters';
 import { Pagination, readPage } from '@/components/ui/pagination';
@@ -22,20 +24,32 @@ export default async function QuotesPage({ searchParams }: { searchParams: Promi
   const sp = await searchParams;
   const f = readQuoteFilters(sp);
   const page = readPage(sp, 50);
-  const [list, partners] = await Promise.all([listQuotes(user.companyId, f, page), getPartnerOptions(user.companyId, 'customer')]);
+  const [list, partners, company] = await Promise.all([listQuotes(user.companyId, f, page), getPartnerOptions(user.companyId, 'customer'), getCompany(user.companyId)]);
   const cur = Number(today().slice(0, 4));
+  const proformaTitle = company.proformaTitle || 'Predračun';
+  const edit = can(user.perms, 'sales', 'edit');
+  const csv = new URLSearchParams();
+  for (const [k, v] of Object.entries(sp)) if (typeof v === 'string' && v && k !== 'page') csv.set(k, v);
 
   return (
     <>
       <PageHeader
-        title="Ponude"
+        title={f.kind === 'PROFORMA' ? `${proformaTitle} — popis` : 'Ponude'}
         subtitle={f.year === 'sve' ? 'Sve godine' : `Godina ${f.year}`}
         actions={
-          can(user.perms, 'sales', 'edit') && (
-            <LinkButton href={`${BASE}/novi`} variant="primary" icon={<Plus className="size-4" />}>
-              Nova ponuda
-            </LinkButton>
-          )
+          <>
+            <ExportButtons href={`/api/prodaja/ponude/csv?${csv}`} />
+            {edit && (
+              <LinkButton href={`${BASE}/novi?vrsta=predracun`} icon={<Plus className="size-4" />}>
+                {proformaTitle}
+              </LinkButton>
+            )}
+            {edit && (
+              <LinkButton href={`${BASE}/novi`} variant="primary" icon={<Plus className="size-4" />}>
+                Nova ponuda
+              </LinkButton>
+            )}
+          </>
         }
       />
       <FilterBar>
@@ -45,6 +59,14 @@ export default async function QuotesPage({ searchParams }: { searchParams: Promi
             { value: '', label: String(cur) },
             { value: String(cur - 1), label: String(cur - 1) },
             { value: 'sve', label: 'Sve' },
+          ]}
+        />
+        <SegmentFilter
+          name="vrsta"
+          options={[
+            { value: '', label: 'Sve' },
+            { value: 'QUOTE', label: 'Ponude' },
+            { value: 'PROFORMA', label: proformaTitle === 'Predračun' ? 'Predračuni' : proformaTitle },
           ]}
         />
         <SearchFilter placeholder="Broj, partner, napomena…" />
@@ -70,6 +92,7 @@ export default async function QuotesPage({ searchParams }: { searchParams: Promi
             <thead>
               <tr>
                 <th>Broj</th>
+                <th>Opis</th>
                 <th>Datum</th>
                 <th>Vrijedi do</th>
                 <th>Partner</th>
@@ -77,7 +100,7 @@ export default async function QuotesPage({ searchParams }: { searchParams: Promi
                 <th className="num">Osnovica</th>
                 <th className="num">Ukupno</th>
                 <th>Status</th>
-                <th>Račun</th>
+                <th>Račun / ugovor</th>
               </tr>
             </thead>
             <tbody>
@@ -89,6 +112,16 @@ export default async function QuotesPage({ searchParams }: { searchParams: Promi
                       <Link prefetch={false} href={`${BASE}/${q.id}`} className="link">
                         {q.number}
                       </Link>
+                      {q.kind === 'PROFORMA' && (
+                        <Badge tone="info" className="ml-1.5">
+                          {proformaTitle.toLowerCase()}
+                        </Badge>
+                      )}
+                    </td>
+                    <td className="max-w-56 text-fg-2 max-sm:col-span-2 max-sm:max-w-none">
+                      <span className="block truncate max-sm:whitespace-normal" title={q.note ?? undefined}>
+                        {q.note || '—'}
+                      </span>
                     </td>
                     <td className="whitespace-nowrap">{date(q.date)}</td>
                     <td className={st === 'EXPIRED' ? 'whitespace-nowrap text-warn' : 'whitespace-nowrap text-fg-2'}>{q.validUntil ? date(q.validUntil) : '—'}</td>
@@ -100,13 +133,17 @@ export default async function QuotesPage({ searchParams }: { searchParams: Promi
                       <QuoteBadge status={st} />
                     </td>
                     <td className="whitespace-nowrap">
-                      {q.invoice ? (
+                      {q.invoice && (
                         <Link prefetch={false} href={`/prodaja/racuni/${q.invoice.id}`} className="link">
                           {q.invoice.number ?? 'nacrt'}
                         </Link>
-                      ) : (
-                        '—'
                       )}
+                      {q.contract && (
+                        <Link prefetch={false} href={`/najam/ugovori/${q.contract.id}`} className="link ml-1.5">
+                          {q.contract.number}
+                        </Link>
+                      )}
+                      {!q.invoice && !q.contract && '—'}
                     </td>
                   </tr>
                 );
@@ -114,7 +151,7 @@ export default async function QuotesPage({ searchParams }: { searchParams: Promi
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={5}>{integer(list.total)} ponuda</td>
+                <td colSpan={6}>{integer(list.total)} dokumenata</td>
                 <td className="num">{amount(list.stats.net)}</td>
                 <td className="num">{amount(list.stats.gross)}</td>
                 <td colSpan={2} />

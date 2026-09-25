@@ -13,8 +13,12 @@ import { SupplierInvoiceForm } from '@/components/purchasing/supplier-invoice-fo
 import { SupplierInvoiceDecision } from '@/components/purchasing/inbound-actions';
 import { SupplierInvoiceSourceBadge, SupplierInvoiceStatusBadge } from '@/components/purchasing/supplier-invoice-badges';
 import { dateTime } from '@/lib/format';
+import { LinkButton } from '@/components/ui/button';
+import { Attachments } from '@/components/ui/attachments';
+import { ProviderPdfButton } from '@/components/purchasing/provider-pdf-button';
 import {
-  acceptSupplierInvoiceAction, deleteSupplierInvoiceAction, rejectSupplierInvoiceAction, saveSupplierInvoiceAction, supplierInvoicePaidTodayAction,
+  acceptSupplierInvoiceAction, deleteSupplierInvoiceAction, providerPdfAction, rebookSupplierInvoiceAction, rejectSupplierInvoiceAction,
+  saveSupplierInvoiceAction, supplierInvoicePaidTodayAction,
 } from '../actions';
 
 export default async function SupplierInvoicePage({ params }: { params: Promise<{ id: string }> }) {
@@ -41,6 +45,9 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
   const xml = si.attachments.find((a) => a.mime === 'application/xml');
   const pdfs = si.attachments.filter((a) => a.mime === 'application/pdf');
   const fileHref = (attId: string) => `/api/nabava/ulazni/${si.id}/prilog/${attId}`;
+  const bookedByReceipt = si.receiptExpenses > 0;
+  // prihvaćen račun bez troška (obrisan stornom primke ili nikad knjižen) — „Knjiži ponovno"
+  const canRebook = canEdit && si.status === 'ACCEPTED' && !si.expense && !bookedByReceipt;
 
   return (
     <>
@@ -66,6 +73,23 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
                 reject={rejectSupplierInvoiceAction}
                 paidToday={supplierInvoicePaidTodayAction}
               />
+              {si.order && (
+                <LinkButton href={`/nabava/narudzbenice/${si.order.id}`}>Narudžbenica {si.order.number}</LinkButton>
+              )}
+              {si.receipt && <LinkButton href={`/nabava/primke/${si.receipt.id}`}>Primka {si.receipt.number}</LinkButton>}
+              {eInvoice && <ProviderPdfButton id={si.id} action={providerPdfAction} />}
+              {canRebook && (
+                <ActionButton
+                  action={rebookSupplierInvoiceAction}
+                  input={{ id }}
+                  variant="primary"
+                  title="Trošak je obrisan ili nikad nije knjižen — knjiži ga ponovno (nikad dvaput)"
+                  confirm={`Knjižiti ulazni račun ${si.internalNo} kao trošak?`}
+                  confirmLabel="Knjiži ponovno"
+                >
+                  Knjiži ponovno
+                </ActionButton>
+              )}
               {canDelete && (
                 <ActionButton
                   action={deleteSupplierInvoiceAction}
@@ -92,6 +116,9 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
           {si.rejectReason ? `: ${si.rejectReason}` : ''}. {eInvoice ? 'Odbijanje je javljeno dobavljaču i Poreznoj upravi.' : 'Ručni račun — odbijanje nije nikome javljeno.'} Ne
           ulazi u obveze, troškove ni izvještaje.
         </Notice>
+      )}
+      {canRebook && (
+        <Notice tone="warn">Račun je prihvaćen, ali nije knjižen kao trošak (trošak je obrisan ili nije knjižen). „Knjiži ponovno" ga knjiži.</Notice>
       )}
       {si.status === 'RECEIVED' && <Notice tone="warn">Zaprimljeni eRačun čeka odluku: prihvatite ga ili odbijte s razlogom. Plaćanje se označava nakon prihvaćanja.</Notice>}
 
@@ -137,6 +164,8 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
           id: si.id,
           internalNo: si.internalNo,
           supplierId: si.supplierId,
+          supplierName: si.supplierName,
+          supplierOib: si.supplierOib,
           number: si.number,
           issueDate: toISO(si.issueDate),
           dueDate: si.dueDate ? toISO(si.dueDate) : null,
@@ -146,8 +175,17 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
           category: si.category,
           note: si.note,
           paidDate: si.paidDate ? toISO(si.paidDate) : null,
-          book: !!si.expense,
+          book: !!si.expense || bookedByReceipt,
+          vatPct: si.vatPct === null ? null : num(si.vatPct),
+          currency: si.currency,
+          orderId: si.orderId,
+          receiptId: si.receiptId,
         }}
+        links={{
+          order: si.order ? { value: si.order.id, label: si.order.number } : null,
+          receipt: si.receipt ? { value: si.receipt.id, label: si.receipt.number } : null,
+        }}
+        bookedByReceipt={bookedByReceipt}
         suppliers={suppliers.map((s) => ({ value: s.id, label: s.name, country: s.country }))}
         categories={categories}
         company={{ vatRate: num(company.vatRate), country: company.country }}
@@ -157,6 +195,10 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
         payLocked={payLocked}
         readOnly={!canEdit}
       />
+
+      <Card title="Prilozi (sken, PDF računa)" className="mt-4">
+        <Attachments entity="supplierInvoice" id={si.id} canEdit={canEdit} initial={si.attachments} />
+      </Card>
     </>
   );
 }

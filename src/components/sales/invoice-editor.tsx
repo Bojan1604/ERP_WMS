@@ -1,26 +1,30 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { Boxes, FilePlus2, Info, PenLine, Save, Send, Wrench } from 'lucide-react';
+import { BadgeEuro, Boxes, Info, PenLine, Save, Send, Wrench } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, Badge, Notice } from '@/components/ui/misc';
 import { Field, Input, Select, Textarea } from '@/components/ui/field';
 import { Combobox } from '@/components/ui/combobox';
-import { Dialog } from '@/components/ui/dialog';
 import { useAction } from '@/components/ui/action';
+import { useToast } from '@/components/ui/toast';
 import { eur } from '@/lib/format';
 import { deviceLineKey, documentTotals, groupLines, unifyDevicePrices } from '@/domain/invoice';
 import { customerVat } from '@/domain/tax';
 import { addDays } from '@/domain/dates';
+import { r2 } from '@/domain/money';
 import { PAYMENT_METHOD_LABEL, PAYMENT_METHODS, type PaymentMethodCode } from '@/domain/fiscal';
-import { saveInvoice } from '@/app/(app)/prodaja/racuni/actions';
-import { DevicePicker } from './device-picker';
-import { CatalogPicker } from './catalog-picker';
+import { customerPrices, saveInvoice } from '@/app/(app)/prodaja/racuni/actions';
+import { DevicePicker, type PickMode } from './device-picker';
+import { ServicePicker } from './service-picker';
 import { LinesTable } from './lines-table';
 import { TaxFields } from './invoice-tax-fields';
 import { TotalsBox } from './totals-box';
 import { lineKey } from './inputs';
-import type { DeviceOpt, EditorCharge, EditorLine, SalesLookups } from './types';
+import { autoKpd, deviceToLine as toLine, isRentLine, withRentMonths } from './line-tools';
+import { IssueDialog } from './invoice-issue-dialog';
+import { RentCard, rentMonthsFor, type ContractOpt, type RentTermsValue } from './invoice-rent-card';
+import type { DeviceOpt, EditorCharge, EditorLine, SalesLookups, ServiceOpt } from './types';
 
 export interface InvoiceEditorValue {
   id: string | null;
@@ -41,40 +45,50 @@ export interface InvoiceEditorValue {
   description: string;
   note: string;
   lines: EditorLine[];
+  /** Najam: id ugovora, 'new' = novi ugovor s uvjetima `rent`, null = još nije odabran. */
+  contractId?: string | null;
+  /** Razdoblje najma (YYYY-MM); prazno = prva nefakturirana rata. */
+  period?: string;
+  rent?: RentTermsValue;
+  /** Rata iz modula Najam (ugovor i razdoblje zadani). */
+  rentLocked?: boolean;
+  contract?: { id: string; number: string } | null;
 }
 
-export function deviceToLine(d: DeviceOpt): EditorLine {
-  return {
-    key: lineKey(),
-    kind: 'DEVICE',
-    itemId: d.id,
-    modelId: d.modelId,
-    description: d.model,
-    unit: 'kom',
-    kpd: d.kpd ?? '',
-    qty: 1,
-    unitPrice: d.price,
-    discountPct: 0,
-    warrantyMonths: d.warrantyMonths,
-    agreedPrice: d.priceSource === 'agreed',
-    serial: d.serial,
-    cost: d.cost,
-  };
-}
-
-/** Editor nacrta računa: kupac, datumi, stavke, popusti, naknade i živi zbrojevi. */
-export function InvoiceEditor({ initial, lookups }: { initial: InvoiceEditorValue; lookups: SalesLookups }) {
-  const { partners, services, company } = lookups;
-  const [v, setV] = useState<InvoiceEditorValue>(initial);
+/** Editor nacrta računa: kupac, datumi, stavke (prodaja i najam), popusti, naknade i živi zbrojevi. */
+export function InvoiceEditor({
+  initial,
+  lookups,
+  showCost = true,
+  canCreateService = false,
+}: {
+  initial: InvoiceEditorValue;
+  lookups: SalesLookups;
+  showCost?: boolean;
+  canCreateService?: boolean;
+}) {
+  const { partners, company, models } = lookups;
+  const [services, setServices] = useState<ServiceOpt[]>(lookups.services);
+  const [v, setV] = useState<InvoiceEditorValue>({
+    contractId: null,
+    period: '',
+    rent: { startDate: initial.date, billing: 'MONTHLY', months: 24, seasonFrom: null, seasonTo: null },
+    ...initial,
+  });
+  const [contracts, setContracts] = useState<ContractOpt[]>([]);
   const [dueTouched, setDueTouched] = useState(!!initial.id);
   const [picker, setPicker] = useState<'devices' | 'services' | null>(null);
   const [confirmIssue, setConfirmIssue] = useState(false);
   const { run, pending } = useAction(saveInvoice);
+  const prices = useAction(customerPrices, { refresh: false });
+  const toast = useToast();
   const set = (patch: Partial<InvoiceEditorValue>) => setV((cur) => ({ ...cur, ...patch }));
 
   const partner = partners.find((p) => p.id === v.partnerId) ?? null;
   const term = partner?.paymentTermDays ?? company.paymentTermDays;
-  const treatment = partner ? customerVat(partner.country, company) : null;
+  const treatment = partner ? customerVat(partner, company) : null;
+  const rentUsed = v.type === 'RENT' || v.lines.some((l) => l.lineType === 'RENT');
+  const rentMonths = rentMonthsFor(v.contractId ?? null, contracts, v.rent!);
   const totals = useMemo(
     () =>
       documentTotals({
@@ -86,40 +100,93 @@ export function InvoiceEditor({ initial, lookups }: { initial: InvoiceEditorValu
       }),
     [v.lines, v.vatRate, v.discountPct, v.discountAmount, v.charges],
   );
+  const rentCtx = { docType: v.type, months: rentMonths, company, models, allowRent: v.type !== 'SERVICE', locked: v.rentLocked };
 
   const choosePartner = (id: string | null) => {
     const p = partners.find((x) => x.id === id);
     if (!p) return set({ partnerId: null });
-    const t = customerVat(p.country, company);
+    const t = customerVat(p, company);
     set({
       partnerId: p.id,
       vatRate: t.rate,
       taxCategory: t.category,
       taxExemptReason: t.exemptReason ?? '',
+      // ugovor pripada kupcu — promjenom kupca odabir ugovora se briše
+      ...(v.rentLocked ? {} : { contractId: null }),
       ...(dueTouched ? {} : { dueDate: addDays(v.date, p.paymentTermDays ?? company.paymentTermDays) }),
     });
   };
 
-  const addLines = (lines: EditorLine[]) => set({ lines: [...v.lines, ...lines] });
-  const addService = (id: string) => {
-    const s = services.find((x) => x.id === id);
-    if (!s) return;
+  const addLines = (lines: EditorLine[]) => setV((cur) => ({ ...cur, lines: [...cur.lines, ...lines] }));
+  const addService = (s: ServiceOpt) =>
+    addLines([
+      {
+        key: lineKey(),
+        kind: 'SERVICE',
+        serviceId: s.id,
+        description: s.name,
+        unit: s.unit,
+        kpd: s.kpd ?? autoKpd({ kind: 'SERVICE' }, 'SERVICE', company, models, null),
+        qty: 1,
+        unitPrice: s.price,
+        discountPct: 0,
+        warrantyMonths: null,
+        agreedPrice: false,
+      },
+    ]);
+  const addManual = () =>
+    addLines([
+      {
+        key: lineKey(),
+        kind: 'MANUAL',
+        description: '',
+        unit: 'kom',
+        kpd: autoKpd({ kind: 'MANUAL' }, v.type, company, models),
+        qty: 1,
+        unitPrice: 0,
+        discountPct: 0,
+        warrantyMonths: null,
+        agreedPrice: false,
+      },
+    ]);
+  const addDevices = (ds: DeviceOpt[], mode: PickMode) => {
+    // postojeći najmovi i račun za najam → stavke najma; inače prodaja (vrsta se mijenja na stavci)
+    const lineType = mode === 'rented' || v.type === 'RENT' ? 'RENT' : 'SALE';
+    const lines = ds.map((d) => toLine(d, { lineType, months: rentMonths, company, models, docType: v.type }));
+    addLines(lineType === 'SALE' ? unifyDevicePrices(v.lines, lines) : lines);
+    // postojeći najam: svi uređaji s istog ugovora → taj ugovor
+    const cs = [...new Set(ds.map((d) => d.contractId).filter(Boolean))];
+    if (mode === 'rented' && cs.length === 1 && !v.contractId && !v.rentLocked) set({ contractId: cs[0] });
+  };
+
+  /** „Primijeni cjenik kupca": dogovorene cijene kupca na sve stavke s uređajem ili modelom. */
+  const applyPriceList = async () => {
+    if (!v.partnerId) return;
+    const withModel = v.lines.filter((l) => l.itemId || l.modelId);
+    const r = await prices.run({ partnerId: v.partnerId, lines: withModel.map((l) => ({ key: l.key, itemId: l.itemId ?? null, modelId: l.modelId ?? null, lineType: isRentLine(l, v.type) ? 'RENT' : 'SALE' })) });
+    if (!r.ok || !r.data) return;
+    const found = r.data;
+    const n = Object.keys(found).length;
     setV((cur) => ({
       ...cur,
-      lines: [
-        ...cur.lines,
-        { key: lineKey(), kind: 'SERVICE', serviceId: s.id, description: s.name, unit: s.unit, kpd: s.kpd ?? '', qty: 1, unitPrice: s.price, discountPct: 0, warrantyMonths: null, agreedPrice: false },
-      ],
+      lines: cur.lines.map((l) => {
+        const p = found[l.key];
+        if (p === undefined) return l;
+        // kod najma je dogovorena cijena mjesečna — iznos se izvodi iz nje
+        return isRentLine(l, cur.type) ? { ...l, monthly: p, unitPrice: r2(p * (l.months ?? rentMonths)), agreedPrice: true } : { ...l, unitPrice: p, agreedPrice: true };
+      }),
     }));
+    toast(n ? 'ok' : 'bad', n ? `Cjenik kupca primijenjen na ${n} stavki.` : 'Kupac nema dogovorenih cijena za ove modele.');
   };
-  const addManual = () =>
-    addLines([{ key: lineKey(), kind: 'MANUAL', description: '', unit: 'kom', kpd: '', qty: 1, unitPrice: 0, discountPct: 0, warrantyMonths: null, agreedPrice: false }]);
 
   const save = (issue: boolean) =>
     run({
       ...v,
       issue,
       charges: v.charges.filter((c) => c.amount || c.pct),
+      contractId: rentUsed ? (v.contractId ?? null) : null,
+      period: rentUsed ? v.period || null : null,
+      rent: rentUsed && v.contractId === 'new' ? v.rent : null,
       lines: v.lines.map((l) => ({
         kind: l.kind,
         itemId: l.itemId ?? null,
@@ -135,11 +202,11 @@ export function InvoiceEditor({ initial, lookups }: { initial: InvoiceEditorValu
         months: l.months ?? null,
         warrantyMonths: l.warrantyMonths,
         agreedPrice: l.agreedPrice,
+        lineType: l.lineType ?? null,
       })),
     });
 
   const usedItems = v.lines.map((l) => l.itemId).filter((x): x is string => !!x);
-  const rent = v.type === 'RENT';
 
   return (
     <div>
@@ -166,14 +233,19 @@ export function InvoiceEditor({ initial, lookups }: { initial: InvoiceEditorValu
             />
           </Field>
           <Field label="Vrsta" className="md:col-span-1">
-            {rent ? (
+            {v.rentLocked ? (
               <Input value="Najam" disabled />
             ) : (
               <Select
                 value={v.type}
-                onChange={(e) => set({ type: e.target.value as 'SALE' | 'SERVICE' })}
+                onChange={(e) => {
+                  const type = e.target.value as InvoiceEditorValue['type'];
+                  // stavke bez vlastite vrste prate vrstu računa — preračun cijena najma
+                  set({ type, lines: type === 'RENT' ? withRentMonths(v.lines.map((l) => (l.lineType === 'RENT' ? { ...l, lineType: null } : l)), 'RENT', rentMonths) : v.lines });
+                }}
                 options={[
                   { value: 'SALE', label: 'Prodaja' },
+                  { value: 'RENT', label: 'Najam' },
                   { value: 'SERVICE', label: 'Usluga' },
                 ]}
               />
@@ -228,13 +300,38 @@ export function InvoiceEditor({ initial, lookups }: { initial: InvoiceEditorValu
         )}
       </Card>
 
+      {rentUsed && (
+        <RentCard
+          partnerId={v.partnerId}
+          contractId={v.contractId ?? null}
+          period={v.period ?? ''}
+          terms={v.rent!}
+          locked={!!v.rentLocked}
+          lockedLabel={v.contract}
+          onContracts={setContracts}
+          onPeriod={(period) => set({ period })}
+          onContract={(id, c) =>
+            setV((cur) => {
+              const months = rentMonthsFor(id, c ? [c] : contracts, cur.rent!);
+              return { ...cur, contractId: id, lines: withRentMonths(cur.lines, cur.type, months) };
+            })
+          }
+          onTerms={(rent) => setV((cur) => ({ ...cur, rent, lines: cur.contractId === 'new' ? withRentMonths(cur.lines, cur.type, rentMonthsFor('new', contracts, rent)) : cur.lines }))}
+        />
+      )}
+
       <Card
         title="Stavke"
         padded={false}
         className="mb-4"
         actions={
           <>
-            {!rent && (
+            {v.partnerId && v.lines.some((l) => l.itemId || l.modelId) && (
+              <Button size="sm" icon={<BadgeEuro className="size-3.5" />} loading={prices.pending} onClick={applyPriceList} title="Primijeni dogovorene cijene ovog kupca na sve stavke">
+                Primijeni cjenik kupca
+              </Button>
+            )}
+            {!v.rentLocked && (
               <Button size="sm" variant="subtle" icon={<Boxes className="size-3.5" />} onClick={() => setPicker('devices')}>
                 Uređaji sa skladišta
               </Button>
@@ -248,7 +345,7 @@ export function InvoiceEditor({ initial, lookups }: { initial: InvoiceEditorValu
           </>
         }
       >
-        <LinesTable lines={v.lines} onChange={(lines) => set({ lines })} mode="invoice" />
+        <LinesTable lines={v.lines} onChange={(lines) => set({ lines })} mode="invoice" rent={rentCtx} showCost={showCost} />
       </Card>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_22rem]">
@@ -277,58 +374,44 @@ export function InvoiceEditor({ initial, lookups }: { initial: InvoiceEditorValu
         </div>
       </div>
 
-      <Dialog
+      <IssueDialog
         open={confirmIssue}
         onClose={() => setConfirmIssue(false)}
-        title="Izdavanje računa"
-        size="sm"
-        footer={
-          <>
-            <Button onClick={() => setConfirmIssue(false)}>Odustani</Button>
-            <Button
-              variant="primary"
-              loading={pending}
-              icon={<FilePlus2 className="size-4" />}
-              onClick={async () => {
-                const r = await save(true);
-                if (r.ok) setConfirmIssue(false);
-              }}
-            >
-              Izdaj račun
-            </Button>
-          </>
-        }
-      >
-        <div className="space-y-2 text-base text-fg-2">
-          <p>
-            Račun za <b className="text-fg">{partner?.name}</b> na <b className="text-fg tnum">{eur(totals.total)}</b> dobit će redni broj i više se neće moći mijenjati —
-            ispravak je moguć samo stornom ili odobrenjem.
-          </p>
-          {v.type === 'SALE' && v.lines.some((l) => l.kind === 'DEVICE') && <p>Uređaji s računa bit će skinuti sa stanja (status „Prodan").</p>}
-          <p>
-            Način plaćanja: <b className="text-fg">{PAYMENT_METHOD_LABEL[v.paymentMethod]}</b>
-            {v.paymentMethod !== 'TRANSFER' && ' — ako je fiskalizacija uključena, račun dobiva ZKI i šalje se u CIS po JIR.'}
-          </p>
-        </div>
-      </Dialog>
+        pending={pending}
+        onIssue={async () => {
+          const r = await save(true);
+          if (r.ok) setConfirmIssue(false);
+        }}
+        partnerName={partner?.name ?? ''}
+        total={totals.total}
+        paymentMethod={v.paymentMethod}
+        sellsDevices={v.type !== 'SERVICE' && v.lines.some((l) => l.kind === 'DEVICE' && !isRentLine(l, v.type))}
+        rentsDevices={rentUsed && v.lines.some((l) => l.kind === 'DEVICE' && isRentLine(l, v.type))}
+        contractId={v.contractId ?? null}
+      />
 
       <DevicePicker
         open={picker === 'devices'}
         onClose={() => setPicker(null)}
-        onPick={(ds) => addLines(unifyDevicePrices(v.lines, ds.map(deviceToLine)))}
+        onPick={addDevices}
         partnerId={v.partnerId}
-        models={lookups.models}
+        models={models}
         categories={lookups.categories}
         warehouses={lookups.warehouses}
+        suppliers={lookups.suppliers}
+        statuses={lookups.statuses}
         exclude={usedItems}
+        rent={v.type === 'RENT'}
+        allowRented={rentUsed}
+        showCost={showCost}
       />
-      <CatalogPicker
+      <ServicePicker
         open={picker === 'services'}
         onClose={() => setPicker(null)}
-        title="Usluge iz šifrarnika"
-        entries={services.map((s) => ({ id: s.id, label: s.name, hint: [s.unit, s.kpd && `KPD ${s.kpd}`].filter(Boolean).join(' · '), price: s.price }))}
+        services={services}
         onPick={addService}
-        empty="Nema usluga — dodajte ih u Postavke → Šifrarnici."
+        onCreated={(s) => setServices((cur) => [...cur, s].sort((a, b) => a.name.localeCompare(b.name, 'hr')))}
+        canCreate={canCreateService}
       />
     </div>
   );

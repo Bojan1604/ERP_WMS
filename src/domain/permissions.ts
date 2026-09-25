@@ -136,3 +136,19 @@ export const LEVEL_LABEL: Record<Level, string> = {
   ops: 'Operativno',
   edit: 'Puni pristup',
 };
+
+/**
+ * Ide li promjena statusa uređaja na odobrenje (F8). Postavka korisnika ima
+ * prednost: true = uvijek na odobrenje (osim administratora), false = nikad;
+ * null = pravilo firme — korisnik bez punog prava na skladište ide na odobrenje
+ * ako je u firmi uključeno „promjena statusa na odobrenje".
+ */
+export function needsStatusApproval(
+  u: { role: RoleCode; perms: PermissionMap; requireApproval?: boolean | null },
+  companyRequiresApproval: boolean,
+): boolean {
+  if (u.role === 'ADMIN') return false;
+  if (u.requireApproval === true) return true;
+  if (u.requireApproval === false) return false;
+  return !can(u.perms, 'warehouse', 'edit') && companyRequiresApproval;
+}

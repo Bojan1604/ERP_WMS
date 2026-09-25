@@ -23,6 +23,11 @@ export interface InvoiceFiscalMeta {
   status?: string;
   sentAt?: string;
   error?: string;
+  /** Zadnje stanje kod posrednika (Osvježi status) kao tekst i vrijeme provjere. */
+  statusText?: string;
+  checkedAt?: string;
+  /** Fiskalizirano bez slanja eRačuna (tip IR) ili prijavljeno u eIzvještavanje (tip I). */
+  reportType?: 'IR' | 'I';
 }
 
 export const readMeta = (v: unknown): InvoiceFiscalMeta => (v && typeof v === 'object' && !Array.isArray(v) ? (v as InvoiceFiscalMeta) : {});

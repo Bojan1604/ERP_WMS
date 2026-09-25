@@ -102,3 +102,20 @@ export const ACCOUNTANT_CSV_COLUMNS: Array<{ label: string; value: (r: Accountan
   { label: 'Ukupno', value: (r) => r.total },
   { label: 'Status', value: (r) => r.status },
 ];
+
+/** Stanje eRačuna za stupac „eRačun": izlazni (stanje kod posrednika) ili ulazni preuzet od posrednika. */
+export function accountantEInvoiceLabel(e: string | null | undefined): string {
+  if (!e) return '';
+  if (e === 'INBOUND') return 'ulazni eRačun';
+  const map: Record<string, string> = {
+    PENDING: 'u slanju',
+    SENT: 'poslan',
+    DELIVERED: 'dostavljen',
+    ACCEPTED: 'prihvaćen',
+    REJECTED: 'odbijen',
+    PAID: 'plaćen',
+    ERROR: 'greška',
+    FAILED: 'greška',
+  };
+  return `eRačun · ${map[e] ?? e.toLowerCase()}`;
+}

@@ -1,6 +1,7 @@
 import { requireAccess } from '@/server/auth';
 import { AuthError } from '@/server/errors';
-import { findReport, readFilters, runReport, type Row } from '@/server/queries/reports';
+import { findReport, periodLabel, readFilters, runReport, type Row } from '@/server/queries/reports';
+import { canSeeCost } from '@/domain/permissions';
 import type { ExportColumnType } from '@/lib/csv';
 import { csvOrXlsx } from '@/server/xlsx';
 import { formatDate, today } from '@/domain/dates';
@@ -16,11 +17,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
     return new Response(e instanceof AuthError ? e.message : 'Greška', { status: e instanceof AuthError ? e.status : 500 });
   }
   const def = findReport((await params).slug);
-  if (!def) return new Response('Izvještaj ne postoji.', { status: 404 });
-  const f = readFilters(def, Object.fromEntries(new URL(req.url).searchParams));
-  const res = await runReport(def, user.companyId, f);
+  const costs = canSeeCost(user.perms);
+  if (!def || (def.requiresCost && !costs)) return new Response('Izvještaj ne postoji.', { status: 404 });
+  const f = readFilters(def, new URL(req.url).searchParams);
+  const res = await runReport(def, user.companyId, f, { canSeeCost: costs });
   const rows: Row[] = res.totals ? [...res.rows, { ...res.totals, [res.columns[0].key]: res.totals[res.columns[0].key] ?? 'Ukupno' }] : res.rows;
-  const suffix = def.filters.includes('year') ? `-${f.year}` : `-${today()}`;
+  const suffix = def.filters.includes('year') ? `-${f.year ?? 'sve'}` : `-${today()}`;
   return csvOrXlsx(
     req,
     rows,
@@ -37,5 +39,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
     })),
     `${def.slug}${suffix}`,
     def.title,
+    { subtitle: [def.filters.includes('year') || f.from || f.to ? periodLabel(f) : null, def.description].filter(Boolean).join(' · '), companyName: user.companyName, landscape: res.columns.length > 6 },
   );
 }

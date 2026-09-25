@@ -2,14 +2,15 @@ import 'server-only';
 import { db } from '../db';
 import { assert } from '../errors';
 import { invoiceUbl } from '../fiscal/ubl-source';
+import { renderDocumentPdf } from '../pdf';
 import { ZipTooLargeError, ZipWriter, ZIP_MAX_BYTES, uniqueName } from '../zip';
 import { accountantRowsByIds } from './accountant';
 import { ACCOUNTANT_CSV_COLUMNS, ACCOUNTANT_ROW_CAP, fileStem, parseKeys } from '@/domain/accountant';
 import { toCsv } from '@/lib/csv';
 
 /**
- * ZIP za knjigovođu: popis.csv, eRačun XML svakog izdanog izlaznog računa i
- * spremljeni prilozi (izlazni/prilozi/…, ulazni/<broj>/…). Svaki ključ se
+ * ZIP za knjigovođu: popis.csv, eRačun XML i PDF svakog izdanog izlaznog računa i
+ * spremljeni prilozi (izlazni/prilozi/…, ulazni/<broj>/… uz priloge knjiženog troška). Svaki ključ se
  * provjerava na firmu korisnika; nepostojeći se ne tiho preskaču.
  */
 export async function buildAccountantZip(companyId: string, keys: string[], maxBytes = ZIP_MAX_BYTES, allowed: { out: boolean; in: boolean } = { out: true, in: true }) {
@@ -21,11 +22,17 @@ export async function buildAccountantZip(companyId: string, keys: string[], maxB
   assert(rows.length === ids.out.length + ids.in.length, 'Neki dokumenti ne postoje.');
 
   // veličina priloga provjerava se prije učitavanja sadržaja
+  // troškovi knjiženi iz označenih ulaznih računa — njihovi prilozi idu u mapu ulaznog računa
+  const expenses = ids.in.length
+    ? await db.expense.findMany({ where: { companyId, supplierInvoiceId: { in: ids.in } }, select: { id: true, supplierInvoiceId: true } })
+    : [];
+  const expenseOf = new Map(expenses.map((e) => [e.id, e.supplierInvoiceId!]));
   const attWhere = {
     companyId,
     OR: [
       ...(ids.out.length ? [{ entity: 'invoice', entityId: { in: ids.out } }] : []),
       ...(ids.in.length ? [{ entity: 'supplierInvoice', entityId: { in: ids.in } }] : []),
+      ...(expenses.length ? [{ entity: 'expense', entityId: { in: expenses.map((e) => e.id) } }] : []),
     ],
   };
   const attSize = await db.attachment.aggregate({ where: attWhere, _sum: { size: true } });
@@ -57,6 +64,16 @@ export async function buildAccountantZip(companyId: string, keys: string[], maxB
     });
   }
 
+  // PDF izlaznih računa (isti predložak kao pregled/ispis) — po nekoliko odjednom
+  let pdfCount = 0;
+  for (let i = 0; i < outs.length; i += 4) {
+    const part = await Promise.all(outs.slice(i, i + 4).map((r) => renderDocumentPdf('invoice', r.id, companyId)));
+    part.forEach((p, j) => {
+      zip.add(`izlazni/${stem.get(`out:${outs[i + j].id}`)}.pdf`, p.buffer);
+      pdfCount++;
+    });
+  }
+
   // prilozi — u manjim dijelovima da se u memoriji ne drže svi odjednom
   let attCount = 0;
   const metas = await db.attachment.findMany({ where: attWhere, select: { id: true, entity: true, entityId: true, fileName: true, createdAt: true }, orderBy: { createdAt: 'asc' } });
@@ -68,11 +85,15 @@ export async function buildAccountantZip(companyId: string, keys: string[], maxB
       const bytes = byId.get(m.id);
       if (!bytes) continue;
       const path =
-        m.entity === 'invoice' ? `izlazni/prilozi/${stem.get(`out:${m.entityId}`)} - ${m.fileName}` : `ulazni/${stem.get(`in:${m.entityId}`)}/${m.fileName}`;
+        m.entity === 'invoice'
+          ? `izlazni/prilozi/${stem.get(`out:${m.entityId}`)} - ${m.fileName}`
+          : m.entity === 'expense'
+            ? `ulazni/${stem.get(`in:${expenseOf.get(m.entityId)}`)}/trošak - ${m.fileName}`
+            : `ulazni/${stem.get(`in:${m.entityId}`)}/${m.fileName}`;
       zip.add(path, bytes as Uint8Array, m.createdAt);
       attCount++;
     }
   }
 
-  return { buffer: zip.toBuffer(), rows, xmlCount, attCount };
+  return { buffer: zip.toBuffer(), rows, xmlCount, pdfCount, attCount };
 }

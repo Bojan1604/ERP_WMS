@@ -415,3 +415,34 @@ export async function replaceDevice(
   });
   await audit(tx, actor, { entity: 'service', entityId: id, action: 'replace', summary: `Servisni nalog ${o.number}: ${orig.serial} zamijenjen uređajem ${repl.serial}` });
 }
+
+// ---------------------------------------------------------------- brisanje
+
+/**
+ * Brisanje servisnog naloga (C7) — za naloge otvorene greškom ili dvostruke
+ * prijave. Ne briše se nalog zatvoren zamjenom (zamjenski uređaj je preuzeo
+ * mjesto kod klijenta) ni otvoren nalog dok je uređaj zbog njega u servisu —
+ * uređaj bi ostao „na servisu" bez naloga. Fotografije naloga brišu se s njim.
+ */
+export async function deleteServiceOrder(tx: Tx, actor: Actor, id: string) {
+  const o = await loadOrder(tx, actor, id);
+  assert(o.status !== 'REPLACED', `Nalog ${o.number} zatvoren je zamjenom uređaja — ne može se obrisati.`);
+  if (o.itemId && o.status !== 'WRITTEN_OFF') {
+    // uređaj u servisu mora imati nalog (otvoren ili popravljen, čeka povrat) — ako je ovo jedini, ne briše se
+    const [item, other] = await Promise.all([
+      tx.item.findFirst({ where: { id: o.itemId, companyId: actor.companyId }, select: { serial: true, state: true } }),
+      tx.serviceOrder.count({ where: { companyId: actor.companyId, itemId: o.itemId, id: { not: o.id }, status: { in: [...OPEN, 'REPAIRED'] } } }),
+    ]);
+    assert(
+      !item || item.state !== 'SERVICE' || other > 0,
+      `Uređaj ${item?.serial ?? ''} je na servisu po ovom nalogu — prvo ga vratite kupcu, u najam ili na skladište, pa tek onda obrišite nalog.`,
+    );
+  }
+  await tx.attachment.deleteMany({ where: { companyId: actor.companyId, entity: 'serviceOrder', entityId: id } });
+  await tx.serviceOrder.delete({ where: { id } });
+  if (o.itemId) {
+    await itemEvents(tx, actor, [o.itemId], { type: 'SERVICE', message: `Servisni nalog ${o.number} obrisan`, refType: 'service', refId: id });
+  }
+  await audit(tx, actor, { entity: 'service', entityId: id, action: 'delete', summary: `Servisni nalog ${o.number}${o.serial ? ` (${o.serial})` : ''} obrisan` });
+  return o.number;
+}

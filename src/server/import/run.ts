@@ -8,6 +8,7 @@ import { DEFAULT_EXPENSE_CATEGORIES } from '../services/company';
 import { sanitizeCompanySettings } from '@/domain/company';
 import { docNumberParts, planCounts, type ImportPlan, type Key, type PlanCounter } from './plan';
 import { insertDocuments } from './run-docs';
+import { insertExtras } from './run-extra';
 import { fromISO } from '@/domain/dates';
 
 /**
@@ -325,6 +326,10 @@ export async function runImport(
       const email = await adminEmail(opts.actor.email, companyName, async (e) => !!(await tx.user.findUnique({ where: { email: e }, select: { id: true } })));
       await tx.user.create({ data: { companyId, email, name: opts.actor.name, passwordHash: await bcrypt.hash(password, 10), role: 'ADMIN' } });
       admin = { email, password };
+      // više firmi: i korisnik koji je pokrenuo uvoz dobiva pristup novoj firmi (prebacivanje u zaglavlju)
+      if (await tx.user.findUnique({ where: { id: opts.actor.id }, select: { id: true } })) {
+        await tx.userCompany.createMany({ data: [{ userId: opts.actor.id, companyId: opts.actor.companyId }, { userId: opts.actor.id, companyId }], skipDuplicates: true });
+      }
     } else {
       companyName = (await tx.company.findUniqueOrThrow({ where: { id: companyId }, select: { name: true } })).name;
     }
@@ -332,6 +337,7 @@ export async function runImport(
     const c = new RunCtx(tx, companyId, existing, opts.actor, log);
     await insertMasterData(c, plan);
     await insertDocuments(c, plan);
+    await insertExtras(c, plan);
 
     await raiseCounters(tx, companyId, existing ? sourceCounters(plan) : plan.counters);
     c.step('counters', plan.counters.length);

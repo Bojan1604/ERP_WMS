@@ -20,6 +20,8 @@ export interface TermsValue {
   seasonFrom: number | null;
   seasonTo: number | null;
   note: string | null;
+  /** Broj ugovora: kod novog prazno = automatski iz brojača. */
+  number?: string | null;
 }
 
 const MODE_OPTIONS: { value: BillingModeCode; label: string }[] = [
@@ -80,6 +82,9 @@ export function ContractForm({
             <Combobox options={partners ?? []} value={partnerId} onChange={(id) => setPartnerId(id)} placeholder="Odaberite klijenta…" />
           </Field>
         )}
+        <Field label="Broj ugovora" hint={mode === 'create' ? 'Prazno = automatski.' : undefined} error={fields.number}>
+          <Input value={v.number ?? ''} disabled={readOnly} placeholder="automatski" maxLength={40} onChange={(e) => set('number', e.target.value)} />
+        </Field>
         <Field label="Početak ugovora" required error={fields.startDate}>
           <Input type="date" value={v.startDate} disabled={readOnly} onChange={(e) => set('startDate', e.target.value)} required />
         </Field>

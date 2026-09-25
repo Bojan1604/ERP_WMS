@@ -66,7 +66,14 @@ export async function getOrder(companyId: string, id: string) {
       lines: { orderBy: { id: 'asc' }, include: { model: { select: { id: true, brand: true, name: true, code: true } } } },
       receipts: {
         orderBy: { date: 'asc' },
-        select: { id: true, number: true, date: true, status: true, total: true, warehouse: { select: { name: true } }, _count: { select: { items: true } } },
+        select: {
+          id: true, number: true, date: true, status: true, total: true, warehouse: { select: { name: true } }, _count: { select: { items: true } },
+          expense: { select: { id: true } },
+        },
+      },
+      supplierInvoices: {
+        orderBy: { issueDate: 'asc' },
+        select: { id: true, internalNo: true, number: true, issueDate: true, total: true, status: true, paidDate: true, expense: { select: { id: true } } },
       },
     },
   });
@@ -172,8 +179,9 @@ export async function getReceipt(companyId: string, id: string) {
     include: {
       supplier: true,
       warehouse: { select: { id: true, name: true } },
-      order: { select: { id: true, number: true } },
+      order: { select: { id: true, number: true, supplierInvoices: { select: { id: true, internalNo: true, number: true, expense: { select: { id: true } } } } } },
       expense: { select: { id: true, netAmount: true, vatAmount: true, paid: true } },
+      supplierInvoices: { select: { id: true, internalNo: true, number: true, expense: { select: { id: true } } } },
     },
   });
   if (!receipt) return null;
@@ -257,7 +265,12 @@ export async function listSupplierInvoices(companyId: string, sp: Params, pg: { 
         category: true,
         source: true,
         status: true,
-        supplier: { select: { id: true, name: true } },
+        supplierOib: true,
+        vatPct: true,
+        currency: true,
+        orderId: true,
+        receiptId: true,
+        supplier: { select: { id: true, name: true, oib: true } },
         expense: { select: { id: true } },
       },
     }),
@@ -282,7 +295,12 @@ export async function supplierInvoiceYears(companyId: string) {
 export async function getSupplierInvoice(companyId: string, id: string) {
   const si = await db.supplierInvoice.findFirst({
     where: { id, companyId },
-    include: { supplier: { select: { id: true, name: true, country: true, oib: true } }, expense: { select: { id: true } } },
+    include: {
+      supplier: { select: { id: true, name: true, country: true, oib: true } },
+      expense: { select: { id: true } },
+      order: { select: { id: true, number: true } },
+      receipt: { select: { id: true, number: true } },
+    },
   });
   if (!si) return null;
   const attachments = await db.attachment.findMany({
@@ -290,7 +308,13 @@ export async function getSupplierInvoice(companyId: string, id: string) {
     orderBy: { createdAt: 'asc' },
     select: { id: true, fileName: true, mime: true, size: true },
   });
-  return { ...si, attachments };
+  // trošak robe knjižen primkom (povezana primka ili primke povezane narudžbenice) — račun ga ne knjiži ponovno
+  const receiptIds = [
+    ...(si.receiptId ? [si.receiptId] : []),
+    ...(si.orderId ? (await db.goodsReceipt.findMany({ where: { companyId, orderId: si.orderId, status: 'POSTED' }, select: { id: true } })).map((r) => r.id) : []),
+  ];
+  const receiptExpenses = receiptIds.length ? await db.expense.count({ where: { companyId, receiptId: { in: receiptIds } } }) : 0;
+  return { ...si, attachments, receiptExpenses };
 }
 
 /**

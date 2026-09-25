@@ -4,6 +4,7 @@ import { db } from '../db';
 import { addDays, fromISO, toISO, today } from '@/domain/dates';
 import { warrantyEnd } from '@/domain/pricing';
 import { num } from '@/domain/money';
+import { parseMulti } from '@/lib/list-params';
 import { LONG_SERVICE_DAYS, OPEN_SERVICE_STATUSES, SERVICE_STATUS } from '@/components/service/labels';
 
 type Params = Record<string, string | string[] | undefined>;
@@ -26,6 +27,10 @@ export function serviceWhere(companyId: string, sp: Params): Prisma.ServiceOrder
   else if (scope === 'open') and.push({ status: { in: OPEN } });
   else if (scope === 'closed') and.push({ status: { notIn: OPEN } });
   if (partnerId) and.push({ partnerId });
+  const models = parseMulti(sp, 'model');
+  if (models.length) and.push({ item: { modelId: { in: models } } });
+  // prijave kvara s portala za klijente
+  if (str(sp.izvor) === '1' || str(sp.izvor) === 'portal') and.push({ source: 'PORTAL' });
   if (warranty === 'yes') and.push({ underWarranty: true });
   if (warranty === 'no') and.push({ underWarranty: false });
   if (str(sp.long) === '1') and.push({ status: { in: OPEN }, reportedAt: { lt: fromISO(addDays(today(), -LONG_SERVICE_DAYS)) } });
@@ -63,7 +68,13 @@ export async function listServiceOrders(companyId: string, sp: Params, pg: { ski
         issue: true,
         cost: true,
         underWarranty: true,
+        source: true,
+        receivedAt: true,
+        diagnosis: true,
+        action: true,
+        solution: true,
         item: { select: { id: true, model: { select: { brand: true, name: true } } } },
+        invoice: { select: { number: true } },
         partner: { select: { id: true, name: true } },
         replacement: { select: { id: true, serial: true } },
       },
@@ -170,4 +181,13 @@ export async function servicePartners(companyId: string) {
     select: { partner: { select: { id: true, name: true } } },
   });
   return rows.map((r) => r.partner!).sort((a, b) => a.name.localeCompare(b.name, 'hr'));
+}
+
+/** Modeli uređaja koji imaju servisne naloge — za filtar popisa. */
+export async function serviceModels(companyId: string) {
+  return db.deviceModel.findMany({
+    where: { companyId, items: { some: { serviceOrders: { some: {} } } } },
+    orderBy: [{ brand: 'asc' }, { name: 'asc' }],
+    select: { id: true, brand: true, name: true },
+  });
 }

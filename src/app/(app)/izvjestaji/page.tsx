@@ -1,13 +1,15 @@
 import Link from 'next/link';
 import { BarChart3, ChevronRight } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
-import { REPORTS, REPORT_AREAS } from '@/server/queries/reports';
+import { REPORT_AREAS, visibleReports } from '@/server/queries/reports';
+import { canSeeCost } from '@/domain/permissions';
 import { PageHeader } from '@/components/ui/misc';
 
 export const metadata = { title: 'Izvještaji' };
 
 export default async function ReportsIndex() {
-  await pageAccess('reports');
+  const user = await pageAccess('reports');
+  const REPORTS = visibleReports({ canSeeCost: canSeeCost(user.perms) });
   return (
     <>
       <PageHeader title="Izvještaji" subtitle={`${REPORTS.length} izvještaja · brojke bez PDV-a, bez partnera isključenih iz obračuna`} />

@@ -6,9 +6,12 @@ import { nextSeq } from '../numbering';
 import { audit } from '../audit';
 import { changeItemStatus, itemEvents, type Actor } from './items';
 import { documentTotals, formatInvoiceNumber, lineShareOfNet, openAmount, paymentReference, INVOICE_KIND_LABEL, type ChargeInput } from '@/domain/invoice';
-import { addDays, formatDate, fromISO, toISO, today } from '@/domain/dates';
+import { addDays, addMonths, formatDate, fromISO, toISO, today } from '@/domain/dates';
+import { pendingInstallments, type PlanPeriodInput } from '@/domain/billing';
+import { coveredPeriods, toDevice, toTerms } from './contract-items';
 import { num, r2 } from '@/domain/money';
 import { fiscalAtIssue } from '../fiscal/issue';
+import { billingFromMonths, defaultKpd, effectiveLineType, hasRentLines } from '@/domain/sales-lines';
 
 // ---------------------------------------------------------------- ulazni oblici
 
@@ -28,6 +31,8 @@ export interface LineInput {
   discountPct?: number | null;
   warrantyMonths?: number | null;
   agreedPrice?: boolean;
+  /** Vrsta stavke na miješanom računu (null = vrsta računa). */
+  lineType?: 'SALE' | 'RENT' | null;
 }
 
 export interface InvoiceInput {
@@ -114,13 +119,16 @@ async function writeLines(tx: Tx, actor: Actor, invoiceId: string, type: Invoice
   const byId = new Map(items.map((i) => [i.id, i]));
 
   // šifrarnici sa stavki moraju pripadati istoj firmi
-  const modelIds = [...new Set(lines.map((l) => l.modelId).filter((v): v is string => !!v))];
+  const modelIds = [...new Set([...lines.map((l) => l.modelId), ...items.map((i) => i.modelId)].filter((v): v is string => !!v))];
   const serviceIds = [...new Set(lines.filter((l) => l.kind === 'SERVICE').map((l) => l.serviceId).filter((v): v is string => !!v))];
-  const [models, services] = await Promise.all([
-    modelIds.length ? tx.deviceModel.count({ where: { id: { in: modelIds }, companyId: actor.companyId } }) : 0,
-    serviceIds.length ? tx.service.count({ where: { id: { in: serviceIds }, companyId: actor.companyId } }) : 0,
+  const [models, services, company] = await Promise.all([
+    modelIds.length ? tx.deviceModel.findMany({ where: { id: { in: modelIds }, companyId: actor.companyId }, select: { id: true, kpd: true, kpdRent: true } }) : [],
+    serviceIds.length ? tx.service.findMany({ where: { id: { in: serviceIds }, companyId: actor.companyId }, select: { id: true, kpd: true } }) : [],
+    tx.company.findUniqueOrThrow({ where: { id: actor.companyId }, select: { kpdSale: true, kpdRent: true, kpdService: true } }),
   ]);
-  assert(models === modelIds.length && services === serviceIds.length, 'Neki modeli ili usluge na računu ne postoje.');
+  assert(models.length === modelIds.length && services.length === serviceIds.length, 'Neki modeli ili usluge na računu ne postoje.');
+  const modelById = new Map(models.map((m) => [m.id, m]));
+  const serviceById = new Map(services.map((x) => [x.id, x]));
 
   await tx.invoiceLine.deleteMany({ where: { invoiceId } });
   await tx.invoiceLine.createMany({
@@ -133,25 +141,42 @@ async function writeLines(tx: Tx, actor: Actor, invoiceId: string, type: Invoice
       // najam: cijena sa stavke je mjerodavna — ručno promijenjena cijena preračunava mjesečnu
       let monthly = l.monthly ?? null;
       if (monthly !== null && months && Math.abs(r2(monthly * months) - unitPrice) > 0.005) monthly = r2(unitPrice / months);
+      // vrsta stavke se sprema samo kad odstupa od vrste računa (miješani račun)
+      const lt = effectiveLineType(l.lineType ?? null, type);
+      const lineType = lt === type ? null : lt;
+      const modelId = l.modelId ?? item?.modelId ?? null;
+      const m = modelId ? modelById.get(modelId) : undefined;
+      // zadana KPD šifra (usluga → model → firma po vrsti) kad je korisnik nije upisao
+      const kpd =
+        l.kpd?.trim() ||
+        defaultKpd({
+          lineType: lt,
+          kind: l.kind,
+          serviceKpd: l.serviceId ? serviceById.get(l.serviceId)?.kpd : null,
+          modelKpd: m?.kpd,
+          modelKpdRent: m?.kpdRent,
+          company,
+        });
       return {
         invoiceId,
         sort,
         kind: l.kind,
         itemId: l.kind === 'DEVICE' ? (l.itemId ?? null) : null,
-        modelId: l.modelId ?? item?.modelId ?? null,
+        modelId,
         serviceId: l.kind === 'SERVICE' ? (l.serviceId ?? null) : null,
         description: l.description.trim(),
         unit: l.unit || (monthly !== null ? 'mj' : 'kom'),
-        kpd: l.kpd || null,
+        kpd: kpd || null,
         qty: l.qty,
         monthly,
         months,
         unitPrice,
         discountPct: l.discountPct ?? 0,
         // nabavna vrijednost ulazi u maržu samo kod prodaje
-        cost: type === 'SALE' && item ? r2(num(item.cost) * Math.sign(l.qty)) : 0,
+        cost: lt === 'SALE' && item ? r2(num(item.cost) * Math.sign(l.qty)) : 0,
         warrantyMonths: l.warrantyMonths ?? null,
         agreedPrice: !!l.agreedPrice,
+        lineType,
       };
     }),
   });
@@ -211,7 +236,24 @@ export async function deleteDraft(tx: Tx, actor: Actor, id: string) {
   assert(inv, 'Račun ne postoji.');
   assert(inv.status === 'DRAFT', 'Izdani račun se ne briše — poništava se stornom.');
   await tx.invoice.delete({ where: { id } });
+  // ugovor otvoren iz ovog nacrta („+ Novi ugovor") a još bez uređaja i dokumenata briše se s nacrtom
+  if (inv.contractId) await dropEmptyInvoiceContract(tx, actor, inv.contractId);
   await audit(tx, actor, { entity: 'invoice', entityId: id, action: 'delete', summary: 'Nacrt računa obrisan' });
+}
+
+/** Oznaka u napomeni ugovora koji je otvoren iz računa (Prodaja → račun za najam → „+ Novi ugovor"). */
+export const CONTRACT_FROM_INVOICE = 'Otvoren iz računa';
+
+/** Prazan ugovor otvoren iz nacrta računa (bez uređaja, računa i ponuda) — briše se. */
+export async function dropEmptyInvoiceContract(tx: Tx, actor: Actor, contractId: string) {
+  const c = await tx.contract.findFirst({
+    where: { id: contractId, companyId: actor.companyId, note: { startsWith: CONTRACT_FROM_INVOICE } },
+    select: { id: true, number: true, _count: { select: { items: true, returnedItems: true, invoices: true, quotes: true } } },
+  });
+  if (!c || c._count.items || c._count.returnedItems || c._count.invoices || c._count.quotes) return false;
+  await tx.contract.delete({ where: { id: c.id } });
+  await audit(tx, actor, { entity: 'contract', entityId: c.id, action: 'delete', summary: `Ugovor ${c.number} obrisan — nacrt računa iz kojeg je otvoren više ga ne koristi` });
+  return true;
 }
 
 // ---------------------------------------------------------------- izdavanje
@@ -244,8 +286,13 @@ export async function issueInvoice(tx: Tx, actor: Actor, id: string) {
     );
   }
 
-  if (inv.type === 'SALE' && inv.kind === 'INVOICE') await applySale(tx, actor, inv);
-  if (inv.type === 'RENT' && inv.kind === 'INVOICE') await applyRent(tx, actor, inv);
+  // miješani račun: prodajne stavke skidaju uređaje sa stanja, stavke najma vežu uređaje uz ugovor
+  if (inv.kind === 'INVOICE') {
+    const saleLines = inv.lines.filter((l) => effectiveLineType(l.lineType, inv.type) === 'SALE');
+    const rentLines = inv.lines.filter((l) => effectiveLineType(l.lineType, inv.type) === 'RENT');
+    if (saleLines.some((l) => l.kind === 'DEVICE' && l.itemId)) await applySale(tx, actor, inv, saleLines);
+    if (hasRentLines(inv.type, inv.lines)) await applyRent(tx, actor, inv, rentLines);
+  }
   if (inv.kind === 'INVOICE' || inv.kind === 'ADVANCE') {
     assert(inv.lines.every((l) => l.kind !== 'MODEL'), 'Stavke bez serijskog broja treba zamijeniti konkretnim uređajima prije izdavanja.');
   }
@@ -290,8 +337,8 @@ export async function issueInvoice(tx: Tx, actor: Actor, id: string) {
 
 type IssuingInvoice = Prisma.InvoiceGetPayload<{ include: { lines: true; partner: true; company: true } }>;
 
-async function applySale(tx: Tx, actor: Actor, inv: IssuingInvoice) {
-  const devLines = inv.lines.filter((l) => l.kind === 'DEVICE' && l.itemId);
+async function applySale(tx: Tx, actor: Actor, inv: IssuingInvoice, saleLines: IssuingInvoice['lines']) {
+  const devLines = saleLines.filter((l) => l.kind === 'DEVICE' && l.itemId);
   if (!devLines.length) return;
   const items = await tx.item.findMany({
     where: { id: { in: devLines.map((l) => l.itemId!) } },
@@ -326,10 +373,18 @@ async function applySale(tx: Tx, actor: Actor, inv: IssuingInvoice) {
   }
 }
 
-async function applyRent(tx: Tx, actor: Actor, inv: IssuingInvoice) {
-  assert(inv.contractId, 'Račun za najam mora biti vezan uz ugovor.');
-  assert(inv.period, 'Račun za najam mora imati razdoblje (mjesec) koje pokriva.');
-  const devLines = inv.lines.filter((l) => l.kind === 'DEVICE' && l.itemId);
+/**
+ * Stavke najma: uređaji koji još nisu na ugovoru računa (račun za najam iz
+ * Prodaje — postojeći ugovor ili „+ Novi ugovor") vežu se uz ugovor s mjesečnom
+ * cijenom sa stavke; naplata tih uređaja kreće od datuma računa. Razdoblje koje
+ * račun pokriva je prva još nefakturirana rata tih uređaja (ili mjesec računa).
+ */
+async function applyRent(tx: Tx, actor: Actor, inv: IssuingInvoice, rentLines: IssuingInvoice['lines']) {
+  assert(inv.contractId, 'Stavke najma moraju biti vezane uz ugovor — odaberite ugovor ili „+ Novi ugovor".');
+  const contract = await tx.contract.findFirst({ where: { id: inv.contractId, companyId: actor.companyId } });
+  assert(contract, 'Ugovor ne postoji.');
+  assert(contract.partnerId === inv.partnerId, 'Ugovor pripada drugom klijentu.');
+  const devLines = rentLines.filter((l) => l.kind === 'DEVICE' && l.itemId);
   const ids = devLines.map((l) => l.itemId!);
   const [onContract, returned] = await Promise.all([
     tx.contractItem.findMany({ where: { contractId: inv.contractId, itemId: { in: ids } }, select: { itemId: true } }),
@@ -337,19 +392,61 @@ async function applyRent(tx: Tx, actor: Actor, inv: IssuingInvoice) {
     tx.returnedContractItem.findMany({ where: { contractId: inv.contractId, itemId: { in: ids } }, select: { itemId: true } }),
   ]);
   const current = new Set(onContract.map((c) => c.itemId));
-  const set = new Set([...current, ...returned.map((c) => c.itemId)]);
-  const missing = devLines.filter((l) => !set.has(l.itemId!));
-  if (missing.length) throw new DomainError('Svi uređaji na računu za najam moraju biti na ugovoru.');
+  const known = new Set([...current, ...returned.map((c) => c.itemId)]);
+  const attach = devLines.filter((l) => !known.has(l.itemId!));
+  const date = toISO(inv.date);
+  if (attach.length) {
+    // dinamički uvoz: rentals.ts uvozi ovaj modul (izbjegava kružni uvoz pri učitavanju)
+    const { attachItems } = await import('./rentals');
+    const start = toISO(contract.startDate);
+    await attachItems(
+      tx,
+      actor,
+      contract.id,
+      attach.map((l) => {
+        const months = Math.max(1, l.months ?? 1);
+        const monthly = l.monthly !== null ? num(l.monthly) : r2(num(l.unitPrice) / months);
+        const billing = l.months ? billingFromMonths(l.months) : contract.billing;
+        // uvjeti ugovora vrijede kad se poklapaju; inače uređaj dobiva vlastiti plan od datuma računa
+        const from = date > start ? date : start;
+        const plan: PlanPeriodInput[] = from !== start || billing !== contract.billing ? [{ from, billing }] : [];
+        return { itemId: l.itemId!, monthly, plan };
+      }),
+      { issueDate: date },
+    );
+    for (const l of attach) current.add(l.itemId!);
+    await audit(tx, actor, {
+      entity: 'contract',
+      entityId: contract.id,
+      action: 'add',
+      summary: `Ugovor ${contract.number}: dodano ${attach.length} uređaja računom za najam`,
+    });
+  }
+  if (!inv.period) {
+    const period = await firstRentPeriod(tx, contract.id, ids, date);
+    await tx.invoice.update({ where: { id: inv.id }, data: { period } });
+    inv.period = period;
+  }
   if (devLines.length) {
     // veza na zadnji račun samo za uređaje koji su još na ugovoru (vraćeni su možda već na skladištu ili kod drugog kupca)
     if (current.size) await tx.item.updateMany({ where: { id: { in: [...current] } }, data: { invoiceId: inv.id } });
-    await itemEvents(tx, actor, devLines.map((l) => l.itemId!), {
+    await itemEvents(tx, actor, ids, {
       type: 'RENT_INVOICE',
       message: `Rata najma ${inv.period} fakturirana`,
       refType: 'invoice',
       refId: inv.id,
     });
   }
+}
+
+/** Prva nefakturirana rata uređaja s računa na ugovoru (mjesec računa kad je nema). */
+async function firstRentPeriod(tx: Tx, contractId: string, itemIds: string[], date: string): Promise<string> {
+  if (!itemIds.length) return date.slice(0, 7);
+  const c = await tx.contract.findUniqueOrThrow({ where: { id: contractId }, include: { items: { where: { itemId: { in: itemIds } } } } });
+  const covered = (await coveredPeriods(tx, [contractId])).get(contractId) ?? new Set<string>();
+  const now = addMonths(date > today() ? date : today(), 12);
+  const rows = pendingInstallments({ ...toTerms(c), status: 'ACTIVE' }, c.items.map(toDevice), covered, now, 36);
+  return rows[0]?.period ?? date.slice(0, 7);
 }
 
 /**
@@ -418,6 +515,7 @@ export async function stornoInvoice(tx: Tx, actor: Actor, id: string, opts: { da
           unitPrice: l.unitPrice,
           discountPct: l.discountPct,
           cost: num(l.cost) * -1,
+          lineType: l.lineType,
         })),
       },
     },
@@ -426,8 +524,8 @@ export async function stornoInvoice(tx: Tx, actor: Actor, id: string, opts: { da
   await issueInvoice(tx, actor, storno.id);
   await recalcInvoice(tx, inv.id);
 
-  // prodana roba koja je još kod kupca vraća se na skladište
-  if (inv.type === 'SALE') {
+  // prodana roba koja je još kod kupca vraća se na skladište (i s miješanog računa)
+  {
     const sold = await tx.item.findMany({ where: { invoiceId: inv.id, state: 'SOLD' }, select: { id: true, receipt: { select: { warehouseId: true } } } });
     if (sold.length) {
       // vraća se u skladište iz kojeg je zaprimljen, a ako ga nema — u prvo aktivno
@@ -533,4 +631,4 @@ export async function markUnpaid(tx: Tx, actor: Actor, invoiceId: string) {
 
 // ---------------------------------------------------------------- najam: pokrivenost
 
-export { coveredPeriods } from './contract-items';
+export { coveredPeriods };

@@ -7,6 +7,7 @@ import { Dialog } from '@/components/ui/dialog';
 import { SelectionBar } from '@/components/ui/selection';
 import { useToast } from '@/components/ui/toast';
 import { useAction, type ServerAction } from '@/components/ui/action';
+import { SendEmailButton } from '@/components/ui/send-email-button';
 
 /** Najviše dokumenata u jednom ispisu (ključevi idu u URL). */
 const PRINT_MAX = 300;
@@ -15,7 +16,16 @@ const PRINT_MAX = 300;
  * Radnje nad označenim dokumentima: ZIP za knjigovođu (nakon preuzimanja pita
  * treba li ih označiti kao poslane), ispis i ručno (od)označavanje.
  */
-export function AccountantBar({ action, canMark }: { action: ServerAction<{ keys: string[]; sent: boolean }>; canMark: boolean }) {
+export function AccountantBar({
+  action,
+  canMark,
+  email,
+}: {
+  action: ServerAction<{ keys: string[]; sent: boolean }>;
+  canMark: boolean;
+  /** Slanje ZIP-a knjigovođi e-poštom (SendEmailButton „accountant-zip"; id = označeni ključevi odvojeni zarezom). */
+  email?: { to: string | null; subject: string };
+}) {
   const toast = useToast();
   const { run, pending } = useAction(action);
   const [busy, setBusy] = useState(false);
@@ -71,6 +81,17 @@ export function AccountantBar({ action, canMark }: { action: ServerAction<{ keys
               <Button size="sm" icon={<Printer className="size-3.5" />} onClick={() => print(keys)}>
                 Ispis
               </Button>
+              {canMark && email && (
+                <SendEmailButton
+                  kind="accountant-zip"
+                  id={keys.join(',')}
+                  defaultTo={email.to}
+                  defaultSubject={email.subject}
+                  defaultBody={`U privitku su dokumenti za knjigovodstvo (${keys.length}).`}
+                  label="Pošalji"
+                  size="sm"
+                />
+              )}
               {canMark && (
                 <>
                   <Button size="sm" loading={pending} icon={<CheckCheck className="size-3.5" />} onClick={() => mark(keys, true, clear)}>

@@ -18,7 +18,7 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
     <>
       <div className="no-print">
         <PageHeader
-          title={`Ponuda ${q.number}`}
+          title={`${q.kind === 'PROFORMA' ? company.proformaTitle || 'Predračun' : 'Ponuda'} ${q.number}`}
           back={
             <Link prefetch={false} href={`/prodaja/ponude/${q.id}`} className="hover:underline">
               ← Ponuda
@@ -27,7 +27,7 @@ export default async function QuotePrintPage({ params }: { params: Promise<{ id:
           actions={<PrintButton />}
         />
       </div>
-      <QuoteDocument q={quoteDocData(q)} company={company} party={q.partner} />
+      <QuoteDocument q={quoteDocData(q)} company={company} party={q.partner} title={q.kind === 'PROFORMA' ? company.proformaTitle || 'Predračun' : 'Ponuda'} />
     </>
   );
 }

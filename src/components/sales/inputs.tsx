@@ -45,6 +45,5 @@ export function NumberInput({
   );
 }
 
-let seq = 0;
-/** Ključ retka u editoru (stabilan za React, ne ide u bazu). */
-export const lineKey = () => `l${Date.now().toString(36)}${(seq++).toString(36)}`;
+// ključ retka u editoru — u line-tools.ts (bez 'use client'), da ga mogu zvati i poslužiteljske početne vrijednosti
+export { lineKey } from './line-tools';
