@@ -4,7 +4,7 @@ import type { Tx } from '../db';
 import { assert } from '../errors';
 import { audit } from '../audit';
 import type { Actor } from './items';
-import { can, type Level, type Module, type PermissionMap } from '@/domain/permissions';
+import { can, canSeeCost, type Level, type Module, type PermissionMap } from '@/domain/permissions';
 import {
   ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_DOC_BYTES, ATTACHMENT_MAX_PER_ENTITY, ATTACHMENT_MAX_PER_REQUEST, safeFileName, sniffMime,
 } from '@/domain/attachments';
@@ -197,6 +197,19 @@ function cuidLike() {
 }
 
 /** Smije li korisnik s pravima `perms` pregledati/dodati/brisati priloge vrste `entity`. */
+/**
+ * Dokumenti s nabavnim cijenama (narudžbenica, primka, ulazni račun za robu) — njihovi
+ * prilozi (ponuda/račun dobavljača) otkrivaju nabavnu vrijednost, pa ih bez prava
+ * „nabavne cijene i marže" nitko ne vidi ni ne preuzima.
+ */
+export async function attachmentsHideCost(tx: Pick<Tx, 'supplierInvoice'>, companyId: string, perms: PermissionMap, entity: AttachmentEntity, entityId: string) {
+  if (canSeeCost(perms)) return false;
+  if (entity === 'purchaseOrder' || entity === 'receipt') return true;
+  if (entity !== 'supplierInvoice') return false;
+  const si = await tx.supplierInvoice.findFirst({ where: { id: entityId, companyId }, select: { goodsInvoice: true } });
+  return !!si?.goodsInvoice;
+}
+
 export function canAttachment(perms: PermissionMap, entity: AttachmentEntity, what: 'view' | 'add' | 'remove') {
   const rule = ATTACHMENT_ENTITIES[entity];
   return can(perms, rule.module, rule[what]);

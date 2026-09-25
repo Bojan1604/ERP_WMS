@@ -8,6 +8,7 @@
  */
 import { isValidOib } from './tax';
 import { TIME_ZONE } from './dates';
+import { plural } from './plural';
 
 export type PaymentMethodCode = 'TRANSFER' | 'CASH' | 'CARD' | 'OTHER';
 export type FiscalStatusCode = 'NOT_REQUIRED' | 'PENDING' | 'SENT' | 'FAILED';
@@ -184,6 +185,9 @@ export interface ReadinessInput {
     eInvoiceProvider: string;
     hasApiKey: boolean;
     cert: CertSummary | null;
+    /** Zadani operater firme (Postavke → Firma) — koristi se za korisnike bez OIB-a. */
+    operatorOib?: string | null;
+    operatorName?: string | null;
   };
   /** Aktivni korisnici koji smiju izdavati račune. */
   operators: Array<{ name: string; oib: string | null }>;
@@ -218,6 +222,7 @@ export function fiscalReadiness(i: ReadinessInput): ReadinessItem[] {
   const c = i.company;
   const now = i.now ?? new Date();
   const missingOib = i.operators.filter((o) => !isValidOib(o.oib));
+  const defaultOperator = isValidOib(c.operatorOib?.trim() ?? null);
   const certProblems = certWarnings(c.cert, c.oib, now);
   const certExpired = !!c.cert && new Date(c.cert.validTo).getTime() < now.getTime();
   const items: ReadinessItem[] = [
@@ -231,8 +236,13 @@ export function fiscalReadiness(i: ReadinessInput): ReadinessItem[] {
     {
       key: 'operators',
       label: 'OIB operatera (korisnika koji izdaju račune)',
-      ok: missingOib.length === 0 && i.operators.length > 0,
-      hint: missingOib.length ? `Nedostaje: ${missingOib.map((o) => o.name).join(', ')}` : `${i.operators.length} korisnika`,
+      // korisnik bez OIB-a izdaje pod zadanim operaterom firme (fiscalAtIssue)
+      ok: defaultOperator || (missingOib.length === 0 && i.operators.length > 0),
+      hint: defaultOperator
+        ? `Zadani operater: ${c.operatorName?.trim() || c.operatorOib}${missingOib.length ? ` — koristi se za: ${missingOib.map((o) => o.name).join(', ')}` : ''}`
+        : missingOib.length
+          ? `Nedostaje: ${missingOib.map((o) => o.name).join(', ')} (ili upišite zadanog operatera u Postavke → Firma)`
+          : plural(i.operators.length, 'korisnik', 'korisnika', 'korisnika'),
     },
     {
       key: 'cert',

@@ -15,6 +15,16 @@ test('zaokruživanje i čitanje brojeva', () => {
   assert.equal(parseNumber('220.85'), 220.85);
   assert.equal(parseNumber('1.500.000'), 1500000);
   assert.equal(parseNumber('12,5'), 12.5);
+  // hrvatski zapis: jedna točka + točno tri znamenke = tisućice
+  assert.equal(parseNumber('1.500'), 1500);
+  assert.equal(parseNumber('12.345'), 12345);
+  assert.equal(parseNumber('-1.500'), -1500);
+  assert.equal(parseNumber('1.5'), 1.5);
+  assert.equal(parseNumber('1.50'), 1.5);
+  assert.equal(parseNumber('0.500'), 0.5, 'vodeća nula — decimalna točka');
+  assert.equal(parseNumber('1500.000'), 1500, 'više od tri znamenke ispred — decimalna točka');
+  assert.equal(parseNumber('1.500,5'), 1500.5);
+  assert.equal(parseNumber('1.500 €'), 1500);
 });
 
 test('zbrojevi dokumenta s popustima i naknadama', () => {

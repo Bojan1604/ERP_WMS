@@ -3,7 +3,7 @@ import type { OrderStatus, Prisma } from '@prisma/client';
 import { db } from '../db';
 import { num, r2 } from '@/domain/money';
 import { addDays, fromISO, toISO } from '@/domain/dates';
-import { goodsInvoiceContext } from '../services/supplier-invoices';
+import { goodsExpensePlan, goodsGroupOf, goodsInvoiceContext } from '../services/goods-expense';
 import { escapeLike } from '@/lib/like';
 
 type Params = Record<string, string | string[] | undefined>;
@@ -181,9 +181,9 @@ export async function getReceipt(companyId: string, id: string) {
     include: {
       supplier: true,
       warehouse: { select: { id: true, name: true } },
-      order: { select: { id: true, number: true, supplierInvoices: { select: { id: true, internalNo: true, number: true, expense: { select: { id: true } } } } } },
+      order: { select: { id: true, number: true, supplierInvoices: { select: { id: true, internalNo: true, number: true, goodsInvoice: true, expense: { select: { id: true } } } } } },
       expense: { select: { id: true, netAmount: true, vatAmount: true, paid: true } },
-      supplierInvoices: { select: { id: true, internalNo: true, number: true, expense: { select: { id: true } } } },
+      supplierInvoices: { select: { id: true, internalNo: true, number: true, goodsInvoice: true, expense: { select: { id: true } } } },
     },
   });
   if (!receipt) return null;
@@ -232,7 +232,11 @@ const SUPPLIER_INVOICE_STATUS_WHERE: Record<string, Prisma.SupplierInvoiceWhereI
   paid: { status: { not: 'REJECTED' }, paidDate: { not: null } },
 };
 
-export async function listSupplierInvoices(companyId: string, sp: Params, pg: { skip: number; take: number }) {
+/**
+ * Knjiga URA (popis i izvoz). Bez prava `costs` (`opts.costs = false`) iznosi računa za robu otkrivaju
+ * nabavne vrijednosti: u retku su `null` (`amountsHidden`), a zbrojevi su bez njih.
+ */
+export async function listSupplierInvoices(companyId: string, sp: Params, pg: { skip: number; take: number }, opts: { costs?: boolean } = {}) {
   const q = str(sp.q);
   const supplierId = str(sp.supplier);
   const paid = str(sp.paid);
@@ -248,6 +252,7 @@ export async function listSupplierInvoices(companyId: string, sp: Params, pg: { 
     ...(year ? { issueDate: yearRange(year) } : {}),
     ...(q ? { OR: [{ number: ci(q) }, { internalNo: ci(q) }, { note: ci(q) }, { category: ci(q) }, { supplier: { name: ci(q) } }] } : {}),
   };
+  const sumScope: Prisma.SupplierInvoiceWhereInput[] = opts.costs === false ? [{ OR: [{ goodsInvoice: null }, { goodsInvoice: false }] }] : [];
   const [rows, total, sums] = await Promise.all([
     db.supplierInvoice.findMany({
       where,
@@ -272,17 +277,21 @@ export async function listSupplierInvoices(companyId: string, sp: Params, pg: { 
         currency: true,
         orderId: true,
         receiptId: true,
+        goodsInvoice: true,
         supplier: { select: { id: true, name: true, oib: true } },
         expense: { select: { id: true } },
       },
     }),
     db.supplierInvoice.count({ where }),
-    // odbijeni računi nisu obveza ni trošak — ne ulaze u zbrojeve (osim kad se gledaju samo odbijeni)
-    db.supplierInvoice.aggregate({ where: status === 'rejected' ? where : { AND: [where, NOT_REJECTED] }, _sum: { netAmount: true, vatAmount: true, total: true } }),
+    // odbijeni računi nisu obveza ni trošak — ne ulaze u zbrojeve (osim kad se gledaju samo odbijeni); bez `costs` ni računi za robu
+    db.supplierInvoice.aggregate({ where: { AND: [status === 'rejected' ? where : { AND: [where, NOT_REJECTED] }, ...sumScope] }, _sum: { netAmount: true, vatAmount: true, total: true } }),
   ]);
-  const unpaid = await db.supplierInvoice.aggregate({ where: { AND: [where, NOT_REJECTED, { paidDate: null }] }, _sum: { total: true } });
+  const unpaid = await db.supplierInvoice.aggregate({ where: { AND: [where, NOT_REJECTED, { paidDate: null }, ...sumScope] }, _sum: { total: true } });
+  const hide = (r: (typeof rows)[number]) => opts.costs === false && r.goodsInvoice === true;
   return {
-    rows,
+    rows: rows.map((r) =>
+      hide(r) ? { ...r, netAmount: null, vatAmount: null, total: null, vatPct: null, amountsHidden: true } : { ...r, amountsHidden: false },
+    ),
     total,
     sums: { net: num(sums._sum.netAmount), vat: num(sums._sum.vatAmount), total: num(sums._sum.total), unpaid: num(unpaid._sum.total) },
   };
@@ -310,9 +319,19 @@ export async function getSupplierInvoice(companyId: string, id: string) {
     orderBy: { createdAt: 'asc' },
     select: { id: true, fileName: true, mime: true, size: true },
   });
-  // trošak robe knjižen primkom (povezana primka ili primke povezane narudžbenice) i zadana odluka „račun za robu"
-  const ctx = await goodsInvoiceContext(db, companyId, { id: si.id, orderId: si.orderId, receiptId: si.receiptId, netAmount: num(si.netAmount) });
-  return { ...si, attachments, receiptExpenses: ctx.receiptExpenses, defaultGoods: ctx.defaultGoods, goodsRule: { refs: ctx.refs, others: ctx.otherGoodsInvoices } };
+  // zadana odluka „račun za robu" i kako račun stoji po pravilu troška robe skupine (max(primke, računi za robu))
+  const ctx = await goodsInvoiceContext(db, companyId, { id: si.id, orderId: si.orderId, receiptId: si.receiptId, netAmount: num(si.netAmount), category: si.category });
+  const group = await goodsGroupOf(db, companyId, { orderId: si.orderId, receiptId: si.receiptId, invoiceId: si.id });
+  const plan = group ? await goodsExpensePlan(db, companyId, group) : null;
+  const alloc = plan?.allocation.find((a) => a.id === si.id) ?? null;
+  return {
+    ...si,
+    attachments,
+    receiptExpenses: ctx.receiptExpenses,
+    defaultGoods: ctx.defaultGoods,
+    goodsRule: { refs: ctx.refs, others: ctx.otherGoodsInvoices, otherNet: ctx.otherGoodsNet },
+    allocation: alloc,
+  };
 }
 
 /**

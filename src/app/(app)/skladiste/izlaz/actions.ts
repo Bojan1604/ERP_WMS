@@ -8,6 +8,7 @@ import { audit } from '@/server/audit';
 import { zId, zIds, zOptId, zOptText } from '@/server/zod';
 import { cancelOut, receiveReturned } from '@/server/services/warehouse';
 import { escapeLike } from '@/lib/like';
+import { countLabel, plural } from '@/domain/plural';
 
 export const cancelOutAction = action({ module: 'warehouse', level: 'ops' }, z.object({ itemIds: zIds }), async ({ itemIds }, user) =>
   transaction(async (tx) => {
@@ -44,7 +45,7 @@ export const activeContractsAction = action(
       take: 40,
       select: { id: true, number: true, partner: { select: { name: true } }, _count: { select: { items: true } } },
     });
-    return { data: rows.map((c) => ({ value: c.id, label: `${c.number} · ${c.partner.name}`, hint: `${c._count.items} uređaja` })), revalidate: [] };
+    return { data: rows.map((c) => ({ value: c.id, label: `${c.number} · ${c.partner.name}`, hint: countLabel(c._count.items, 'uređaj', 'uređaja', 'uređaja') })), revalidate: [] };
   },
 );
 
@@ -59,6 +60,6 @@ export const addOutToContractAction = action(
   async ({ contractId, itemIds }, user) =>
     transaction(async (tx) => {
       const r = await addOutToContract(tx, user, contractId, itemIds);
-      return { message: `${r.count} uređaja dodano na ugovor ${r.number}. Cijenu i plan naplate po potrebi dotjerajte na ugovoru.`, data: { contractId } };
+      return { message: `${countLabel(r.count, 'uređaj', 'uređaja', 'uređaja')} ${plural(r.count, 'dodan', 'dodana', 'dodano')} na ugovor ${r.number}. Cijenu i plan naplate po potrebi dotjerajte na ugovoru.`, data: { contractId } };
     }),
 );

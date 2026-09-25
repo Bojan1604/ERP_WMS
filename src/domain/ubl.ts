@@ -290,7 +290,13 @@ export function buildUbl(input: UblInput): { xml: string; root: 'Invoice' | 'Cre
     .filter((c) => c.amount !== 0);
   const chargesTotal = r2(charges.reduce((a, c) => a + c.amount, 0));
   const total = r2(net + vat + chargesTotal);
-  const prepaid = advance || ((credit || storno) && refAdvance) ? total : r2(input.advanceAmount ?? 0);
+  // konačni račun: uračunati predujam najviše do ukupnog iznosa (BR-CO-16: PayableAmount = TaxInclusive − Prepaid ≥ 0)
+  const prepaid =
+    advance || ((credit || storno) && refAdvance)
+      ? total
+      : !credit && !storno
+        ? r2(Math.min(input.advanceAmount ?? 0, Math.max(0, total)))
+        : r2(input.advanceAmount ?? 0);
   const payable = storno ? r2(total - prepaid) : r2(Math.max(0, total - prepaid));
   const profile = ublProfile(input);
 

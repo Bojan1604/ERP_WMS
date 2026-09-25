@@ -5,9 +5,13 @@ import { action } from '@/server/action';
 import { db, transaction } from '@/server/db';
 import { zBool, zDate, zId, zIds, zMoney, zOptDate, zOptId, zOptMoney, zOptText, zReq } from '@/server/zod';
 import { deleteSupplierInvoice, deleteSupplierInvoices, rebookSupplierInvoice, saveSupplierInvoice } from '@/server/services/supplier-invoices';
-import { acceptSupplierInvoice, fetchProviderPdf, markSupplierInvoicesPaid, rejectSupplierInvoice, reportPaid } from '@/server/services/inbound';
+import { acceptSupplierInvoice, fetchProviderPdf, markSupplierInvoicesPaid, modeNote, rejectSupplierInvoice, reportPaid } from '@/server/services/inbound';
+import { countLabel, plural } from '@/domain/plural';
+import type { InvoiceExpenseMode } from '@/domain/purchase-links';
 import { fetchIncoming } from '@/server/services/inbound-fetch';
 import { today } from '@/domain/dates';
+import { canSeeCost } from '@/domain/permissions';
+import { goodsInvoiceContext } from '@/server/services/goods-expense';
 
 const schema = z.object({
   id: zOptId,
@@ -33,11 +37,19 @@ const schema = z.object({
   goods: z.boolean().nullable().optional(),
 });
 
+/** Poruka uz spremanje / „Knjiži ponovno" prema pravilu troška robe po narudžbenici. */
+const MODE_MESSAGE: Record<InvoiceExpenseMode, string | null> = {
+  own: null,
+  partial: 'Primke već nose dio troška robe — račun knjiži samo razliku iznad primki.',
+  receipt: 'Trošak robe je knjižen primkom — račun ga ne knjiži ponovno.',
+  none: null,
+};
+
 export const saveSupplierInvoiceAction = action({ module: 'purchasing', level: 'edit' }, schema, async ({ id, ...input }, user) => {
   const si = await transaction((tx) => saveSupplierInvoice(tx, user, id, input));
   // eRačun koji je upravo plaćen: status „plaćen" posredniku (neuspjeh ne poništava spremanje)
   const warning = si.newlyPaid && input.paidDate ? await reportPaid(user, [{ id: si.id, source: 'EINVOICE', eInvoiceId: si.eInvoiceId }], input.paidDate) : null;
-  const extra = [si.supplierCreated && 'Dobavljač je otvoren u partnerima — dopunite adresu.', si.mode === 'receipt' && 'Trošak robe je knjižen primkom — račun ga ne knjiži ponovno.']
+  const extra = [si.supplierCreated && 'Dobavljač je otvoren u partnerima — dopunite adresu.', MODE_MESSAGE[si.mode]]
     .filter(Boolean)
     .join(' ');
   return { message: `Ulazni račun ${si.internalNo} spremljen.${extra ? ` ${extra}` : ''}`, redirect: `/nabava/ulazni/${si.id}`, data: { warning } };
@@ -48,7 +60,9 @@ export const supplierInvoicesPaidAction = action(
   z.object({ ids: zIds, paidDate: zOptDate }),
   async ({ ids, paidDate }, user) => {
     const r = await markSupplierInvoicesPaid(user, ids, paidDate);
-    return { message: `${r.count} računa označeno kao ${paidDate ? 'plaćeno' : 'neplaćeno'}.`, data: { warning: r.warning } };
+    const done = plural(r.count, 'označen', 'označena', 'označeno');
+    const state = paidDate ? plural(r.count, 'plaćen', 'plaćena', 'plaćeno') : plural(r.count, 'neplaćen', 'neplaćena', 'neplaćeno');
+    return { message: `${countLabel(r.count, 'račun', 'računa', 'računa')} ${done} kao ${state}.`, data: { warning: r.warning } };
   },
 );
 
@@ -73,7 +87,8 @@ export const acceptSupplierInvoiceAction = action(
   z.object({ id: zId, book: zBool }),
   async ({ id, book }, user) => {
     const r = await acceptSupplierInvoice(user, id, { book });
-    const booked = book ? ' i knjižen kao trošak' : ' (bez knjiženja troška)';
+    // poruka prema stvarnom knjiženju (račun za robu uz knjiženu primku ne knjiži vlastiti trošak)
+    const booked = modeNote(r.mode).replace(/^, /, ' — ');
     return {
       message: r.reported
         ? r.already
@@ -105,7 +120,14 @@ export const deleteSupplierInvoicesAction = action({ module: 'purchasing', level
 export const rebookSupplierInvoiceAction = action({ module: 'purchasing', level: 'edit' }, z.object({ id: zId }), async ({ id }, user) =>
   transaction(async (tx) => {
     const mode = await rebookSupplierInvoice(tx, user, id);
-    return { message: mode === 'own' ? 'Račun je ponovno knjižen kao trošak.' : 'Trošak robe je već knjižen primkom — ništa se ne knjiži dvaput.' };
+    return {
+      message:
+        mode === 'own'
+          ? 'Račun je ponovno knjižen kao trošak.'
+          : mode === 'partial'
+            ? 'Račun je knjižen — samo razlika iznad primki (roba se ne knjiži dvaput).'
+            : 'Trošak robe je već knjižen primkom — ništa se ne knjiži dvaput.',
+    };
   }),
 );
 
@@ -120,6 +142,20 @@ export const deleteSupplierInvoiceAction = action({ module: 'purchasing', level:
     await deleteSupplierInvoice(tx, user, id);
     return { message: 'Ulazni račun je obrisan.', redirect: '/nabava/ulazni' };
   }),
+);
+
+/**
+ * Pravilo zadane kvačice „račun za robu" za vezu odabranu na obrascu (samo čitanje): vrijednosti robe
+ * i drugi računi za robu iste narudžbenice. Otkriva nabavne vrijednosti — samo uz pravo `costs`.
+ */
+export const goodsRuleAction = action(
+  { module: 'purchasing', level: 'view' },
+  z.object({ id: zOptId, orderId: zOptId, receiptId: zOptId }),
+  async ({ id, orderId, receiptId }, user) => {
+    if ((!orderId && !receiptId) || !canSeeCost(user.perms)) return { data: null, revalidate: [] };
+    const ctx = await goodsInvoiceContext(db, user.companyId, { id: id ?? null, orderId: orderId ?? null, receiptId: receiptId ?? null, netAmount: 0 });
+    return { data: { refs: ctx.refs, others: ctx.otherGoodsInvoices, otherNet: ctx.otherGoodsNet }, revalidate: [] };
+  },
 );
 
 /** Narudžbenice i primke dobavljača za vezu s ulaznim računom (samo čitanje). */

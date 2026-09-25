@@ -1,4 +1,5 @@
 import { requireAccess } from '@/server/auth';
+import { canSeeCost } from '@/domain/permissions';
 import { listSupplierInvoices } from '@/server/queries/purchasing';
 import { toISO } from '@/domain/dates';
 import { SUPPLIER_INVOICE_STATUS_LABEL } from '@/domain/einvoice-inbound';
@@ -16,7 +17,8 @@ export async function GET(req: Request) {
     return new Response('Nemate pravo pristupa.', { status: 403 });
   }
   const sp = Object.fromEntries(new URL(req.url).searchParams);
-  const { rows } = await listSupplierInvoices(user.companyId, sp, { skip: 0, take: 20_000 });
+  // bez prava `costs` iznosi računa za robu su prazni (otkrivaju nabavne vrijednosti) — kao na popisu
+  const { rows } = await listSupplierInvoices(user.companyId, sp, { skip: 0, take: 20_000 }, { costs: canSeeCost(user.perms) });
   return csvOrXlsx(
     req,
     rows,
@@ -28,10 +30,10 @@ export async function GET(req: Request) {
     { label: 'Datum', value: (r) => date(r.issueDate), type: 'date' },
     { label: 'Dospijeće', value: (r) => (r.dueDate ? date(r.dueDate) : ''), type: 'date' },
     { label: 'Kategorija', value: (r) => r.category },
-    { label: 'Osnovica', value: (r) => num(r.netAmount), type: 'money' },
-    { label: 'PDV', value: (r) => num(r.vatAmount), type: 'money' },
-    { label: 'PDV %', value: (r) => (r.vatPct !== null ? num(r.vatPct) : vatPctOf(num(r.netAmount), num(r.vatAmount))), type: 'number' },
-    { label: 'Ukupno', value: (r) => num(r.total), type: 'money' },
+    { label: 'Osnovica', value: (r) => (r.amountsHidden ? null : num(r.netAmount)), type: 'money' },
+    { label: 'PDV', value: (r) => (r.amountsHidden ? null : num(r.vatAmount)), type: 'money' },
+    { label: 'PDV %', value: (r) => (r.amountsHidden ? null : r.vatPct !== null ? num(r.vatPct) : vatPctOf(num(r.netAmount), num(r.vatAmount))), type: 'number' },
+    { label: 'Ukupno', value: (r) => (r.amountsHidden ? null : num(r.total)), type: 'money' },
     { label: 'Valuta', value: (r) => r.currency },
     { label: 'Plaćeno', value: (r) => (r.paidDate ? date(r.paidDate) : ''), type: 'date' },
     { label: 'Knjižen trošak', value: (r) => (r.expense ? 'da' : 'ne') },

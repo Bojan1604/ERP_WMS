@@ -12,6 +12,7 @@ import type { BillingCode, PlanPeriodInput } from '@/domain/billing';
 import { PlanEditor } from './plan-editor';
 import { BILLING_OPTIONS, BULK_SEASON_OPTIONS, planFromRows, rowsFromPlan, validatePlan, type BulkSeason, type PlanRow } from '@/domain/plan';
 import { itemsPatchAction, removeItemsAction } from '@/app/(app)/najam/ugovori/actions';
+import { plural } from '@/domain/plural';
 
 export interface DeviceInfo {
   id: string;
@@ -120,7 +121,7 @@ export function DeviceBulkBar({ contractId, devices, defaultFrom }: { contractId
       <Dialog
         open={mode === 'price'}
         onClose={() => setMode(null)}
-        title={`Mjesečna cijena — ${picked.length} uređaja`}
+        title={`Mjesečna cijena — ${picked.length} ${plural(picked.length, 'uređaj', 'uređaja', 'uređaja')}`}
         size="sm"
         footer={
           <>
@@ -131,7 +132,7 @@ export function DeviceBulkBar({ contractId, devices, defaultFrom }: { contractId
           </>
         }
       >
-        <Field label="Mjesečni najam (€)" hint="Cijena se uvijek unosi mjesečno; rata se računa iz plana naplate.">
+        <Field label="Mjesečni najam (€)" hint="Cijena se uvijek unosi mjesečno. Nova cijena vrijedi od prve neizdane rate (ne prije tekućeg mjeseca) — fakturirana i prošla razdoblja ostaju po staroj cijeni.">
           <Input autoFocus inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} className="text-right" />
         </Field>
       </Dialog>
@@ -139,7 +140,7 @@ export function DeviceBulkBar({ contractId, devices, defaultFrom }: { contractId
       <Dialog
         open={mode === 'terms'}
         onClose={() => setMode(null)}
-        title={`Cijena, naplata i sezona — ${picked.length} uređaja`}
+        title={`Cijena, naplata i sezona — ${picked.length} ${plural(picked.length, 'uređaj', 'uređaja', 'uređaja')}`}
         size="md"
         footer={
           <>
@@ -175,15 +176,15 @@ export function DeviceBulkBar({ contractId, devices, defaultFrom }: { contractId
           </Field>
         </FormGrid>
         <p className="mt-3 text-sm text-fg-3">
-          Naplata i sezona mijenjaju se u planu svakog označenog uređaja od prve neizdane rate (ne prije tekućeg mjeseca) — već fakturirana i
-          prošla razdoblja ostaju po starim uvjetima. „Kao na ugovoru" briše vlastitu sezonu — uređaj bez drugih odstupanja vraća se na uvjete ugovora.
+          Cijena, naplata i sezona mijenjaju se u planu svakog označenog uređaja od prve neizdane rate (ne prije tekućeg mjeseca) — već fakturirana i
+          prošla razdoblja ostaju po starim uvjetima i staroj cijeni. „Kao na ugovoru" briše vlastitu sezonu — uređaj bez drugih odstupanja vraća se na uvjete ugovora.
         </p>
       </Dialog>
 
       <Dialog
         open={mode === 'plan'}
         onClose={() => setMode(null)}
-        title={`Plan naplate — ${picked.length} uređaja`}
+        title={`Plan naplate — ${picked.length} ${plural(picked.length, 'uređaj', 'uređaja', 'uređaja')}`}
         size="xl"
         footer={
           <>

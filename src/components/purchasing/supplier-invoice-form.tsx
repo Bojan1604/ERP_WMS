@@ -11,8 +11,9 @@ import { Card } from '@/components/ui/misc';
 import { useToast } from '@/components/ui/toast';
 import { supplierVat } from '@/domain/tax';
 import { r2 } from '@/domain/money';
-import { defaultGoodsInvoice, vatPctOf } from '@/domain/purchase-links';
-import { supplierDocsAction } from '@/app/(app)/nabava/ulazni/actions';
+import { defaultGoodsInvoice, vatPctOf, type InvoiceExpenseMode } from '@/domain/purchase-links';
+import { goodsRuleAction, supplierDocsAction } from '@/app/(app)/nabava/ulazni/actions';
+import { eur } from '@/lib/format';
 
 export interface SupplierInvoiceValue {
   id: string | null;
@@ -33,13 +34,20 @@ export interface SupplierInvoiceValue {
   note: string | null;
   paidDate: string | null;
   book: boolean;
-  /** „Ovo je račun za robu s primke" (zadano s poslužitelja po pravilu iznosa). */
+  /** „Ovo je račun za robu" (zadano s poslužitelja po pravilu). */
   goods: boolean;
   orderId: string | null;
   receiptId: string | null;
 }
 
 type SaveInput = Omit<SupplierInvoiceValue, 'internalNo' | 'goods'> & { goods: boolean | null };
+
+/** Pravilo zadane kvačice „račun za robu": vrijednosti robe, broj i zbroj drugih računa za robu. */
+export interface GoodsRule {
+  refs: number[];
+  others: number;
+  otherNet: number;
+}
 
 /** Ono što se o vezi s nabavom zna unaprijed (za prikaz odabranog). */
 export interface LinkOptions {
@@ -50,8 +58,8 @@ export interface LinkOptions {
 /**
  * Unos i izmjena ulaznog računa; PDV se predlaže po državi dobavljača.
  * Dobavljač se bira među partnerima ili upisuje slobodno (naziv + OIB) — tada
- * se partner otvara pri spremanju. Veza s narudžbenicom/primkom: trošak robe
- * koji je knjižen primkom račun ne knjiži ponovno.
+ * se partner otvara pri spremanju. Veza s narudžbenicom/primkom: trošak robe po
+ * narudžbenici = max(primke, računi za robu) — račun za robu knjiži samo razliku iznad primki.
  * eRačun: dobavljač, broj, datum i iznosi dolaze iz XML-a i ne mijenjaju se
  * (`lockDocument`); odbijeni račun se ne plaća ni knjiži (`rejected`);
  * zaprimljeni eRačun se ne plaća prije prihvaćanja (`payLocked`); `readOnly` za korisnike bez prava izmjene.
@@ -67,8 +75,9 @@ export function SupplierInvoiceForm({
   rejected = false,
   payLocked = false,
   readOnly = false,
-  bookedByReceipt = false,
+  expense = null,
   goodsRule = null,
+  hideAmounts = false,
 }: {
   initial: SupplierInvoiceValue;
   /** Trenutni dobavljač (ostali se traže pretragom na poslužitelju). */
@@ -81,10 +90,12 @@ export function SupplierInvoiceForm({
   rejected?: boolean;
   payLocked?: boolean;
   readOnly?: boolean;
-  /** Trošak robe je knjižen primkom (povezana primka/narudžbenica). */
-  bookedByReceipt?: boolean;
-  /** Pravilo zadane kvačice „račun za robu" za početnu vezu: vrijednosti robe i broj drugih računa za robu. */
-  goodsRule?: { refs: number[]; others: number } | null;
+  /** Kako spremljeni račun stoji s troškom po pravilu (iznosi samo uz pravo `costs`). */
+  expense?: { mode: InvoiceExpenseMode; covered: number | null; ownNet: number | null } | null;
+  /** Pravilo zadane kvačice „račun za robu" za početnu vezu (null = odluka je spremljena). */
+  goodsRule?: GoodsRule | null;
+  /** Račun za robu bez prava `costs`: iznosi (nabavna vrijednost) se ne šalju ni prikazuju; obrazac je samo za čitanje. */
+  hideAmounts?: boolean;
 }) {
   const [v, setV] = useState(initial);
   const [free, setFree] = useState(!initial.supplierId && !!(initial.supplierName || initial.supplierOib));
@@ -128,8 +139,27 @@ export function SupplierInvoiceForm({
   };
   const linked = !!(v.orderId || v.receiptId);
   const sameLinks = v.orderId === initial.orderId && v.receiptId === initial.receiptId;
-  // dok korisnik ne dira kvačicu, zadano se računa iz upisane osnovice (prijevoz 25 € na narudžbenici od 200 € nije račun za robu)
-  const goods = goodsTouched || !goodsRule || !sameLinks ? v.goods : defaultGoodsInvoice({ net: v.netAmount, refs: goodsRule.refs, otherGoodsInvoices: goodsRule.others });
+  // pravilo zadane kvačice za TRENUTNU vezu: početna s poslužitelja, a pri promjeni veze dohvaća se iznova
+  const [rule, setRule] = useState<{ key: string; rule: GoodsRule | null }>({ key: `${initial.orderId}|${initial.receiptId}`, rule: goodsRule });
+  const linkKey = `${v.orderId}|${v.receiptId}`;
+  useEffect(() => {
+    if (rule.key === linkKey) return;
+    if (sameLinks || !linked) return setRule({ key: linkKey, rule: sameLinks ? goodsRule : null });
+    let live = true;
+    void goodsRuleAction({ id: v.id, orderId: v.orderId, receiptId: v.receiptId }).then((r) => {
+      if (live && r.ok) setRule({ key: linkKey, rule: r.data ?? null });
+    });
+    return () => {
+      live = false;
+    };
+  }, [linkKey, rule.key, sameLinks, linked, goodsRule, v.id, v.orderId, v.receiptId]);
+  const current = rule.key === linkKey ? rule.rule : null;
+  // dok korisnik ne dira kvačicu, zadano se računa iz upisane osnovice i kategorije (prijevoz nije račun za robu,
+  // djelomični račun „Nabava robe" do nefakturirane vrijednosti jest) — isto pravilo kao na poslužitelju
+  const goods =
+    goodsTouched || !current
+      ? v.goods
+      : defaultGoodsInvoice({ net: v.netAmount, category: v.category, refs: current.refs, otherGoodsNet: current.otherNet, otherGoodsInvoices: current.others });
 
   const submit = () => {
     if (!free && !v.supplierId) return setLocalError('Odaberite dobavljača ili ga upišite slobodno (naziv i OIB).');
@@ -202,51 +232,57 @@ export function SupplierInvoiceForm({
             <Field label="Kategorija troška" className="sm:col-span-2">
               <Select placeholder="— bez kategorije —" options={categories.map((c) => ({ value: c, label: c }))} value={v.category ?? ''} onChange={(e) => setV({ ...v, category: e.target.value || null })} />
             </Field>
-            <Field label="Osnovica (bez PDV-a)" required>
-              <Input type="number" step="0.01" value={v.netAmount} disabled={lockDocument} onChange={(e) => recompute({ netAmount: Number(e.target.value) })} />
-            </Field>
-            <Field label="PDV" hint={vatTouched ? 'Upisano ručno' : vatInfo.label}>
-              <Input
-                type="number"
-                step="0.01"
-                value={v.vatAmount}
-                disabled={lockDocument || readOnly}
-                onChange={(e) => {
-                  setVatTouched(true);
-                  const vat = Number(e.target.value);
-                  setV({ ...v, vatAmount: vat, total: totalTouched ? v.total : r2(v.netAmount + vat) });
-                }}
-              />
-            </Field>
-            <Field label="PDV %" hint={v.vatPct === null ? `Iz iznosa: ${vatPctOf(v.netAmount, v.vatAmount) ?? '—'} %` : undefined}>
-              <Input
-                inputMode="decimal"
-                value={v.vatPct ?? ''}
-                disabled={readOnly}
-                onChange={(e) => {
-                  const pct = e.target.value === '' ? null : Number(e.target.value.replace(',', '.'));
-                  const next = { ...v, vatPct: pct };
-                  if (pct !== null && Number.isFinite(pct) && !lockDocument) {
-                    next.vatAmount = r2((v.netAmount * pct) / 100);
-                    if (!totalTouched) next.total = r2(v.netAmount + next.vatAmount);
+            {hideAmounts ? (
+              <p className="self-end pb-2 text-sm text-fg-3 sm:col-span-4">Iznosi računa za robu (nabavna vrijednost) vidljivi su samo uz pravo na nabavne cijene.</p>
+            ) : (
+              <>
+              <Field label="Osnovica (bez PDV-a)" required>
+                <Input type="number" step="0.01" value={v.netAmount} disabled={lockDocument} onChange={(e) => recompute({ netAmount: Number(e.target.value) })} />
+              </Field>
+              <Field label="PDV" hint={vatTouched ? 'Upisano ručno' : vatInfo.label}>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={v.vatAmount}
+                  disabled={lockDocument || readOnly}
+                  onChange={(e) => {
                     setVatTouched(true);
-                  }
-                  setV(next);
-                }}
-              />
-            </Field>
-            <Field label="Ukupno">
-              <Input
-                type="number"
-                step="0.01"
-                value={v.total}
-                disabled={lockDocument || readOnly}
-                onChange={(e) => {
-                  setTotalTouched(true);
-                  setV({ ...v, total: Number(e.target.value) });
-                }}
-              />
-            </Field>
+                    const vat = Number(e.target.value);
+                    setV({ ...v, vatAmount: vat, total: totalTouched ? v.total : r2(v.netAmount + vat) });
+                  }}
+                />
+              </Field>
+              <Field label="PDV %" hint={v.vatPct === null ? `Iz iznosa: ${vatPctOf(v.netAmount, v.vatAmount) ?? '—'} %` : undefined}>
+                <Input
+                  inputMode="decimal"
+                  value={v.vatPct ?? ''}
+                  disabled={readOnly}
+                  onChange={(e) => {
+                    const pct = e.target.value === '' ? null : Number(e.target.value.replace(',', '.'));
+                    const next = { ...v, vatPct: pct };
+                    if (pct !== null && Number.isFinite(pct) && !lockDocument) {
+                      next.vatAmount = r2((v.netAmount * pct) / 100);
+                      if (!totalTouched) next.total = r2(v.netAmount + next.vatAmount);
+                      setVatTouched(true);
+                    }
+                    setV(next);
+                  }}
+                />
+              </Field>
+              <Field label="Ukupno">
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={v.total}
+                  disabled={lockDocument || readOnly}
+                  onChange={(e) => {
+                    setTotalTouched(true);
+                    setV({ ...v, total: Number(e.target.value) });
+                  }}
+                />
+              </Field>
+              </>
+            )}
             <Field label="Valuta">
               <Input value={v.currency} maxLength={3} disabled={lockDocument} onChange={(e) => setV({ ...v, currency: e.target.value.toUpperCase() })} className="font-mono" />
             </Field>
@@ -290,25 +326,29 @@ export function SupplierInvoiceForm({
                   }}
                 />
                 <p className="mt-1 text-xs text-fg-3">
-                  Račun za robu ne knjiži vlastiti trošak ako je primka već knjižila „Nabavu robe" (trošak se ne zbraja dvaput). Zadano uključeno
-                  kad je osnovica jednaka vrijednosti primke ili narudžbenice (±1 % ili 1 €) i to je prvi povezani račun. Isključite za prijevoz,
-                  dodatne troškove ili drugi račun iste narudžbenice — oni se knjiže zasebno.
+                  Trošak robe narudžbenice knjiži se jednom: ukupno je veći od troška primki i zbroja računa za robu, nikad njihov zbroj — račun
+                  za robu knjiži samo iznos iznad primki. Zadano uključeno za račun kategorije „Nabava robe" do još nefakturirane vrijednosti robe
+                  (i djelomične račune) ili kad osnovica odgovara vrijednosti primke/narudžbenice. Za prijevoz i dodatne troškove odaberite drugu
+                  kategoriju ili isključite — knjiže se zasebno.
                 </p>
               </div>
             )}
-            {bookedByReceipt && linked && goods ? (
-              <p className="text-sm text-fg-2">Trošak robe knjižen je primkom — račun ga ne knjiži ponovno.</p>
-            ) : (
-              <>
-                <Checkbox label="Knjiži kao trošak" checked={v.book} disabled={rejected} onChange={(e) => setV({ ...v, book: e.target.checked })} />
-                <p className="mt-1 text-xs text-fg-3">
-                  {linked
-                    ? goods
-                      ? 'Ako povezana primka ima knjižen trošak nabave, račun za robu ne knjiži vlastiti trošak (trošak se ne zbraja dvaput).'
-                      : 'Račun nije račun za robu s primke — knjiži se kao zaseban trošak.'
-                    : 'Za račun robe koja je zaprimljena primkom povežite primku ili narudžbenicu — trošak je tada već knjižen primkom.'}
-                </p>
-              </>
+            <Checkbox label="Knjiži kao trošak" checked={v.book} disabled={rejected} onChange={(e) => setV({ ...v, book: e.target.checked })} />
+            <p className="mt-1 text-xs text-fg-3">
+              {linked
+                ? goods
+                  ? 'Račun za robu knjiži samo iznos iznad troška primki narudžbenice (trošak se ne zbraja dvaput).'
+                  : 'Račun nije račun za robu — knjiži se kao zaseban trošak.'
+                : 'Za račun robe koja je zaprimljena primkom povežite primku ili narudžbenicu — trošak robe je tada već knjižen primkom.'}
+            </p>
+            {expense && sameLinks && v.book && linked && (
+              <p className="mt-1 text-sm text-fg-2">
+                {expense.mode === 'receipt'
+                  ? 'Trošak robe knjižen je primkom — račun ga ne knjiži ponovno.'
+                  : expense.mode === 'partial'
+                    ? `Primke nose ${expense.covered === null ? 'dio troška' : eur(expense.covered)} — račun knjiži samo razliku${expense.ownNet === null ? '' : ` (${eur(expense.ownNet)})`}.`
+                    : null}
+              </p>
             )}
             {lockDocument && <p className="mt-1 text-xs text-fg-3">Dobavljač, broj, datum i iznosi eRačuna preuzeti su iz XML-a i ne mijenjaju se.</p>}
           </div>

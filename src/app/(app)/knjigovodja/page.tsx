@@ -14,7 +14,9 @@ import { SelectAll, SelectRow, SelectableTr, SelectionProvider } from '@/compone
 import { PAY_TONE } from '@/components/sales/list-bits';
 import { AccountantBar } from '@/components/accountant/accountant-bar';
 import { amount, date, eur, integer } from '@/lib/format';
-import { markAccountantSentAction } from './actions';
+import { accountantKeysAction, markAccountantSentAction } from './actions';
+import { Pagination, readPage } from '@/components/ui/pagination';
+import { countLabel } from '@/domain/plural';
 
 export const metadata = { title: 'Knjigovođa' };
 
@@ -26,7 +28,12 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
   const f = readAccountantFilters(sp);
   // zadano razdoblje (ovaj mjesec) filtri datuma prikazuju kao zamjensku vrijednost — bez preusmjeravanja
   // (prije: 307 na ?od=&do= = dodatni krug do poslužitelja pri svakom otvaranju i predučitavanju)
-  const [list, company] = await Promise.all([listAccountant(user.companyId, f, { out: can(user.perms, 'sales', 'view'), in: can(user.perms, 'purchasing', 'view') }), getCompany(user.companyId)]);
+  // popis po stranicama (100); ZIP, ispis i oznaka „poslano" za sve po filtru idu preko filtra (AccountantBar)
+  const page = readPage(sp, 100);
+  const [list, company] = await Promise.all([
+    listAccountant(user.companyId, f, { out: can(user.perms, 'sales', 'view'), in: can(user.perms, 'purchasing', 'view') }, page),
+    getCompany(user.companyId),
+  ]);
   const { rows, totals, dirs } = list;
   const canMark = can(user.perms, 'reports', 'ops');
   const canSales = can(user.perms, 'sales', 'view');
@@ -38,6 +45,7 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
   for (const [k, v] of Object.entries(sp)) if (typeof v === 'string' && v && k !== 'page') exportQs.set(k, v);
   exportQs.set('od', f.from);
   exportQs.set('do', f.to);
+  const filterQs = exportQs.toString();
 
   return (
     <>
@@ -99,7 +107,14 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
       </FilterBar>
 
       <SelectionProvider ids={rows.map((r) => r.key)}>
-        <AccountantBar action={markAccountantSentAction} canMark={canMark} email={{ to: company.accountantEmail ?? null, subject: subjectText }} />
+        <AccountantBar
+          action={markAccountantSentAction}
+          keysAction={accountantKeysAction}
+          filterQs={filterQs}
+          total={list.listed}
+          canMark={canMark}
+          email={{ to: company.accountantEmail ?? null, subject: subjectText }}
+        />
         <TableWrap>
           {rows.length ? (
             <table className="data-table sm:min-w-[1250px]">
@@ -185,7 +200,7 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
                 {dirs.out && (
                   <tr>
                     <td />
-                    <td colSpan={6}>Izlazni: {integer(totals.out.count)} dokumenata</td>
+                    <td colSpan={6}>Izlazni: {countLabel(totals.out.count, 'dokument', 'dokumenta', 'dokumenata', integer)}</td>
                     <td className="num">{amount(totals.out.net)}</td>
                     <td className="num">{amount(totals.out.vat)}</td>
                     <td className="num">{amount(totals.out.total)}</td>
@@ -195,7 +210,7 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
                 {dirs.in && (
                   <tr>
                     <td />
-                    <td colSpan={6}>Ulazni: {integer(totals.in.count)} dokumenata</td>
+                    <td colSpan={6}>Ulazni: {countLabel(totals.in.count, 'dokument', 'dokumenta', 'dokumenata', integer)}</td>
                     <td className="num">{amount(totals.in.net)}</td>
                     <td className="num">{amount(totals.in.vat)}</td>
                     <td className="num">{amount(totals.in.total)}</td>
@@ -209,6 +224,7 @@ export default async function AccountantPage({ searchParams }: { searchParams: P
           )}
         </TableWrap>
       </SelectionProvider>
+      <Pagination page={page.page} pageSize={page.take} total={list.listed} params={sp} basePath="/knjigovodja" />
 
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Dokumenata" value={integer(totals.out.count + totals.in.count)} />

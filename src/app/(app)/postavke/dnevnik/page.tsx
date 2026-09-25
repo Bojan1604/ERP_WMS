@@ -7,7 +7,8 @@ import { Badge, Empty, PageHeader, TableWrap } from '@/components/ui/misc';
 import { DateFilter, FilterBar, SearchFilter, SelectFilter } from '@/components/ui/filters';
 import { Pagination, readPage } from '@/components/ui/pagination';
 import { dateTime } from '@/lib/format';
-import { canSeeCost, redactCostDiff, redactCostSummary } from '@/domain/permissions';
+import { canSeeCost, COST_ACTIONS, COST_ENTITIES, redactCostDiff, redactCostSummary } from '@/domain/permissions';
+import { inCompany } from '@/server/services/users';
 import { escapeLike } from '@/lib/like';
 
 export const metadata = { title: 'Dnevnik promjena' };
@@ -57,7 +58,12 @@ export default async function AuditLogPage({ searchParams }: { searchParams: Pro
   const where: Prisma.AuditLogWhereInput = { companyId: user.companyId };
   if (typeof params.entitet === 'string' && params.entitet) where.entity = params.entitet;
   if (typeof params.korisnik === 'string' && params.korisnik) where.userId = params.korisnik;
-  if (typeof params.q === 'string' && params.q.trim()) where.summary = { contains: escapeLike(params.q.trim()), mode: 'insensitive' };
+  if (typeof params.q === 'string' && params.q.trim()) {
+    const q = params.q.trim();
+    where.summary = { contains: escapeLike(q), mode: 'insensitive' };
+    // bez prava „costs" pretraga s brojkama ne smije pogađati skrivene nabavne iznose/marže (opis se prikazuje maskiran)
+    if (!showCost && /\d/.test(q)) where.NOT = { OR: [{ entity: { in: [...COST_ENTITIES] } }, { action: { in: [...COST_ACTIONS] } }] };
+  }
   const from = isoDay(params.od);
   const to = isoDay(params.do);
   if (from || to) where.at = { ...(from ? { gte: fromISO(from) } : {}), ...(to ? { lt: fromISO(addDays(to, 1)) } : {}) };
@@ -66,7 +72,7 @@ export default async function AuditLogPage({ searchParams }: { searchParams: Pro
     db.auditLog.findMany({ where, orderBy: { at: 'desc' }, skip: page.skip, take: page.take }),
     db.auditLog.count({ where }),
     db.auditLog.groupBy({ by: ['entity'], where: { companyId: user.companyId }, orderBy: { entity: 'asc' } }),
-    db.user.findMany({ where: { companyId: user.companyId }, orderBy: { name: 'asc' }, select: { id: true, name: true } }),
+    db.user.findMany({ where: inCompany(user.companyId), orderBy: { name: 'asc' }, select: { id: true, name: true } }),
   ]);
 
   return (

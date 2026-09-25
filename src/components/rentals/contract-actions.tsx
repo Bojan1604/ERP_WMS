@@ -8,6 +8,7 @@ import { Checkbox } from '@/components/ui/field';
 import { ActionButton, useAction } from '@/components/ui/action';
 import type { ContractStatusCode } from '@/domain/billing';
 import { contractStatusAction, terminateAction } from '@/app/(app)/najam/ugovori/actions';
+import { plural } from '@/domain/plural';
 
 /** Radnje statusa ugovora: pauza/nastavak, istek i otkaz. */
 export function ContractStatusActions({
@@ -70,11 +71,11 @@ export function ContractStatusActions({
           <p>Ugovor prelazi u status <b>Raskinut</b> s današnjim datumom kao krajem. Izdani računi ostaju nepromijenjeni.</p>
           {pending > 0 && (
             <p className="rounded-md bg-info-soft px-3 py-2 text-sm text-info">
-              Ugovor ima {pending} neizdanih rata — i nakon otkaza ostaju u „Rate za izdati“ (kao i rate do danas koje tek dospijevaju).
+              Ugovor ima {pending} {plural(pending, 'neizdanu ratu', 'neizdane rate', 'neizdanih rata')} — i nakon otkaza ostaju u „Rate za izdati“ (kao i rate do danas koje tek dospijevaju).
             </p>
           )}
           {rented > 0 ? (
-            <Checkbox label={`Najavi povrat odmah (${rented} uređaja → „U dolasku")`} checked={returnNow} onChange={(e) => setReturnNow(e.target.checked)} />
+            <Checkbox label={`Najavi povrat odmah (${rented} ${plural(rented, 'uređaj', 'uređaja', 'uređaja')} → „U dolasku")`} checked={returnNow} onChange={(e) => setReturnNow(e.target.checked)} />
           ) : (
             <p className="text-sm text-fg-3">Na ugovoru nema uređaja u najmu.</p>
           )}

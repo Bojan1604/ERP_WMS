@@ -2,8 +2,8 @@ import Link from 'next/link';
 import { can } from '@/domain/permissions';
 import { pageAccess } from '@/server/auth';
 import { getCompany } from '@/server/queries/lookups';
-import { accountantRowsByIds, invoicesForPrint } from '@/server/queries/accountant';
-import { ACCOUNTANT_ROW_CAP, parseKeys } from '@/domain/accountant';
+import { accountantKeysByFilter, accountantRowsByIds, invoicesForPrint } from '@/server/queries/accountant';
+import { ACCOUNTANT_ROW_CAP, parseKeys, readAccountantFilters } from '@/domain/accountant';
 import { r2 } from '@/domain/money';
 import { DocTable, DocTotals, DocumentShell } from '@/components/doc/document';
 import { InvoiceDocument, toDocData } from '@/components/sales/invoice-document';
@@ -22,7 +22,11 @@ type SP = Record<string, string | string[] | undefined>;
 export default async function AccountantPrintPage({ searchParams }: { searchParams: Promise<SP> }) {
   const user = await pageAccess('reports', 'view');
   const sp = await searchParams;
-  const ids = parseKeys(typeof sp.ids === 'string' ? sp.ids : '');
+  // `sve=1`: svi dokumenti popisa po filtrima iz URL-a (najviše ACCOUNTANT_ROW_CAP po smjeru)
+  const ids =
+    sp.sve === '1'
+      ? parseKeys(await accountantKeysByFilter(user.companyId, readAccountantFilters(sp), { out: can(user.perms, 'sales', 'view'), in: can(user.perms, 'purchasing', 'view') }))
+      : parseKeys(typeof sp.ids === 'string' ? sp.ids : '');
   if (!can(user.perms, 'sales', 'view')) ids.out = [];
   const inIds = can(user.perms, 'purchasing', 'view') ? ids.in.slice(0, ACCOUNTANT_ROW_CAP) : [];
   const [company, invoices, inbound] = await Promise.all([

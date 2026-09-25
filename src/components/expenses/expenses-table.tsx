@@ -11,6 +11,7 @@ import { today } from '@/domain/dates';
 import { date, eur, integer } from '@/lib/format';
 import { EXPENSE_SOURCE, type ExpenseSourceCode } from './labels';
 import { ExpenseDialog, type ExpenseActions, type ExpenseOptions, type ExpenseValue } from './expense-dialog';
+import { countLabel } from '@/domain/plural';
 
 export interface OccurrenceRow {
   key: string;
@@ -173,7 +174,7 @@ export function ExpensesTable({
         </tbody>
         <tfoot>
           <tr>
-            <td colSpan={4}>Ukupno: {integer(count ?? rows.length)} stavki</td>
+            <td colSpan={4}>Ukupno: {countLabel(count ?? rows.length, 'stavka', 'stavke', 'stavki', integer)}</td>
             <td className="num">{eur(totals.net)}</td>
             <td className="num">{eur(totals.vat)}</td>
             <td className="num">{eur(Math.round((totals.net + totals.vat) * 100) / 100)}</td>

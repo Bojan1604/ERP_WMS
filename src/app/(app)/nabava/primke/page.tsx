@@ -13,6 +13,7 @@ import { FilterBar, SearchFilter, SelectFilter } from '@/components/ui/filters';
 import { Pagination, readPage } from '@/components/ui/pagination';
 import { RECEIPT_STATUS } from '@/components/purchasing/labels';
 import { date, eur, integer } from '@/lib/format';
+import { countLabel } from '@/domain/plural';
 
 type Params = Record<string, string | string[] | undefined>;
 
@@ -89,7 +90,7 @@ export default async function ReceiptsPage({ searchParams }: { searchParams: Pro
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={7}>Ukupno: {integer(list.total)} primki (iznos bez storniranih)</td>
+                <td colSpan={7}>Ukupno: {countLabel(list.total, 'primka', 'primke', 'primki', integer)} (iznos bez storniranih)</td>
                 {costs && <td className="num">{eur(list.sum)}</td>}
                 <td />
               </tr>

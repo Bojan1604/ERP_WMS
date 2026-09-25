@@ -175,47 +175,62 @@ function trimTrivial(rows: PlanPeriodInput[], base: ISODate): PlanPeriodInput[] 
 const chargeKey = (ch: { period: Period; months: number; amount: number }) => `${ch.period}:${ch.months}:${ch.amount}`;
 
 /**
- * Nova pravila naplate uređaja (izmjena uvjeta ugovora, plana uređaja ili skupna
- * naplata/sezona) — JEDINA provjera za sva tri puta: nova pravila vrijede tek od
- * `bulkCutoff` (prva neizdana, nepauzirana rata od tekućeg mjeseca). Razdoblja
- * prije granice ostaju po starim uvjetima (kod izmjene ugovora zapisuju se
- * izričito — naplata i sezona — jer uređaj inače nasljeđuje nove uvjete ugovora).
- * Ako se rate prije granice ne mijenjaju, novi plan vrijedi u cijelosti.
+ * Nova pravila naplate uređaja (izmjena uvjeta ugovora, plana uređaja, mjesečne
+ * cijene ili skupna naplata/sezona) — JEDINA provjera za sve te puteve: nova
+ * pravila vrijede tek od `bulkCutoff` (prva neizdana, nepauzirana rata od tekućeg
+ * mjeseca). Razdoblja prije granice ostaju po starim uvjetima (kod izmjene ugovora
+ * zapisuju se izričito — naplata i sezona — jer uređaj inače nasljeđuje nove uvjete
+ * ugovora; kod nove mjesečne cijene izričito i stara cijena).
+ * Ako novi plan počinje tek nakon granice (npr. od 01.10., a rujanska rata još nije
+ * izdana), stari uvjeti vrijede do dana prije njegova prvog razdoblja — plan nikad
+ * nema rupu. Ako se rate prije te točke ne mijenjaju, novi plan vrijedi u cijelosti.
  *
  * Pauze se čuvaju: granica prelazi i pauzirane rate (vidi `bulkCutoff`), pa sva
  * pauzirana razdoblja ostaju u dijelu plana po starim uvjetima.
  *
  * @param terms dosadašnji uvjeti ugovora; `nextTerms` novi (izmjena ugovora)
- * @param device uređaj s dosadašnjim planom i pauzama
+ * @param device uređaj s dosadašnjim planom, cijenom i pauzama
  * @param next željeni plan uređaja (za nove uvjete) kao da vrijedi od početka
+ * @param nextMonthly nova mjesečna cijena uređaja (izostavljeno = ista)
  * @param covered fakturirana razdoblja uređaja (YYYY-MM)
+ * @returns plan i dan od kojeg nova pravila vrijede (null = plan vrijedi u cijelosti)
  */
 export function rebasePlan(a: {
   terms: ContractTerms;
   nextTerms?: ContractTerms;
   device: ContractDevice;
   next: PlanPeriodInput[];
+  nextMonthly?: number;
   covered: ReadonlySet<Period>;
   now: ISODate;
 }): { plan: PlanPeriodInput[]; cut: ISODate | null } {
   const oldT: ContractTerms = { ...a.terms, status: 'ACTIVE' };
   const newT: ContractTerms = { ...(a.nextTerms ?? a.terms), status: 'ACTIVE' };
   const oldD: ContractDevice = { ...a.device, status: null, paused: [] };
-  const newD: ContractDevice = { ...oldD, plan: a.next };
+  const priceChange = a.nextMonthly !== undefined && a.nextMonthly !== a.device.monthly;
+  const newD: ContractDevice = { ...oldD, plan: a.next, monthly: a.nextMonthly ?? oldD.monthly };
   const cut = bulkCutoff(a.terms, a.device, a.covered, a.now);
-  const before = (t: ContractTerms, d: ContractDevice) => scheduledCharges(t, d, '0000-01', addMonths(cut, -1).slice(0, 7)).map(chargeKey).join('|');
   const newBase = newT.firstBillingDate || newT.startDate;
+  // novi plan od granice: razdoblja koja završavaju prije granice otpadaju, ono preko granice počinje na granici
+  const nextSpans = spans(a.next, newBase).filter(({ end }) => !end || end >= cut);
+  const first = nextSpans.map((x) => x.start).sort()[0];
+  // stari uvjeti vrijede do prvog razdoblja novog plana (nikad prije granice)
+  const split = first && first > cut ? first : cut;
+  const before = (t: ContractTerms, d: ContractDevice) => scheduledCharges(t, d, '0000-01', addMonths(split, -1).slice(0, 7)).map(chargeKey).join('|');
 
   let plan: PlanPeriodInput[];
   let splitAt: ISODate | null = null;
   if (before(oldT, oldD) === before(newT, newD)) plan = a.next;
   else {
-    splitAt = cut;
+    splitAt = split;
     const oldBase = oldT.firstBillingDate || oldT.startDate;
     const head: PlanPeriodInput[] = [];
     for (const { p, start, end } of spans(a.device.plan, oldBase)) {
-      if (start >= cut) continue;
-      const row: PlanPeriodInput = end && end < cut ? { ...p } : { ...p, to: addDays(cut, -1) };
+      if (start >= split) continue;
+      const row: PlanPeriodInput = end && end < split ? { ...p } : { ...p, to: addDays(split, -1) };
+      if (!row.from) row.from = start;
+      // nova mjesečna cijena: stara razdoblja zadržavaju dosadašnju cijenu
+      if (priceChange && (p.price === null || p.price === undefined)) row.price = a.device.monthly;
       if (a.nextTerms) {
         // uvjeti ugovora se mijenjaju: staro razdoblje dobiva izričitu naplatu i sezonu dosadašnjeg ugovora
         row.from = start;
@@ -227,12 +242,7 @@ export function rebasePlan(a: {
       }
       head.push(row);
     }
-    // novi plan od granice: razdoblja koja završavaju prije granice otpadaju, ono preko granice počinje na granici
-    const tail: PlanPeriodInput[] = [];
-    for (const { p, start, end } of spans(a.next, newBase)) {
-      if (end && end < cut) continue;
-      tail.push(start < cut ? { ...p, from: cut } : p);
-    }
+    const tail = nextSpans.map(({ p, start }) => (start < split ? { ...p, from: split } : p));
     plan = [...head, ...tail];
   }
   return { plan: trimTrivial(plan, newBase), cut: splitAt };

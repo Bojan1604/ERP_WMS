@@ -82,6 +82,19 @@ export function periodLabel(p: Period): string {
   return `${MONTHS_HR[Number(p.slice(5, 7)) - 1]} ${p.slice(0, 4)}.`;
 }
 
+/**
+ * Razdoblje od `months` mjeseci od `p`: 1 → „rujan 2026.”, 3 → „rujan – studeni 2026.”,
+ * preko godine → „prosinac 2026. – veljača 2027.”.
+ */
+export function periodSpanLabel(p: Period, months = 1): string {
+  const n = Math.max(1, Math.trunc(months) || 1);
+  if (n === 1) return periodLabel(p);
+  const y = Number(p.slice(0, 4));
+  const m0 = Number(p.slice(5, 7)) - 1 + n - 1;
+  const last = period(y + Math.floor(m0 / 12), m0 % 12);
+  return last.slice(0, 4) === p.slice(0, 4) ? `${MONTHS_HR[Number(p.slice(5, 7)) - 1]} – ${periodLabel(last)}` : `${periodLabel(p)} – ${periodLabel(last)}`;
+}
+
 /** 2026-03-05 → 05.03.2026. */
 export function formatDate(d: ISODate | Date | null | undefined): string {
   const s = toISO(d ?? null);

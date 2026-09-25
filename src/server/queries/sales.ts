@@ -84,7 +84,21 @@ export async function resolveInvoiceSearch(companyId: string, q: string): Promis
   return items.map((i) => i.id);
 }
 
-export function invoiceWhere(companyId: string, f: InvoiceFilters, overdueDays: number, serialItemIds: string[] = []): Prisma.InvoiceWhereInput {
+/**
+ * Miješani računi (druga vrsta računa, ali ima stavke tražene vrste) — razrješavaju se
+ * jednom unaprijed, pa upiti popisa (broj po skupinama, zbrojevi, stranica) ne traže
+ * po svim stavkama svih računa. Previše pogodaka (undefined) → uvjet ostaje u upitu.
+ */
+export async function resolveMixedTypeIds(companyId: string, types: string[]): Promise<string[] | undefined> {
+  if (!types.length) return [];
+  const rows = await db.$queryRaw<Array<{ id: string }>>`
+    SELECT DISTINCT l."invoiceId" AS id FROM "InvoiceLine" l JOIN "Invoice" v ON v.id = l."invoiceId"
+    WHERE v."companyId" = ${companyId} AND l."lineType"::text = ANY(${types}) AND NOT (v.type::text = ANY(${types}))
+    LIMIT 2001`;
+  return rows.length > 2000 ? undefined : rows.map((r) => r.id);
+}
+
+export function invoiceWhere(companyId: string, f: InvoiceFilters, overdueDays: number, serialItemIds: string[] = [], mixedTypeIds?: string[]): Prisma.InvoiceWhereInput {
   const and: Prisma.InvoiceWhereInput[] = [{ companyId }];
   if (!f.excluded) and.push({ partner: { excluded: false } });
   if (f.year !== 'sve' && /^\d{4}$/.test(f.year)) and.push({ year: Number(f.year) });
@@ -92,7 +106,8 @@ export function invoiceWhere(companyId: string, f: InvoiceFilters, overdueDays: 
   if (f.type.length) {
     // vrsta računa ili stavka te vrste (miješani račun: prodaja + najam)
     const types = f.type as InvoiceType[];
-    and.push({ OR: [{ type: { in: types } }, { lines: { some: { lineType: { in: types } } } }] });
+    const mixed: Prisma.InvoiceWhereInput[] = mixedTypeIds ? (mixedTypeIds.length ? [{ id: { in: mixedTypeIds } }] : []) : [{ lines: { some: { lineType: { in: types } } } }];
+    and.push({ OR: [{ type: { in: types } }, ...mixed] });
   }
   if (f.kind.length) {
     const kinds = f.kind.filter((k): k is InvoiceKind => k !== 'STORNOED');
@@ -188,10 +203,21 @@ export const invoiceListSelect = {
   period: true,
   refInvoice: { select: { eInvoiceStatus: true } },
   partner: { select: { id: true, name: true, excluded: true } },
-  _count: { select: { lines: { where: { kind: 'DEVICE' } } } },
 } satisfies Prisma.InvoiceSelect;
 
-export type InvoiceListRow = Prisma.InvoiceGetPayload<{ select: typeof invoiceListSelect }>;
+/** Redak popisa; `_count.lines` = broj uređaja na računu (stavke DEVICE). */
+export type InvoiceListRow = Prisma.InvoiceGetPayload<{ select: typeof invoiceListSelect }> & { _count: { lines: number } };
+
+/**
+ * Broj uređaja po računu samo za retke stranice. (`_count` u selectu Prisma piše kao
+ * LEFT JOIN na zbroj svih stavki svih računa — na velikoj bazi stotine ms po upitu.)
+ */
+async function withDeviceCounts(rows: Prisma.InvoiceGetPayload<{ select: typeof invoiceListSelect }>[]): Promise<InvoiceListRow[]> {
+  if (!rows.length) return [];
+  const g = await db.invoiceLine.groupBy({ by: ['invoiceId'], where: { invoiceId: { in: rows.map((r) => r.id) }, kind: 'DEVICE' }, _count: { _all: true } });
+  const n = new Map(g.map((x) => [x.invoiceId, x._count._all]));
+  return rows.map((r) => ({ ...r, _count: { lines: n.get(r.id) ?? 0 } }));
+}
 
 /**
  * Popis računa. Zadani redoslijed (kasni → nedospjelo → nacrti → ostalo) radi se
@@ -199,8 +225,12 @@ export type InvoiceListRow = Prisma.InvoiceGetPayload<{ select: typeof invoiceLi
  * potrebnih redaka iz skupina koje ona pokriva.
  */
 export async function listInvoices(companyId: string, f: InvoiceFilters, page: { skip: number; take: number }) {
-  const [company, serialIds] = await Promise.all([getCompany(companyId), f.q ? resolveInvoiceSearch(companyId, f.q) : Promise.resolve([])]);
-  const where = invoiceWhere(companyId, f, company.overdueDays, serialIds);
+  const [company, serialIds, mixedIds] = await Promise.all([
+    getCompany(companyId),
+    f.q ? resolveInvoiceSearch(companyId, f.q) : Promise.resolve([]),
+    f.type.length ? resolveMixedTypeIds(companyId, f.type) : Promise.resolve(undefined),
+  ]);
+  const where = invoiceWhere(companyId, f, company.overdueDays, serialIds, mixedIds);
   const { late, notLate } = lateWhere(company.overdueDays);
   const order = invoiceOrder(f.sort);
 
@@ -209,7 +239,7 @@ export async function listInvoices(companyId: string, f: InvoiceFilters, page: {
     db.invoice.aggregate({ where: { AND: [where, OPEN, late] }, _sum: { openAmount: true }, _count: true }),
   ]);
 
-  let rows: InvoiceListRow[] = [];
+  let rows: Prisma.InvoiceGetPayload<{ select: typeof invoiceListSelect }>[] = [];
   let total = 0;
   if (order) {
     [rows, total] = await Promise.all([
@@ -218,10 +248,11 @@ export async function listInvoices(companyId: string, f: InvoiceFilters, page: {
     ]);
   } else {
     const groups: Array<{ where: Prisma.InvoiceWhereInput; orderBy: Prisma.InvoiceOrderByWithRelationInput[] }> = [
-      { where: { AND: [where, OPEN, late] }, orderBy: [{ date: 'asc' }, { seq: 'asc' }] },
-      { where: { AND: [where, OPEN, notLate] }, orderBy: [{ date: 'desc' }, { seq: 'desc' }] },
-      { where: { AND: [where, { status: 'DRAFT' }] }, orderBy: [{ date: 'desc' }, { createdAt: 'desc' }] },
-      { where: { AND: [where, CLOSED] }, orderBy: [{ date: 'desc' }, { seq: 'desc' }, { createdAt: 'desc' }] },
+      // zadnji ključ (id) čini redoslijed stalnim i kad se datum i broj ponavljaju (uvezeni računi bez broja)
+      { where: { AND: [where, OPEN, late] }, orderBy: [{ date: 'asc' }, { seq: 'asc' }, { id: 'asc' }] },
+      { where: { AND: [where, OPEN, notLate] }, orderBy: [{ date: 'desc' }, { seq: 'desc' }, { id: 'desc' }] },
+      { where: { AND: [where, { status: 'DRAFT' }] }, orderBy: [{ date: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }] },
+      { where: { AND: [where, CLOSED] }, orderBy: [{ date: 'desc' }, { seq: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }] },
     ];
     const counts = await Promise.all(groups.map((g) => db.invoice.count({ where: g.where })));
     total = counts.reduce((a, b) => a + b, 0);
@@ -238,9 +269,9 @@ export async function listInvoices(companyId: string, f: InvoiceFilters, page: {
       skip = 0;
     }
   }
-  const [sum, overdue] = await aggregate;
+  const [[sum, overdue], list] = await Promise.all([aggregate, withDeviceCounts(rows)]);
   return {
-    rows,
+    rows: list,
     total,
     overdueDays: company.overdueDays,
     totals: {

@@ -94,8 +94,15 @@ export function InvoiceDocument({
     ...(hasCode ? [l.code ?? ''] : []),
     <div key="d">
       {l.description}
-      {l.note && <div className="text-[10.5px] text-black/60">{l.note}</div>}
-      {l.serials.length > 0 && <div className="font-mono text-[10.5px] text-black/60">SN: {l.serials.join(', ')}</div>}
+      {/* ispis: napomena i serijski nastavljaju opis u istom odlomku (kompaktnije — račun do ~12 stavki na jednoj stranici) */}
+      {(l.note || l.serials.length > 0) && (
+        <div className="text-[10.5px] text-black/60 print:inline print:text-[9.5px]">
+          <span className="hidden print:inline"> · </span>
+          {l.note && <div className="print:inline">{l.note}</div>}
+          {l.note && l.serials.length > 0 && <span className="hidden print:inline"> · </span>}
+          {l.serials.length > 0 && <div className="font-mono print:inline">SN: {l.serials.join(', ')}</div>}
+        </div>
+      )}
     </div>,
     ...(hasKpd ? [l.kpd ?? ''] : []),
     l.unit,
@@ -152,7 +159,7 @@ export function InvoiceDocument({
       )}
       {inv.description && <p className="mb-3 font-medium">{inv.description}</p>}
       <DocTable head={head} rows={rows} align={align} />
-      <div className="mt-3 flex items-start justify-between gap-6 max-sm:flex-col-reverse max-sm:items-stretch max-sm:gap-3">
+      <div className="mt-3 flex items-start justify-between gap-6 max-sm:flex-col-reverse max-sm:items-stretch max-sm:gap-3 print:mt-2 print:flex-row print:items-start print:break-inside-avoid">
         <table className="text-[11px]">
           <thead>
             <tr className="border-b border-black/30 text-left">
@@ -180,8 +187,10 @@ export function InvoiceDocument({
       ))}
       {company.vatOnPayment && <p className="mt-3 text-[11px]">{VAT_ON_PAYMENT_NOTE}</p>}
       {inv.note && <p className="mt-3 whitespace-pre-line">{inv.note}</p>}
+      {/* ispis: fiskalizacija i podaci za plaćanje jedno uz drugo, nikad prelomljeni preko stranice */}
+      <div className="print:mt-3 print:grid print:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] print:items-stretch print:gap-3 print:break-inside-avoid print:[&>section]:mt-0 print:[&>section:only-child]:col-span-2">
       {inv.status === 'ISSUED' && inv.zki && (
-        <section className="mt-5 flex items-center justify-between gap-6 rounded border border-black/15 p-3">
+        <section className="mt-5 flex items-center justify-between gap-6 rounded border border-black/15 p-3 print:break-inside-avoid print:gap-3 print:p-2">
           <div className="min-w-0 break-all text-[11px]">
             <p className="mb-1 text-[10px] uppercase tracking-wider text-black/50">Fiskalizacija</p>
             <p>
@@ -193,12 +202,12 @@ export function InvoiceDocument({
             {inv.issuedAt && <p>Vrijeme izdavanja: {fullTime(inv.issuedAt)}</p>}
           </div>
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={`/api/prodaja/racuni/${inv.id}/fiskal-qr?v=${inv.jir ?? inv.zki}`} alt="QR kod za provjeru računa" className="size-[24mm] shrink-0" />
+          <img src={`/api/prodaja/racuni/${inv.id}/fiskal-qr?v=${inv.jir ?? inv.zki}`} alt="QR kod za provjeru računa" className="size-[24mm] shrink-0 print:size-[20mm]" />
         </section>
       )}
       {receivable && inv.status === 'ISSUED' && inv.paymentMethod === 'TRANSFER' && (
-        <section className="mt-5 flex items-end justify-between gap-6 rounded border border-black/15 p-3 max-sm:flex-col max-sm:items-start">
-          <div className="text-[11.5px]">
+        <section className="mt-5 flex items-end justify-between gap-6 rounded border border-black/15 p-3 max-sm:flex-col max-sm:items-start print:flex-row print:items-end print:break-inside-avoid print:gap-3 print:p-2">
+          <div className="min-w-0 text-[11.5px] print:text-[10.5px]">
             <p className="mb-1 text-[10px] uppercase tracking-wider text-black/50">Podaci za plaćanje</p>
             <p>
               IBAN: <b>{company.iban ?? '—'}</b>
@@ -214,10 +223,11 @@ export function InvoiceDocument({
           </div>
           {inv.openAmount > 0 && company.iban && (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={`/api/prodaja/racuni/${inv.id}/hub3`} alt="HUB-3 barkod za plaćanje" className="h-[26mm] w-auto" />
+            <img src={`/api/prodaja/racuni/${inv.id}/hub3`} alt="HUB-3 barkod za plaćanje" className="h-[26mm] w-auto print:h-[22mm] print:min-w-0 print:max-w-[55%] print:object-contain" />
           )}
         </section>
       )}
+      </div>
     </DocumentShell>
   );
 }
@@ -308,7 +318,7 @@ export function toDocData(inv: {
         ...rentLineView({ description: l.description, unit: l.unit, monthly: l.monthly == null ? null : n(l.monthly), months: l.months }, range),
         serial: l.item?.serial ?? null,
         code: l.model?.code ?? null,
-        kpd: l.kpd ?? l.model?.kpd ?? l.service?.kpd ?? null,
+        kpd: l.kpd || null, // ispis = KPD na stavci (isti kao u XML-u eRačuna), bez zamjene s modela
         qty: n(l.qty),
         unitPrice: n(l.unitPrice),
         discountPct: n(l.discountPct),

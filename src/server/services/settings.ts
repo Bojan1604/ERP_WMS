@@ -7,6 +7,7 @@ import type { Actor } from './items';
 import { STATUS_KIND_LABEL } from './items';
 import { MAX_LOGO_BYTES, checkCounterStart, isCurrencyCode, isPaymentModel, isValidLogo } from '@/domain/company';
 import { isValidOib } from '@/domain/tax';
+import { kpdValid } from '@/domain/sales-lines';
 import { fromISO, today } from '@/domain/dates';
 
 // ---------------------------------------------------------------- firma
@@ -129,6 +130,8 @@ export interface ModelInput {
   code: string | null;
   categoryId: string | null;
   kpd: string | null;
+  /** KPD za najam (prazno = KPD najma firme). */
+  kpdRent?: string | null;
   salePrice: number | null;
   rentPrice: number | null;
   marginPct: number | null;
@@ -145,6 +148,8 @@ export async function saveModel(tx: Tx, actor: Actor, id: string | null, input: 
   }
   assert(input.marginPct === null || (input.marginPct >= 0 && input.marginPct < 100), 'Marža mora biti između 0 i 100 %.');
   assert(input.minStock >= 0, 'Minimalna zaliha ne može biti negativna.');
+  assert(!input.kpdRent?.trim() || kpdValid(input.kpdRent), 'KPD za najam mora biti oblika 00.00.00.');
+  if (input.kpdRent !== undefined) input = { ...input, kpdRent: input.kpdRent?.trim() || null };
   const label = [input.brand, input.name].filter(Boolean).join(' ');
   let modelId = id;
   let oldRent: number | null = null;

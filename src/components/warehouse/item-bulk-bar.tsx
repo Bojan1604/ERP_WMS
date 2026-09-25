@@ -7,6 +7,7 @@ import { Button, buttonClass } from '@/components/ui/button';
 import { labelsHref } from './scan-actions';
 import { SelectionBar } from '@/components/ui/selection';
 import {
+  sumCost,
   AnnounceReturnDialog, BulkEditDialog, MarkOutDialog, StatusDialog, TransferDialog, WriteOffDialog,
   type Perms, type SelectedMeta, type WarehouseOptions,
 } from './dialogs';
@@ -16,7 +17,8 @@ import { MOVABLE_STATES, NO_WRITE_OFF_STATES, RETURNABLE_STATES, type StateKind 
 export interface RowMeta {
   state: StateKind;
   onContract: boolean;
-  cost: number;
+  /** Nabavna vrijednost; null bez prava `costs`. */
+  cost: number | null;
 }
 
 type Which = 'status' | 'out' | 'transfer' | 'writeoff' | 'edit' | 'return' | 'delete' | null;
@@ -35,7 +37,7 @@ export function ItemBulkBar({ rows, options, perms }: { rows: Record<string, Row
           const meta: SelectedMeta = {
             count: ids.length,
             onContract: sel.filter((r) => r.onContract).length,
-            cost: sel.reduce((s, r) => s + r.cost, 0),
+            cost: sumCost(sel),
           };
           const all = (states: StateKind[]) => sel.length > 0 && sel.every((r) => states.includes(r.state));
           const none = (states: StateKind[]) => sel.every((r) => !states.includes(r.state));

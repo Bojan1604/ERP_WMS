@@ -4,8 +4,8 @@ import { LogOut, ShieldOff } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import type { Level } from '@/domain/permissions';
-import { Badge, PageHeader } from '@/components/ui/misc';
-import { inCompany } from '@/server/services/users';
+import { Badge, Notice, PageHeader } from '@/components/ui/misc';
+import { assertCanManage, inCompany } from '@/server/services/users';
 import { ActionButton } from '@/components/ui/action';
 import { UserForm } from '@/components/settings/user-form';
 import { dateTime } from '@/lib/format';
@@ -28,6 +28,15 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
       });
   const company = await db.company.findUniqueOrThrow({ where: { id: me.companyId }, select: { statusChangeNeedsApproval: true } });
   if (!isNew && !u) notFound();
+  // ne-administrator ne upravlja korisnikom s višim pravima (lozinka, e-adresa, odjava…) — samo pregled
+  let locked: string | null = null;
+  if (u && u.id !== me.id && me.role !== 'ADMIN') {
+    try {
+      assertCanManage({ role: me.role, permissions: me.perms }, u);
+    } catch (e) {
+      locked = e instanceof Error ? e.message : 'Korisnika uređuje administrator.';
+    }
+  }
   return (
     <>
       <PageHeader
@@ -39,7 +48,7 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
         title={u ? u.name : 'Novi korisnik'}
         subtitle={u ? `Otvoren ${dateTime(u.createdAt)} · zadnja prijava ${u.lastLoginAt ? dateTime(u.lastLoginAt) : 'nikad'}` : undefined}
         actions={
-          u && u.id !== me.id ? (
+          u && u.id !== me.id && !locked ? (
             <>
             {u.totpEnabled && <Badge tone="ok">2FA uključena</Badge>}
             {u.totpEnabled && me.role === 'ADMIN' && (
@@ -66,6 +75,11 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
           ) : null
         }
       />
+      {locked ? (
+        <Notice>
+          {locked} ({u?.email})
+        </Notice>
+      ) : (
       <UserForm
         isSelf={u?.id === me.id}
         actorIsAdmin={me.role === 'ADMIN'}
@@ -80,6 +94,7 @@ export default async function UserPage({ params }: { params: Promise<{ id: strin
             : { name: '', email: '', role: 'SALES', active: true, oib: '', permissions: {}, canDanger: false, requireApproval: null }
         }
       />
+      )}
     </>
   );
 }

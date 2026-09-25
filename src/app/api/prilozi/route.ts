@@ -5,7 +5,7 @@ import { toError } from '@/server/action';
 import { AuthError } from '@/server/errors';
 import { isExternalRole } from '@/domain/permissions';
 import { itemEvents } from '@/server/services/items';
-import { addAttachments, ATTACHMENT_ENTITIES, canAttachment, isAttachmentEntity, listAttachments } from '@/server/services/attachments';
+import { addAttachments, ATTACHMENT_ENTITIES, attachmentsHideCost, canAttachment, isAttachmentEntity, listAttachments } from '@/server/services/attachments';
 
 /**
  * Popis priloga zapisa (bez sadržaja): `?entity=contract&entityId=…`.
@@ -20,6 +20,7 @@ export async function GET(req: Request) {
     const entityId = sp.get('entityId') ?? '';
     if (!isAttachmentEntity(entity) || !entityId || entity === 'request') return Response.json({ ok: false, error: 'Neispravan zapis.' }, { status: 400 });
     if (!canAttachment(user.perms, entity, 'view')) throw new AuthError('Nemate pravo pristupa.', 403);
+    if (await attachmentsHideCost(db, user.companyId, user.perms, entity, entityId)) return Response.json({ ok: true, data: [] });
     const rows = await listAttachments(db, user.companyId, entity, [entityId]);
     return Response.json({ ok: true, data: rows });
   } catch (e) {

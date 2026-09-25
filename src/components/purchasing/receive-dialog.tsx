@@ -8,6 +8,7 @@ import { Checkbox, Field, FormGrid, Input, Select, Textarea } from '@/components
 import { FormError, useAction, type ServerAction } from '@/components/ui/action';
 import { eur } from '@/lib/format';
 import { r2 } from '@/domain/money';
+import { receiptEffect, type GoodsInvoiceRow } from '@/domain/purchase-links';
 import { parseSerials } from './labels';
 import { ScanDialog } from '@/components/scan/scan-input';
 
@@ -29,7 +30,7 @@ export function ReceiveDialog({
   warehouses,
   today,
   action,
-  invoiceBooked = false,
+  goodsPlan = null,
   canSeeCost = true,
 }: {
   orderId: string;
@@ -37,8 +38,11 @@ export function ReceiveDialog({
   warehouses: Array<{ value: string; label: string }>;
   today: string;
   action: ServerAction<ReceiveInput>;
-  /** Ulazni račun narudžbenice već je knjižio trošak robe — primka ga ne knjiži ponovno. */
-  invoiceBooked?: boolean;
+  /**
+   * Stanje troška robe narudžbenice (troškovi primki i ulazni računi) — iz njega isto pravilo
+   * kao na poslužitelju (`receiptEffect`) pokazuje što primka radi s računima za robu.
+   */
+  goodsPlan?: { receiptsBooked: number; invoices: GoodsInvoiceRow[] } | null;
   canSeeCost?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -56,6 +60,8 @@ export function ReceiveDialog({
     },
   });
   const serials = useMemo(() => parseSerials(text), [text]);
+  // isto pravilo troška robe kao na poslužitelju: max(primke, računi za robu)
+  const effect = goodsPlan ? receiptEffect(goodsPlan.receiptsBooked, goodsPlan.invoices, r2(serials.length * (unitCost || 0))) : null;
   const dups = useMemo(() => {
     const seen = new Set<string>();
     return [...new Set(serials.filter((s) => (seen.has(s) ? true : (seen.add(s), false))))];
@@ -120,10 +126,12 @@ export function ReceiveDialog({
             <p>
               Vrijednost primke: <b className="text-fg">{eur(r2(serials.length * (unitCost || 0)))}</b>
             </p>
-            {invoiceBooked ? (
-              <p>Ulazni račun ove narudžbenice već je knjižen kao trošak — primka ne knjiži trošak ponovno.</p>
-            ) : (
-              <Checkbox checked={book} onChange={(e) => setBook(e.target.checked)} label={'Knjiži nabavu u troškove („Nabava robe")'} />
+            <Checkbox checked={book} onChange={(e) => setBook(e.target.checked)} label={'Knjiži nabavu u troškove („Nabava robe")'} />
+            {book && effect && effect.invoiceReduced > 0 && (
+              <p>
+                Račun za robu ove narudžbenice već je knjižen — primka knjiži nabavnu vrijednost, a trošak računa se umanjuje za{' '}
+                <b className="text-fg">{eur(effect.invoiceReduced)}</b> (roba se ne knjiži dvaput; ukupni trošak robe raste za {eur(effect.totalIncrease)}).
+              </p>
             )}
           </div>
         )}

@@ -1,4 +1,5 @@
 import { requireAccess } from '@/server/auth';
+import { canSeeCost } from '@/domain/permissions';
 import { expensesForYear, parseExpenseFilters } from '@/server/queries/expenses';
 import { FREQUENCY_LABEL, type FrequencyCode } from '@/domain/expenses';
 import { EXPENSE_SOURCE } from '@/components/expenses/labels';
@@ -14,7 +15,8 @@ export async function GET(req: Request) {
     return new Response('Nemate pravo pristupa.', { status: 403 });
   }
   const f = parseExpenseFilters(Object.fromEntries(new URL(req.url).searchParams));
-  const { rows } = await expensesForYear(user.companyId, f);
+  // bez prava `costs` bez troškova nabave robe (primke, otpisi, računi za robu) — kao na stranici
+  const { rows } = await expensesForYear(user.companyId, f, undefined, { costs: canSeeCost(user.perms) });
   return csvOrXlsx(
     req,
     rows,

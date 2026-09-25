@@ -191,7 +191,9 @@ test('račun za robu s primke: samo račun robe; drugi račun (prijevoz) knjiži
   const r = await receive(s, null, ['G-1', 'G-2']);
   // iznos odgovara primci (±1 %) i prvi je račun → račun za robu
   const g = await invoice(s, null, { receiptId: r.id, netAmount: 201.5, vatAmount: 50 });
-  assert.equal(g.mode, 'receipt');
+  // trošak robe = max(primka 200, račun 201,50) — račun knjiži samo razliku 1,50
+  assert.equal(g.mode, 'partial');
+  assert.equal(Number((await db.expense.findFirstOrThrow({ where: { supplierInvoiceId: g.id } })).netAmount), 1.5);
   // drugi račun iste primke — ni s jednakim iznosom nije zadano račun za robu
   const second = await invoice(s, null, { receiptId: r.id, netAmount: 200, vatAmount: 50 });
   assert.equal(second.mode, 'own');
@@ -214,7 +216,7 @@ test('plaćenost računa za robu: poništavanje vraća primku; kasnija primka no
   const o = await orderOf(s, 2);
   const r1 = await receive(s, o, ['P-1']);
   const si = await invoice(s, null, { orderId: o.id, netAmount: 200, vatAmount: 50 });
-  assert.equal(si.mode, 'receipt');
+  assert.equal(si.mode, 'partial', 'primka 100 od 200 — račun knjiži razliku 100');
   await transaction((tx) => setSupplierInvoicesPaid(tx, s.actor, [si.id], '2026-05-20'));
   let e1 = await db.expense.findFirstOrThrow({ where: { receiptId: r1.id } });
   assert.equal(e1.paid, true);

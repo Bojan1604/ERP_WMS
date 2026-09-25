@@ -10,6 +10,7 @@ import { PrintButton } from '@/components/ui/print-button';
 import { dateTime, integer } from '@/lib/format';
 import { PrintUnclip } from '@/components/warehouse/print-unclip';
 import { ExportButtons } from '@/components/ui/export-buttons';
+import { countLabel, plural } from '@/domain/plural';
 
 /** Ispis inventure: sažetak, nedostaje, višak i pronađeno (A4). */
 export default async function StocktakeReportPage({ params }: { params: Promise<{ id: string }> }) {
@@ -98,7 +99,7 @@ export default async function StocktakeReportPage({ params }: { params: Promise<
             <p className="mb-3">
               Pri zatvaranju:{' '}
               {[
-                rep.actions.moved > 0 && `premješteno ${rep.actions.moved} uređaja (${rep.actions.transfers.join(', ')})`,
+                rep.actions.moved > 0 && `${plural(rep.actions.moved, 'premješten', 'premještena', 'premješteno')} ${countLabel(rep.actions.moved, 'uređaj', 'uređaja', 'uređaja')} (${rep.actions.transfers.join(', ')})`,
                 rep.actions.missingChanged > 0 && `${rep.actions.missingChanged} nedostajućih → ${rep.actions.missingAction}`,
               ]
                 .filter(Boolean)

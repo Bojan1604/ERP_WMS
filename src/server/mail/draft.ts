@@ -5,11 +5,11 @@ import type { SessionUser } from '../auth';
 import { accountantRowsByIds } from '../queries/accountant';
 import { can } from '@/domain/permissions';
 import { ACCOUNTANT_ROW_CAP, parseKeys } from '@/domain/accountant';
-import { fillTemplate, readTemplates, type MailTemplateKind } from '@/domain/mail';
+import { fillTemplate, invoiceMailTemplate, readTemplates, type MailTemplateKind } from '@/domain/mail';
 import { quoteDocTitle, type MailKind, type PdfKind } from '@/domain/documents';
 import { INVOICE_KIND_LABEL } from '@/domain/invoice';
 import { formatDate, toISO } from '@/domain/dates';
-import { num, r2 } from '@/domain/money';
+import { num } from '@/domain/money';
 import { eur } from '@/lib/format';
 import { SERVICE_STATUS, isOpenService } from '@/components/service/labels';
 import { isMailConfigured } from './transport';
@@ -57,19 +57,41 @@ export async function resolveDoc(user: Pick<SessionUser, 'companyId' | 'perms'>,
     case 'delivery': {
       const inv = await db.invoice.findFirst({
         where: { id, companyId },
-        select: { id: true, status: true, kind: true, number: true, date: true, dueDate: true, grandTotal: true, advanceAmount: true, openAmount: true, partner: { select: { name: true, email: true } } },
+        select: {
+          id: true,
+          status: true,
+          kind: true,
+          stornoed: true,
+          number: true,
+          date: true,
+          dueDate: true,
+          grandTotal: true,
+          advanceAmount: true,
+          openAmount: true,
+          partner: { select: { name: true, email: true } },
+          refInvoice: { select: { number: true } },
+        },
       });
       if (!inv) throw new DomainError('Račun ne postoji.');
       assert(inv.status === 'ISSUED', 'Nacrt računa se ne šalje — prvo izdajte račun.');
-      const payable = r2(num(inv.grandTotal) - num(inv.advanceAmount));
-      const amount = reminder || num(inv.openAmount) > 0 ? num(inv.openAmount) : payable;
+      // predložak prema vrsti i stanju (odobrenje, storno, predujam, plaćen/otvoren); iznos je otvoreni
+      const pick = invoiceMailTemplate({ kind: inv.kind, stornoed: inv.stornoed, total: num(inv.grandTotal), advance: num(inv.advanceAmount), open: num(inv.openAmount) });
+      const amount = reminder ? num(inv.openAmount) : pick.amount;
       return {
         kind,
         entityId: inv.id,
         to: inv.partner.email ?? '',
         title: kind === 'delivery' ? `Otpremnica uz račun ${inv.number}` : `${INVOICE_KIND_LABEL[inv.kind]} ${inv.number}`,
-        template: kind === 'delivery' ? 'delivery' : reminder ? 'reminder' : 'invoice',
-        vars: { ...base, broj: inv.number ?? '', kupac: inv.partner.name, iznos: eur(amount, cur), datum: d(inv.date), dospijece: d(inv.dueDate) || d(inv.date) },
+        template: kind === 'delivery' ? 'delivery' : reminder ? 'reminder' : pick.template,
+        vars: {
+          ...base,
+          broj: inv.number ?? '',
+          kupac: inv.partner.name,
+          iznos: eur(amount, cur),
+          datum: d(inv.date),
+          dospijece: d(inv.dueDate) || d(inv.date),
+          veza: inv.refInvoice?.number ?? '',
+        },
         pdf: { kind: kind === 'delivery' ? 'delivery' : 'invoice', id: inv.id },
       };
     }

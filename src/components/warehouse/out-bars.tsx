@@ -11,6 +11,7 @@ import { Field, Select, type Option } from '@/components/ui/field';
 import { SelectionBar } from '@/components/ui/selection';
 import { activeContractsAction, addOutToContractAction, cancelOutAction, receiveReturnedAction } from '@/app/(app)/skladiste/izlaz/actions';
 import { announceReturnAction } from '@/app/(app)/skladiste/actions';
+import { countLabel } from '@/domain/plural';
 
 const barBtn = 'border-0 bg-white/10 text-white hover:bg-white/20';
 
@@ -79,7 +80,7 @@ function ToContractButton({ ids, partnerId, onDone }: { ids: string[]; partnerId
       <Dialog
         open={open}
         onClose={() => setOpen(false)}
-        title={`Dodati ${ids.length} uređaja na ugovor`}
+        title={`Dodati ${countLabel(ids.length, 'uređaj', 'uređaja', 'uređaja')} na ugovor`}
         size="sm"
         footer={
           <>

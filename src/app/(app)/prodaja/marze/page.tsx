@@ -18,6 +18,7 @@ import { PackageEditor } from '@/components/sales/package-controls';
 import { PackagesView } from './packages-view';
 import { amount, date, eur, integer, pct } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { plural } from '@/domain/plural';
 
 export const metadata = { title: 'Marže i profit' };
 
@@ -119,8 +120,8 @@ async function BusinessView({ companyId, f }: { companyId: string; f: MarginFilt
   return (
     <>
       <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <Stat label="Prihodi bez PDV-a" value={eur(d.revenue)} hint={`${integer(d.invoices)} računa`} />
-        <Stat label="Rashodi bez PDV-a" value={eur(d.expense)} tone="bad" hint={`${integer(d.expenseN)} stavki`} />
+        <Stat label="Prihodi bez PDV-a" value={eur(d.revenue)} hint={`${integer(d.invoices)} ${plural(d.invoices, 'račun', 'računa', 'računa')}`} />
+        <Stat label="Rashodi bez PDV-a" value={eur(d.expense)} tone="bad" hint={`${integer(d.expenseN)} ${plural(d.expenseN, 'stavka', 'stavke', 'stavki')}`} />
         <Stat label="Rezultat" value={eur(result)} tone={result >= 0 ? 'ok' : 'bad'} hint={`${pct(d.revenue ? (result / d.revenue) * 100 : null)} od prihoda`} />
         <Stat label="Naplaćeno" value={eur(d.paid)} tone="ok" hint={`${pct(d.revenue ? (d.paid / d.revenue) * 100 : null)} prihoda`} />
         <Stat label="Nenaplaćeno" value={eur(d.open)} tone="warn" hint={`od toga kasni ${eur(d.late)}`} />

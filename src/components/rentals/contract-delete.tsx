@@ -8,6 +8,7 @@ import { Field, Select } from '@/components/ui/field';
 import { FormError, useAction } from '@/components/ui/action';
 import { deleteContractAction } from '@/app/(app)/najam/ugovori/actions';
 import { eur } from '@/lib/format';
+import { plural } from '@/domain/plural';
 
 /**
  * Brisanje ugovora (samo bez računa). Uređaji u najmu: ugovor otvoren greškom →
@@ -62,13 +63,15 @@ export function ContractDeleteButton({
           <p>Ugovor se briše zajedno s rasporedom naplate, preskočenim i pauziranim ratama i priloženim PDF-om. Ugovor s računima se ne može obrisati — njega otkažite.</p>
           {pending > 0 && (
             <p className="rounded-md bg-warn-soft px-3 py-2 text-sm text-fg">
-              Ugovor ima <b>{pending}</b> neizdanih rata ({eur(pendingAmount)} neto) — brisanjem se više neće tražiti ni izdati. Ako ih treba naplatiti, prvo ih izdajte
+              Ugovor ima <b>{pending}</b> {plural(pending, 'neizdanu ratu', 'neizdane rate', 'neizdanih rata')} ({eur(pendingAmount)} neto) — brisanjem se više neće tražiti ni izdati. Ako ih treba naplatiti, prvo ih izdajte
               ili ugovor otkažite umjesto brisanja.
             </p>
           )}
           {rented > 0 ? (
             <>
-              <p className="text-sm">Na ugovoru je {rented} uređaja u najmu:</p>
+              <p className="text-sm">
+                Na ugovoru {plural(rented, 'je', 'su', 'je')} {rented} {plural(rented, 'uređaj', 'uređaja', 'uređaja')} u najmu:
+              </p>
               <label className="flex items-start gap-2 text-sm">
                 <input type="radio" name="target" checked={target === 'stock'} onChange={() => setTarget('stock')} className="mt-1" />
                 <span>

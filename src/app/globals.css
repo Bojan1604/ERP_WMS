@@ -55,7 +55,7 @@
   --color-fg: #1b2420;
   --color-fg-2: #4a5550;
   --color-fg-3: #646c68;
-  --color-fg-4: #808b85;
+  --color-fg-4: #6b736f; /* ≥ 4.5 na panelu i panel-2 (crtice, „zadano", prazni odabir) */
 
   --color-nav: #15201d;
   --color-nav-2: #1f2c28;
@@ -91,7 +91,7 @@
   --color-fg: #e8eeeb;
   --color-fg-2: #b3bfba;
   --color-fg-3: #8d9994;
-  --color-fg-4: #687571;
+  --color-fg-4: #84908b;
   --color-nav: #0b100f;
   --color-nav-2: #151d1b;
   --shadow-panel: 0 0 0 1px rgb(255 255 255 / 0.05);
@@ -101,6 +101,9 @@
 @layer base {
   * { border-color: var(--color-line); }
   html { -webkit-text-size-adjust: 100%; }
+  /* nativne kontrole (kalendar, select, klizači) prate temu — inače su u tamnoj temi svijetle / ikone crne */
+  :root { color-scheme: light; }
+  [data-theme='dark'] { color-scheme: dark; }
   body {
     background: var(--color-canvas);
     color: var(--color-fg);
@@ -189,6 +192,8 @@
 @layer utilities {
   [data-theme='dark'] .bg-brand.text-white { background-color: var(--color-brand-solid); }
   [data-theme='dark'] .bg-bad-strong.text-white { background-color: var(--color-bad-solid); }
+  /* brojevi u aktivnom čipu filtra (bijelo na naglasku) — prigušeni bijeli ne dosežu 4.5 */
+  .bg-brand.text-white .opacity-70 { opacity: 1; }
 }
 
 /* Ispis dokumenata: samo sadržaj s klasom .print-area */

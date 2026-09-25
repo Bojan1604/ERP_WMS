@@ -7,6 +7,7 @@ import { buttonClass } from '@/components/ui/button';
 import { ActionButton } from '@/components/ui/action';
 import { integer } from '@/lib/format';
 import { cancelOutAction } from '@/app/(app)/skladiste/izlaz/actions';
+import { plural } from '@/domain/plural';
 
 export interface PendingOutGroup {
   partnerId: string | null;
@@ -26,7 +27,7 @@ export function PendingOutNotice({ total, groups, canRent, canReturn }: { total:
     <div className="mb-3 rounded-lg bg-warn-soft px-3.5 py-2.5 text-base text-warn">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span>
-          <b>Izlaz iz skladišta čeka potvrdu:</b> {integer(total)} uređaja — račun, najam, ugovor ili povratak na stanje.
+          <b>Izlaz iz skladišta čeka potvrdu:</b> {integer(total)} {plural(total, 'uređaj', 'uređaja', 'uređaja')} — račun, najam, ugovor ili povratak na stanje.
         </span>
         <span className="flex items-center gap-2">
           <Link prefetch={false} href="/skladiste/izlaz" className="text-sm underline">
@@ -46,7 +47,7 @@ export function PendingOutNotice({ total, groups, canRent, canReturn }: { total:
             const qs = `items=${g.itemIds.join(',')}${g.partnerId ? `&partner=${g.partnerId}` : ''}`;
             return (
               <li key={g.partnerId ?? '-'} className="flex flex-wrap items-center gap-2 py-1.5">
-                <span className="min-w-0 flex-1 truncate">
+                <span className="min-w-0 flex-1 max-sm:basis-full sm:truncate">
                   <b>{g.partnerName ?? 'Bez kupca'}</b> <span className="text-fg-3">· {integer(g.count)} kom</span>
                 </span>
                 <Link prefetch={false} href={`/prodaja/racuni/novi?${qs}`} className={btn}>

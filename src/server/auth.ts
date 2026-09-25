@@ -8,6 +8,7 @@ import { db } from './db';
 import { env } from './env';
 import { AuthError } from './errors';
 import { SESSION_COOKIE } from '@/lib/session-cookie';
+import { homeHref } from '@/components/layout/nav-items';
 import { can, isExternalRole, resolvePermissions, type Level, type Module, type PermissionMap, type RoleCode } from '@/domain/permissions';
 import { parseTrustProxy, pickClientIp } from '@/domain/client-ip';
 
@@ -116,13 +117,16 @@ export async function requireAccess(module: Module, level: Exclude<Level, 'none'
   return u;
 }
 
+/** Početna stranica korisnika (prva dopuštena stavka izbornika) — nakon prijave, na „/" i sa stranice zabrane. */
+export const userHome = (u: Pick<SessionUser, 'perms' | 'role' | 'canDanger'>) => homeHref({ perms: u.perms, isAdmin: u.role === 'ADMIN', canDanger: !!u.canDanger });
+
 /** Za stranice: neprijavljenog šalje na prijavu, bez prava na nadzornu ploču. */
 export async function pageAccess(module: Module, level: Exclude<Level, 'none'> = 'view'): Promise<SessionUser> {
   const u = await getUser();
   if (!u) redirect('/login');
   if (!can(u.perms, module, level)) {
-    // tko nema nadzornu ploču, a ima MDM (distributeri, klijenti), početnu stranicu ima u MDM-u
-    if (module === 'dashboard' && can(u.perms, 'mdm')) redirect('/mdm');
+    // tko nema nadzornu ploču, početna mu je prva dopuštena stavka izbornika (MDM korisnici → /mdm)
+    if (module === 'dashboard') redirect(userHome(u));
     redirect(`/zabranjeno?modul=${module}`);
   }
   return u;

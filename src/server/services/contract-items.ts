@@ -82,6 +82,29 @@ export async function coveredPeriods(tx: Tx, scope: string[] | { companyId: stri
 }
 
 /**
+ * Stvarno fakturirani iznosi najma (neto stavki izdanih, nestorniranih računa) po
+ * `itemId|YYYY-MM` u godini — raspored i pregled najma fakturirana razdoblja
+ * prikazuju iz računa, ne iz današnjih uvjeta (cijena ili plan se mogu promijeniti).
+ * Opseg: zadani ugovori ili uređaji firme (`itemIds`).
+ */
+export async function invoicedAmounts(tx: Tx, scope: { contractIds: string[] } | { companyId: string; itemIds: string[] }, year: number): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if ('contractIds' in scope ? !scope.contractIds.length : !scope.itemIds.length) return out;
+  const period = Prisma.sql`COALESCE(NULLIF(v.period, ''), to_char(v.date, 'YYYY-MM'))`;
+  const rows = await tx.$queryRaw<{ itemId: string; period: string; amount: number }[]>`
+    SELECT l."itemId", ${period} AS period, SUM(l."netAmount")::float8 AS amount
+    FROM "Invoice" v JOIN "InvoiceLine" l ON l."invoiceId" = v.id
+    WHERE ${'contractIds' in scope ? Prisma.sql`v."contractId" = ANY(${scope.contractIds})` : Prisma.sql`v."companyId" = ${scope.companyId} AND v."contractId" IS NOT NULL AND l."itemId" = ANY(${scope.itemIds})`}
+      AND v.status = 'ISSUED' AND v.kind = 'INVOICE' AND NOT v.stornoed
+      AND l."itemId" IS NOT NULL
+      AND (l."lineType" = 'RENT' OR (l."lineType" IS NULL AND v.type = 'RENT'))
+      AND ${period} COLLATE "C" >= ${`${year}-01`} AND ${period} COLLATE "C" <= ${`${year}-12`}
+    GROUP BY l."itemId", ${period}`;
+  for (const r of rows) out.set(`${r.itemId}|${r.period}`, Number(r.amount));
+  return out;
+}
+
+/**
  * Uređaji na ugovorima firme za motor naplate, samo sa stupcima koje motor treba.
  * Preskočena i pauzirana razdoblja skraćuju se na razdoblja od `since` — i to
  * jednom po skupini jednakih nizova (uvezeni ugovori imaju duge, iste nizove),

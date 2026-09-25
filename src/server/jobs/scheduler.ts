@@ -1,11 +1,13 @@
 import 'server-only';
 import { runAutoBackups } from './backups';
 import { runAutoIssue } from './auto-issue';
+import { runGoodsReconcileOnce } from './goods-reconcile';
 
 /**
  * Pozadinski poslovi (pokreće ih src/instrumentation.ts jednom po procesu):
  *  - automatsko izdavanje rata najma (od 6:00 po zagrebačkom vremenu, jednom dnevno po firmi),
- *  - automatska sigurnosna kopija (od 2:00, jednom dnevno po firmi).
+ *  - automatska sigurnosna kopija (od 2:00, jednom dnevno po firmi),
+ *  - jednokratno usklađivanje troška robe po narudžbenicama (prvi krug nove verzije, goods-reconcile.ts).
  * Provjera svakih 15 minuta; svaki posao sam osigurava da se dnevno izvrši jednom
  * i kad radi više procesa (advisory lock / atomska prijava u bazi).
  * Isključivanje: JOBS_DISABLED=1 (npr. dodatne instance koje služe samo zahtjeve).
@@ -21,6 +23,11 @@ export async function tick(now = new Date()) {
   if (running) return;
   running = true;
   try {
+    try {
+      for (const x of await runGoodsReconcileOnce()) if (x.groups) console.info(`[poslovi] usklađen trošak robe: firma ${x.companyId}, narudžbenica/primki ${x.groups}`);
+    } catch (e) {
+      console.error('[poslovi] usklađivanje troška robe', e);
+    }
     const h = zagrebHour(now);
     if (h >= 2) {
       const r = await runAutoBackups(now);

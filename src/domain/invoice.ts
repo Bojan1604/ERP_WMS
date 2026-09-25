@@ -100,6 +100,20 @@ export function openAmount(args: {
 }
 
 /**
+ * Uračunati predujmovi ograničeni na iznos računa: zbroj ne smije prijeći ukupno
+ * računa (BR-CO-16: za platiti = ukupno − predujam ≥ 0). Višak se skida redom od
+ * zadnjeg odabranog predujma; predujam koji padne na 0 ostaje odabran s iznosom 0.
+ */
+export function clampAdvanceUses<T extends { amount: number }>(uses: T[], total: number): T[] {
+  let room = Math.max(0, r2(total));
+  return uses.map((u) => {
+    const amount = r2(Math.max(0, Math.min(u.amount, room)));
+    room = r2(room - amount);
+    return amount === u.amount ? u : { ...u, amount };
+  });
+}
+
+/**
  * Preplata — iznos za povrat kupcu: uplate, uračunati predujam i odobrenja zajedno
  * premašuju iznos računa (npr. odobrenje izdano na već plaćen račun).
  */

@@ -265,12 +265,43 @@ export function deviceActiveIn(c: ContractTerms, d: ContractDevice, p: Period): 
   return null;
 }
 
-/** Mjesečni obračun (accrual) po mjesecima godine. */
+/**
+ * Uvjeti i uređaj za prikaz povijesti (raspored, pregled najma, obračun): pauza
+ * ugovora ili uređaja s poznatim početkom vrijedi tek od tog dana — rate i obračun
+ * prije pauze ostaju vidljivi (kao u „Rate za izdati"). Stara pauza bez datuma: ništa.
+ */
+export function historyBasis(c: ContractTerms, d: ContractDevice): { terms: ContractTerms; device: ContractDevice; pausedAt: ISODate | null } {
+  const cp = c.status === 'PAUSED' && c.pausedSince ? c.pausedSince : null;
+  const dp = d.status === 'PAUSED' && d.pausedSince ? d.pausedSince : null;
+  return {
+    terms: cp ? { ...c, status: 'ACTIVE' } : c,
+    device: dp ? { ...d, status: null } : d,
+    pausedAt: [cp, dp].filter((x): x is ISODate => !!x).sort()[0] ?? null,
+  };
+}
+
+/**
+ * Zaduženja za prikaz povijesti (uključujući pauzirana razdoblja iz `paused`):
+ * kod pauziranog ugovora/uređaja samo rate odlučene prije početka pauze.
+ */
+export function historyCharges(c: ContractTerms, d: ContractDevice, fromPeriod: Period, toPeriod: Period): Charge[] {
+  const h = historyBasis(c, d);
+  const all = scheduledCharges(h.terms, h.device, fromPeriod, toPeriod);
+  const at = h.pausedAt;
+  return at ? all.filter((ch) => pauseDecisionDate(h.terms, ch.period) < at) : all;
+}
+
+/** Mjesečni obračun (accrual) po mjesecima godine; pauza s poznatim početkom vrijedi od tog dana. */
 export function contractAccrual(c: ContractTerms, devices: ContractDevice[], year: number): number[] {
   const out = Array<number>(12).fill(0);
-  for (const d of devices) {
-    const paused = pausedMonths(c, d, year);
-    for (let m = 0; m < 12; m++) if (!paused.has(mkPeriod(year, m))) out[m] += deviceActiveIn(c, d, mkPeriod(year, m))?.price ?? 0;
+  for (const d0 of devices) {
+    const { terms, device: d, pausedAt } = historyBasis(c, d0);
+    const paused = pausedMonths(terms, d, year);
+    for (let m = 0; m < 12; m++) {
+      const p = mkPeriod(year, m);
+      if (paused.has(p) || (pausedAt && periodStart(p) >= pausedAt)) continue;
+      out[m] += deviceActiveIn(terms, d, p)?.price ?? 0;
+    }
   }
   return out.map(r2);
 }
@@ -287,11 +318,12 @@ export function pausedMonths(c: ContractTerms, d: ContractDevice, year: number):
   return out;
 }
 
-/** Naplata (rate) po mjesecima godine. */
+/** Naplata (rate) po mjesecima godine; pauza s poznatim početkom vrijedi od tog dana. */
 export function contractBilling(c: ContractTerms, devices: ContractDevice[], year: number): number[] {
   const out = Array<number>(12).fill(0);
   for (const d of devices) {
-    for (const ch of deviceChargesInYear(c, d, year)) out[Number(ch.period.slice(5, 7)) - 1] += ch.amount;
+    const paused = new Set(d.paused ?? []);
+    for (const ch of historyCharges(c, d, `${year}-01`, `${year}-12`)) if (!paused.has(ch.period)) out[Number(ch.period.slice(5, 7)) - 1] += ch.amount;
   }
   return out.map(r2);
 }
@@ -480,4 +512,28 @@ export function returnReason(c: ContractTerms, d: ContractDevice, now: ISODate =
   const current = plan.find((s) => s.from <= now && (!s.to || s.to >= now));
   if (current?.season && !inSeason(current.season, Number(now.slice(5, 7)))) return 'Sezona završila';
   return null;
+}
+
+/**
+ * Višak fakturiranja nakon kraja ugovora (ili skidanja): fakturirane rate
+ * (`covered`: `itemId|YYYY-MM`) koje po dosadašnjim uvjetima pokrivaju mjesece
+ * nakon `end` — npr. godišnja rata izdana u siječnju, a ugovor završava u lipnju.
+ * Za taj iznos klijentu treba izdati odobrenje. Mjesec kraja je naplaćen cijeli.
+ */
+export function overbilledAfter(c: ContractTerms, devices: ContractDevice[], covered: ReadonlySet<string>, end: ISODate): { months: number; amount: number } {
+  const last = end.slice(0, 7);
+  // dosadašnji uvjeti (po kojima su rate fakturirane), bez statusa
+  const terms: ContractTerms = { ...c, status: 'ACTIVE' };
+  let months = 0;
+  let amount = 0;
+  for (const d of devices) {
+    const dev: ContractDevice = { ...d, status: null, paused: [] };
+    for (const ch of scheduledCharges(terms, dev, addMonths(end, -24).slice(0, 7), addMonths(end, 24).slice(0, 7))) {
+      if (!covered.has(`${d.itemId}|${ch.period}`)) continue;
+      const after = ch.covers.filter((m) => m > last).length;
+      months += after;
+      amount += ch.monthly * after;
+    }
+  }
+  return { months, amount: r2(amount) };
 }

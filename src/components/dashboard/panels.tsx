@@ -9,11 +9,12 @@ export function KpiTile({ label, value, hint, href, tone }: { label: string; val
   const body = (
     <>
       <p className="text-sm text-fg-3">{label}</p>
-      <p className={cn('mt-1 text-lg font-semibold tracking-tight sm:text-xl', tone === 'bad' && 'text-bad-strong', tone === 'ok' && 'text-ok')}>{value}</p>
+      <p className={cn('mt-1 whitespace-nowrap text-md font-semibold tracking-tight tnum @[11rem]:text-lg @[15rem]:text-xl', tone === 'bad' && 'text-bad-strong', tone === 'ok' && 'text-ok')}>{value}</p>
       {hint && <p className="mt-0.5 truncate text-xs text-fg-3">{hint}</p>}
     </>
   );
-  const cls = 'block min-w-0 rounded-lg bg-panel px-4 py-3.5 shadow-[var(--shadow-panel)]';
+  // @container: veličina iznosa prema širini pločice (8-znamenkasti iznos s „€" ostaje u jednom retku)
+  const cls = '@container block min-w-0 rounded-lg bg-panel px-4 py-3.5 shadow-[var(--shadow-panel)]';
   return href ? (
     <Link prefetch={false} href={href} className={cn(cls, 'transition-colors hover:bg-panel-2')}>
       {body}

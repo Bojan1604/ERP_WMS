@@ -10,7 +10,7 @@ import { ScanActions } from './scan-actions';
 import type { Perms, WarehouseOptions } from './dialogs';
 import type { ScanDevice } from '@/app/(app)/skladiste/skeniranje/actions';
 
-export const toTarget = (d: ScanDevice) => ({ id: d.id, state: d.state as StateKind, onContract: !!d.contractItem, cost: d.cost });
+export const toTarget = (d: ScanDevice) => ({ id: d.id, state: d.state as StateKind, onContract: !!d.contractItem, cost: d.cost ?? null });
 
 /** Boja ruba po stanju: zeleno na skladištu, žuto vani / u pokretu, crveno otpisan. */
 export function stateTone(state: string) {

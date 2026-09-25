@@ -76,7 +76,8 @@ export default async function LookupsPage({ searchParams }: { searchParams: Prom
       { name: 'marginPct', label: 'Bruto marža %', type: 'decimal', hint: 'Prazno = globalna marža' },
       { name: 'warrantyMonths', label: 'Jamstvo (mjeseci)', type: 'number', hint: 'Prazno = zadano iz postavki' },
       { name: 'minStock', label: 'Minimalna zaliha', type: 'number', hint: 'Upozorenje na nadzornoj ploči' },
-      { name: 'kpd', label: 'KPD šifra', type: 'text', hint: 'Klasifikacija za eRačun' },
+      { name: 'kpd', label: 'KPD šifra', type: 'text', hint: 'Klasifikacija za eRačun (prodaja)' },
+      { name: 'kpdRent', label: 'KPD za najam', type: 'text', hint: 'Prazno = KPD najma iz postavki firme' },
       { name: 'specs', label: 'Specifikacije', type: 'textarea', wide: true },
       { name: 'active', label: 'Aktivan (nudi se pri unosu)', type: 'checkbox' },
     ];
@@ -100,13 +101,13 @@ export default async function LookupsPage({ searchParams }: { searchParams: Prom
         description="Artikli koji se prate po serijskom broju, s cijenama, maržom i jamstvom."
         columns={columns}
         fields={fields}
-        defaults={{ brand: '', name: '', code: '', categoryId: '', salePrice: null, rentPrice: null, marginPct: null, warrantyMonths: null, minStock: 0, kpd: '', specs: '', active: true }}
+        defaults={{ brand: '', name: '', code: '', categoryId: '', salePrice: null, rentPrice: null, marginPct: null, warrantyMonths: null, minStock: 0, kpd: '', kpdRent: '', specs: '', active: true }}
         rows={rows.map<LookupRow>((m) => ({
           id: m.id,
           active: m.active,
           values: {
             brand: m.brand, name: m.name, code: m.code, categoryId: m.categoryId, salePrice: nOrNull(m.salePrice), rentPrice: nOrNull(m.rentPrice),
-            marginPct: nOrNull(m.marginPct), warrantyMonths: m.warrantyMonths, minStock: m.minStock, kpd: m.kpd, specs: m.specs, active: m.active,
+            marginPct: nOrNull(m.marginPct), warrantyMonths: m.warrantyMonths, minStock: m.minStock, kpd: m.kpd, kpdRent: m.kpdRent, specs: m.specs, active: m.active,
           },
           cells: {
             label: [m.brand, m.name].filter(Boolean).join(' '), code: m.code, category: m.category?.name ?? null, salePrice: nOrNull(m.salePrice),

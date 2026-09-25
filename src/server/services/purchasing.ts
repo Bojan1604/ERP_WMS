@@ -8,14 +8,16 @@ import { statusFor, type Actor } from './items';
 import { formatDate, fromISO, today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import { supplierVat } from '@/domain/tax';
-import { receiptBooksExpense } from '@/domain/purchase-links';
-import { lockPurchaseDocs, paidGoodsInvoiceDate, syncOrderSupplierInvoice } from './supplier-invoices';
+import { PURCHASE_CATEGORY, receiptBooksExpense } from '@/domain/purchase-links';
+import { syncOrderSupplierInvoice } from './supplier-invoices';
+import { lockPurchaseDocs, paidGoodsInvoiceDate, reconcileOrderGoodsExpense } from './goods-expense';
+import { countLabel } from '@/domain/plural';
 
 // =============================================================================
 //  Nabava: narudžbenice i primke (zaprimanje robe). Ulazni računi (URA) → expenses.ts
 // =============================================================================
 
-export const PURCHASE_CATEGORY = 'Nabava robe';
+export { PURCHASE_CATEGORY };
 
 /** Kategorija troška po nazivu — otvara se ako je firma nema. */
 export async function expenseCategoryId(tx: Tx, companyId: string, name: string) {
@@ -221,7 +223,7 @@ export async function receiveGoods(tx: Tx, actor: Actor, input: ReceiveInput) {
       const n = (perLine.get(ol.id) ?? 0) + l.serials.length;
       perLine.set(ol.id, n);
       const left = ol.qty - ol.received;
-      assert(n <= left, `Na stavci je preostalo ${left} kom, a upisano je ${n} serijskih brojeva.`);
+      assert(n <= left, `Na stavci je preostalo ${left} kom, a upisano je ${countLabel(n, 'serijski broj', 'serijska broja', 'serijskih brojeva')}.`);
     }
   }
   // dobavljač robe po narudžbenici je dobavljač narudžbenice (o njegovoj zemlji ovisi PDV troška)
@@ -287,13 +289,11 @@ export async function receiveGoods(tx: Tx, actor: Actor, input: ReceiveInput) {
     await recalcOrderStatus(tx, order.id);
   }
 
-  // primka bez vrijednosti ne knjiži trošak od 0 €; ulazni račun narudžbenice s vlastitim troškom već je knjižio robu
-  // (narudžbenica je zaključana — istovremeno povezivanje računa čeka, pa se trošak ne knjiži dvaput)
+  // primka knjiži svoju nabavnu vrijednost (bez vrijednosti ne knjiži 0 €); računi za robu narudžbenice
+  // se zatim usklađuju — knjiže samo razliku iznad primki (max(primke, računi), nikad zbroj).
+  // Narudžbenica je zaključana — istovremeno povezivanje računa čeka.
   if (order) await lockPurchaseDocs(tx, actor.companyId, { orderId: order.id });
-  const invoiceOwnExpenses = order
-    ? await tx.expense.count({ where: { companyId: actor.companyId, source: 'SUPPLIER_INVOICE', supplierInvoice: { orderId: order.id, goodsInvoice: true } } })
-    : 0;
-  const booked = receiptBooksExpense({ bookExpense: input.bookExpense !== false, total, invoiceOwnExpenses });
+  const booked = receiptBooksExpense({ bookExpense: input.bookExpense !== false, total });
   if (booked) {
     // plaćen račun za robu po narudžbenici — i trošak primke je plaćen
     const paidDate = order ? await paidGoodsInvoiceDate(tx, actor.companyId, { orderId: order.id, receiptId: receipt.id }) : null;
@@ -317,6 +317,7 @@ export async function receiveGoods(tx: Tx, actor: Actor, input: ReceiveInput) {
 
   // račun dobavljača upisan na narudžbenici postaje ulazni račun (povezan, bez dvostrukog troška)
   if (order?.supplierInvoiceNo) await syncOrderSupplierInvoice(tx, actor, order.id);
+  if (order) await reconcileOrderGoodsExpense(tx, actor, { orderId: order.id });
 
   await audit(tx, actor, {
     entity: 'receipt',
@@ -381,6 +382,8 @@ export async function cancelReceipt(tx: Tx, actor: Actor, id: string, reason?: s
     }
     await recalcOrderStatus(tx, receipt.orderId);
   }
+  // bez troška ove primke računi za robu skupine opet knjiže robu (max(primke, računi))
+  await reconcileOrderGoodsExpense(tx, actor, { orderId: receipt.orderId, receiptId: id });
 
   // popis obrisanih serijskih brojeva ostaje na primci radi traga
   const trace = items.map((i) => `${[i.model.brand, i.model.name].filter(Boolean).join(' ')}: ${i.serial}`).join('\n');
@@ -388,6 +391,6 @@ export async function cancelReceipt(tx: Tx, actor: Actor, id: string, reason?: s
     .filter(Boolean)
     .join('\n');
   await tx.goodsReceipt.update({ where: { id }, data: { status: 'CANCELLED', note } });
-  await audit(tx, actor, { entity: 'receipt', entityId: id, action: 'storno', summary: `Primka ${receipt.number} stornirana (${items.length} uređaja)` });
+  await audit(tx, actor, { entity: 'receipt', entityId: id, action: 'storno', summary: `Primka ${receipt.number} stornirana (${countLabel(items.length, 'uređaj', 'uređaja', 'uređaja')})` });
   return { count: items.length };
 }

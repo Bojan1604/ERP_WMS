@@ -43,8 +43,10 @@ export function parseExpenseFilters(sp: Params): ExpenseFilters {
  * Zbrojevi (mjeseci, kategorije, ukupno) su uvijek preko svih rata; s `page` se vraća
  * samo ta stranica redaka (i podaci obrasca samo za nju), a nazivi partnera i
  * dokumenata se dohvaćaju samo za vraćene retke. Izvoz (bez `page`) dobiva sve.
+ * Bez prava `costs` (`opts.costs = false`) troškovi koji otkrivaju nabavne vrijednosti — primke,
+ * otpisi i ulazni računi za robu — ne ulaze ni u retke ni u zbrojeve (kao i drugdje bez tog prava).
  */
-export async function expensesForYear(companyId: string, f: ExpenseFilters, page?: { skip: number; take: number }) {
+export async function expensesForYear(companyId: string, f: ExpenseFilters, page?: { skip: number; take: number }, opts: { costs?: boolean } = {}) {
   const from = `${f.year}-01-01`;
   const to = `${f.year}-12-31`;
   const where: Prisma.ExpenseWhereInput = {
@@ -58,6 +60,7 @@ export async function expensesForYear(companyId: string, f: ExpenseFilters, page
         ],
       },
       ...(f.q ? [{ OR: [{ description: ci(f.q) }, { note: ci(f.q) }, { partner: { name: ci(f.q) } }, { category: { name: ci(f.q) } }] }] : []),
+      ...(opts.costs === false ? [COST_REVEALING_HIDDEN] : []),
     ],
     ...(f.categoryId ? { categoryId: f.categoryId } : {}),
     ...(f.partnerId ? { partnerId: f.partnerId } : {}),
@@ -204,6 +207,12 @@ export async function expensesForYear(companyId: string, f: ExpenseFilters, page
     byCategory: [...byCategory.values()].map((c) => ({ ...c, net: r2(c.net), vat: r2(c.vat) })).sort((a, b) => b.net - a.net),
   };
 }
+
+/** Troškovi koji otkrivaju nabavnu vrijednost robe (primka, otpis, ulazni račun za robu) — skriveni bez prava `costs`. */
+const COST_REVEALING_HIDDEN: Prisma.ExpenseWhereInput = {
+  source: { notIn: ['RECEIPT', 'WRITE_OFF'] },
+  NOT: { source: 'SUPPLIER_INVOICE', supplierInvoice: { is: { goodsInvoice: true } } },
+};
 
 export interface ExpenseRow {
   key: string;

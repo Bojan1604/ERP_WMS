@@ -6,7 +6,7 @@ import { AuthError } from '@/server/errors';
 import { can, isExternalRole } from '@/domain/permissions';
 import { ATTACHMENT_MIMES as INLINE_MIME } from '@/domain/attachments';
 import { isMine } from '@/server/queries/approvals';
-import { ATTACHMENT_ENTITIES, canAttachment, deleteAttachment, isAttachmentEntity, isProtectedAttachment, readAttachment, setAttachmentPublic } from '@/server/services/attachments';
+import { ATTACHMENT_ENTITIES, attachmentsHideCost, canAttachment, deleteAttachment, isAttachmentEntity, isProtectedAttachment, readAttachment, setAttachmentPublic } from '@/server/services/attachments';
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -21,7 +21,7 @@ export async function GET(req: Request, { params }: Ctx) {
   }
   const { id } = await params;
   const a = await readAttachment(db, user.companyId, id);
-  if (!a || !isAttachmentEntity(a.entity) || !canAttachment(user.perms, a.entity, 'view')) {
+  if (!a || !isAttachmentEntity(a.entity) || !canAttachment(user.perms, a.entity, 'view') || (await attachmentsHideCost(db, user.companyId, user.perms, a.entity, a.entityId))) {
     return new Response('Prilog ne postoji.', { status: 404 });
   }
   // slike uz zahtjev za zaprimanje: samo tko smije rješavati zahtjeve ili onaj tko ga je poslao

@@ -56,7 +56,7 @@ export default async function DataPage({ searchParams }: { searchParams: Promise
             }
           >
             <p className="mb-2 text-sm text-fg-3">
-              Traži uređaje u nemogućem stanju (u najmu bez ugovora, prodan bez računa, na skladištu vezan uz partnera), ugovore bez uređaja, duple serijske brojeve i brojače iza izdanih brojeva. Nalazi „auto" popravljaju se jednim klikom; ostale treba pogledati ručno.
+              Traži uređaje u nemogućem stanju (u najmu bez ugovora, prodan bez računa, na skladištu vezan uz partnera), ugovore bez uređaja, duple serijske brojeve, brojače iza izdanih brojeva i trošak robe po narudžbenici koji ne odgovara pravilu (dvostruko knjiženje primke i računa). Nalazi „auto" popravljaju se jednim klikom; ostale treba pogledati ručno.
             </p>
             {findings === null ? null : findings.length === 0 ? (
               <Notice tone="ok">Sve je dosljedno — nema nalaza.</Notice>
@@ -106,7 +106,7 @@ export default async function DataPage({ searchParams }: { searchParams: Promise
               </tbody>
             </table>
           </Card>
-          <Maintenance isAdmin={isAdmin} canDanger={danger} auditTotal={auditTotal} />
+          <Maintenance isAdmin={isAdmin} canCleanLog={danger && can(user.perms, 'log')} auditTotal={auditTotal} />
         </div>
       </div>
     </>

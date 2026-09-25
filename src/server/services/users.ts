@@ -75,13 +75,46 @@ export function assertGrantAllowed(
   }
 }
 
+/**
+ * Ne-administrator smije upravljati (uređivati, mijenjati lozinku/e-adresu/aktivnost,
+ * odjavljivati, poništavati 2FA) samo korisnikom koji nema VIŠE prava od njega:
+ * svaki modul razina ≤ vlastite (uključujući costs i log), bez opasne zone i nije administrator.
+ * Inače bi preuzimanjem računa (nova lozinka/e-adresa) stekao tuđa viša prava.
+ */
+export function assertCanManage(
+  actor: { role: Role; permissions: unknown },
+  target: { role: Role; permissions: unknown; canDanger: boolean },
+) {
+  if (actor.role === 'ADMIN') return;
+  assert(target.role !== 'ADMIN', 'Samo administrator može mijenjati podatke administratora.');
+  assert(!target.canDanger, 'Korisnika s pravom na opasnu zonu uređuje samo administrator.');
+  const mine = resolvePermissions(actor.role, actor.permissions as Partial<Record<string, Level>>);
+  const theirs = resolvePermissions(target.role, target.permissions as Partial<Record<string, Level>>);
+  for (const m of Object.keys(MODULES) as Module[]) {
+    if (RANK[theirs[m]] > RANK[mine[m]]) {
+      throw new DomainError(`Korisnik ima veće pravo „${MODULES[m]}" (${LEVEL_LABEL[theirs[m]]}) od vašeg (${LEVEL_LABEL[mine[m]]}) — uređuje ga administrator.`);
+    }
+  }
+}
+
+/** Učitava ciljnog korisnika u firmi i provjerava smije li ga akter mijenjati (vidi `assertCanManage`). */
+export async function loadManageableUser(tx: Tx, actor: Actor, id: string) {
+  const target = await tx.user.findFirst({ where: { id, ...inCompany(actor.companyId) }, select: { id: true, name: true, role: true, permissions: true, canDanger: true } });
+  if (!target) throw new DomainError('Korisnik ne postoji.');
+  if (id !== actor.id) {
+    const me = await tx.user.findUniqueOrThrow({ where: { id: actor.id }, select: { role: true, permissions: true } });
+    assertCanManage(me, target);
+  }
+  return target;
+}
+
 export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: UserInput) {
   // prava se provjeravaju prije valjanosti polja — ne-administrator ne dobiva poruke o tuđem (admin) računu
   const me = await tx.user.findFirst({ where: { id: actor.id }, select: { role: true, permissions: true } });
   const actorIsAdmin = me?.role === 'ADMIN';
   const before = id ? await tx.user.findFirst({ where: { id, ...inCompany(actor.companyId) } }) : null;
   if (id) assert(before, 'Korisnik ne postoji.');
-  if (!actorIsAdmin && before) assert(before.role !== 'ADMIN', 'Samo administrator može mijenjati podatke administratora.');
+  if (!actorIsAdmin && before && me && id !== actor.id) assertCanManage(me, before);
   if (!actorIsAdmin) assert(input.role !== 'ADMIN', 'Samo administrator može dodijeliti ulogu administratora.');
   // opasnu zonu i odobrenja statusa dodjeljuje samo administrator
   if (!actorIsAdmin) assert(!input.canDanger, 'Pravo na opasnu zonu dodjeljuje samo administrator.');
@@ -183,12 +216,7 @@ export async function saveUser(tx: Tx, actor: Actor, id: string | null, input: U
 
 /** Odjava korisnika sa svih uređaja. */
 export async function revokeUserSessions(tx: Tx, actor: Actor, id: string) {
-  const u = await tx.user.findFirst({ where: { id, ...inCompany(actor.companyId) }, select: { name: true, role: true } });
-  if (!u) throw new DomainError('Korisnik ne postoji.');
-  if (u.role === 'ADMIN' && id !== actor.id) {
-    const me = await tx.user.findFirst({ where: { id: actor.id }, select: { role: true } });
-    assert(me?.role === 'ADMIN', 'Samo administrator može odjaviti administratora.');
-  }
+  const u = await loadManageableUser(tx, actor, id);
   await revokeSessions(tx, id);
   await audit(tx, actor, { entity: 'user', entityId: id, action: 'logout', summary: `Korisnik ${u.name} odjavljen sa svih uređaja` });
 }

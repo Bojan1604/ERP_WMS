@@ -5,7 +5,7 @@ import { listSupplierInvoices, supplierInvoiceYears } from '@/server/queries/pur
 import { partnerOptionsByIds } from '@/server/queries/partner-options';
 import { PartnerFilter } from '@/components/partners/partner-combobox';
 import { getCompany } from '@/server/queries/lookups';
-import { can } from '@/domain/permissions';
+import { can, canSeeCost } from '@/domain/permissions';
 import { num } from '@/domain/money';
 import { today } from '@/domain/dates';
 import { Badge, Empty, PageHeader, TableWrap } from '@/components/ui/misc';
@@ -19,6 +19,7 @@ import { SupplierInvoiceSourceBadge, SupplierInvoiceStatusBadge } from '@/compon
 import { date, eur, integer } from '@/lib/format';
 import { deleteSupplierInvoicesAction, fetchEInvoicesAction, supplierInvoicesPaidAction } from './actions';
 import { vatPctOf } from '@/domain/purchase-links';
+import { countLabel } from '@/domain/plural';
 import { ExportButtons } from '@/components/ui/export-buttons';
 
 type Params = Record<string, string | string[] | undefined>;
@@ -29,8 +30,10 @@ export default async function SupplierInvoicesPage({ searchParams }: { searchPar
   const user = await pageAccess('purchasing', 'view');
   const sp = await searchParams;
   const pg = readPage(sp, 50);
+  // bez prava `costs` iznosi računa za robu (nabavna vrijednost) se ne prikazuju ni zbrajaju
+  const costs = canSeeCost(user.perms);
   const c = user.companyId;
-  const [list, years, suppliers, company] = await Promise.all([listSupplierInvoices(c, sp, pg), supplierInvoiceYears(c), partnerOptionsByIds(c, [typeof sp.supplier === 'string' ? sp.supplier : null]), getCompany(c)]);
+  const [list, years, suppliers, company] = await Promise.all([listSupplierInvoices(c, sp, pg, { costs }), supplierInvoiceYears(c), partnerOptionsByIds(c, [typeof sp.supplier === 'string' ? sp.supplier : null]), getCompany(c)]);
   const canEdit = can(user.perms, 'purchasing', 'edit');
   const hasProvider = !!company.eInvoiceProvider && company.eInvoiceProvider !== 'none';
   const filtered = FILTERS.some((k) => typeof sp[k] === 'string' && sp[k]);
@@ -142,10 +145,21 @@ export default async function SupplierInvoicesPage({ searchParams }: { searchPar
                       <td className="whitespace-nowrap">{date(r.issueDate)}</td>
                       <td className={overdue ? 'whitespace-nowrap font-medium text-bad-strong' : 'whitespace-nowrap'}>{date(r.dueDate)}</td>
                       <td className="text-fg-3">{r.category ?? '—'}</td>
-                      <td className="num">{eur(num(r.netAmount))}</td>
-                      <td className="num">{eur(num(r.vatAmount))}</td>
-                      <td className="num text-fg-3">{pctLabel(r.vatPct !== null ? num(r.vatPct) : vatPctOf(num(r.netAmount), num(r.vatAmount)))}</td>
-                      <td className={rejected ? 'num font-medium text-fg-4 line-through' : 'num font-medium'}>{eur(num(r.total))}</td>
+                      {r.amountsHidden ? (
+                        <>
+                          <td className="num text-fg-4" title="Račun za robu — iznos otkriva nabavnu vrijednost">—</td>
+                          <td className="num text-fg-4">—</td>
+                          <td className="num text-fg-4">—</td>
+                          <td className="num text-fg-4">—</td>
+                        </>
+                      ) : (
+                        <>
+                          <td className="num">{eur(num(r.netAmount))}</td>
+                          <td className="num">{eur(num(r.vatAmount))}</td>
+                          <td className="num text-fg-3">{pctLabel(r.vatPct !== null ? num(r.vatPct) : vatPctOf(num(r.netAmount), num(r.vatAmount)))}</td>
+                          <td className={rejected ? 'num font-medium text-fg-4 line-through' : 'num font-medium'}>{eur(num(r.total))}</td>
+                        </>
+                      )}
                       <td>
                         <SupplierInvoiceStatusBadge status={r.status} paid={!!r.paidDate} />
                       </td>
@@ -167,8 +181,9 @@ export default async function SupplierInvoicesPage({ searchParams }: { searchPar
                 <tr>
                   <td />
                   <td colSpan={8}>
-                    {integer(list.total)} računa · neplaćeno {eur(list.sums.unpaid)}
+                    {countLabel(list.total, 'račun', 'računa', 'računa', integer)} · neplaćeno {eur(list.sums.unpaid)}
                     {sp.status !== 'rejected' && <span className="text-fg-3"> · zbrojevi bez odbijenih</span>}
+                    {!costs && <span className="text-fg-3"> i bez računa za robu</span>}
                   </td>
                   <td className="num">{eur(list.sums.net)}</td>
                   <td className="num">{eur(list.sums.vat)}</td>

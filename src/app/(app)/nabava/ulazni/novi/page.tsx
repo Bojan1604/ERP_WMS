@@ -3,9 +3,11 @@ import { pageAccess } from '@/server/auth';
 import { db } from '@/server/db';
 import { getCompany, getLookups } from '@/server/queries/lookups';
 import { partnerOptionsByIds } from '@/server/queries/partner-options';
-import { goodsInvoiceContext } from '@/server/services/supplier-invoices';
+import { goodsInvoiceContext } from '@/server/services/goods-expense';
 import { today } from '@/domain/dates';
 import { num } from '@/domain/money';
+import { canSeeCost } from '@/domain/permissions';
+import { PURCHASE_CATEGORY } from '@/domain/purchase-links';
 import { PageHeader } from '@/components/ui/misc';
 import { SupplierInvoiceForm } from '@/components/purchasing/supplier-invoice-form';
 import { saveSupplierInvoiceAction } from '../actions';
@@ -28,7 +30,8 @@ export default async function NewSupplierInvoicePage({ searchParams }: { searchP
   const links = { orderId: order?.id ?? receipt?.orderId ?? null, receiptId: receipt?.id ?? null };
   // zadano „račun za robu s primke": obrazac ga preračunava iz UPISANE osnovice (vrijednosti robe i broj
   // računa za robu koji već postoje), a konačno odlučuje poslužitelj pri spremanju
-  const ctx = links.orderId || links.receiptId ? await goodsInvoiceContext(db, user.companyId, { id: null, ...links, netAmount: net }) : null;
+  const costs = canSeeCost(user.perms);
+  const ctx = links.orderId || links.receiptId ? await goodsInvoiceContext(db, user.companyId, { id: null, ...links, netAmount: net, category: PURCHASE_CATEGORY }) : null;
   const goods = ctx?.defaultGoods ?? false;
   return (
     <>
@@ -55,7 +58,7 @@ export default async function NewSupplierInvoicePage({ searchParams }: { searchP
           total: net,
           vatPct: null,
           currency: 'EUR',
-          category: order || receipt ? 'Nabava robe' : null,
+          category: order || receipt ? PURCHASE_CATEGORY : null,
           note: null,
           paidDate: null,
           book: true,
@@ -68,9 +71,9 @@ export default async function NewSupplierInvoicePage({ searchParams }: { searchP
           receipt: receipt ? { value: receipt.id, label: receipt.number } : null,
         }}
         supplier={supplier ?? null}
-        categories={[...new Set([...lookups.expenseCategories.map((c) => c.name), 'Nabava robe'])]}
+        categories={[...new Set([...lookups.expenseCategories.map((c) => c.name), PURCHASE_CATEGORY, 'Prijevoz'])]}
         company={{ vatRate: num(company.vatRate), country: company.country }}
-        goodsRule={ctx ? { refs: ctx.refs, others: ctx.otherGoodsInvoices } : null}
+        goodsRule={ctx && costs ? { refs: ctx.refs, others: ctx.otherGoodsInvoices, otherNet: ctx.otherGoodsNet } : null}
         action={saveSupplierInvoiceAction}
       />
     </>

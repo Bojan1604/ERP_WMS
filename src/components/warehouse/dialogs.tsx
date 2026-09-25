@@ -17,6 +17,7 @@ import { refreshScanAction } from '@/app/(app)/skladiste/skeniranje/actions';
 import {
   announceReturnAction, bulkEditAction, changeStatus, markOutAction, transferAction, writeOffAction,
 } from '@/app/(app)/skladiste/actions';
+import { countLabel, plural } from '@/domain/plural';
 
 export interface StatusOption {
   id: string;
@@ -44,8 +45,13 @@ export interface Perms {
 export interface SelectedMeta {
   count: number;
   onContract: number;
-  cost: number;
+  /** Nabavna vrijednost odabranih; null bez prava `costs` (iznos se ne prikazuje). */
+  cost: number | null;
 }
+
+/** Zbroj nabavnih vrijednosti; null čim jedna nije poznata (korisnik bez prava `costs`). */
+export const sumCost = (rows: Array<{ cost: number | null }>): number | null =>
+  rows.some((r) => r.cost === null) ? null : rows.reduce((s, r) => s + (r.cost ?? 0), 0);
 
 interface Base {
   open: boolean;
@@ -218,7 +224,7 @@ export function TransferDialog({ warehouses, count, ...base }: Base & { warehous
       confirmLabel="Premjesti"
       disabled={!to}
     >
-      <p className="text-sm text-fg-3">Za {count} uređaja nastaje međuskladišnica (po jedna za svako izvorno skladište).</p>
+      <p className="text-sm text-fg-3">Za {countLabel(count, 'uređaj', 'uređaja', 'uređaja')} nastaje međuskladišnica (po jedna za svako izvorno skladište).</p>
       <FormGrid>
         <Field label="Odredišno skladište" required>
           <Select value={to} onChange={(e) => setTo(e.target.value)} placeholder="Odaberite…" options={warehouses} />
@@ -264,10 +270,10 @@ export function WriteOffDialog({ meta, ...base }: Base & { meta: SelectedMeta })
         <Textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} />
       </Field>
       <div>
-        <Checkbox checked={book} onChange={(e) => setBook(e.target.checked)} label={<>Knjiži trošak „Otpis opreme" u iznosu nabavne vrijednosti ({eur(meta.cost)})</>} />
+        <Checkbox checked={book} onChange={(e) => setBook(e.target.checked)} label={<>Knjiži trošak „Otpis opreme" u iznosu nabavne vrijednosti{meta.cost !== null && ` (${eur(meta.cost)})`}</>} />
         <p className="mt-1 text-xs text-fg-3">Nabavna vrijednost uređaja zaprimljenih primkom već je knjižena kao trošak „Nabava robe" — ponovno knjiženje bi trošak zbrojilo dvaput. Uključite samo za uređaje unesene bez primke (npr. uvoz, početno stanje).</p>
       </div>
-      {meta.onContract > 0 && <Notice tone="warn">{meta.onContract} uređaja je na ugovoru i bit će skinuto s njega.</Notice>}
+      {meta.onContract > 0 && <Notice tone="warn">{countLabel(meta.onContract, 'uređaj', 'uređaja', 'uređaja')} {plural(meta.onContract, 'je', 'su', 'je')} na ugovoru i bit će {plural(meta.onContract, 'skinut', 'skinuta', 'skinuto')} s njega.</Notice>}
     </ActionDialog>
   );
 }

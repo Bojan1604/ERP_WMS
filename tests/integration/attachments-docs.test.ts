@@ -8,7 +8,7 @@ import { db, transaction } from '../../src/server/db';
 import { bootstrapCompany } from '../../src/server/services/company';
 import type { Actor } from '../../src/server/services/items';
 import {
-  addAttachments, ATTACHMENT_ENTITIES, attachmentCounts, canAttachment, deleteAttachment, listAttachments,
+  addAttachments, ATTACHMENT_ENTITIES, attachmentCounts, attachmentsHideCost, canAttachment, deleteAttachment, listAttachments,
 } from '../../src/server/services/attachments';
 import { DOC_ATTACHMENT_ENTITIES } from '../../src/domain/attachments';
 import { ROLE_DEFAULTS } from '../../src/domain/permissions';
@@ -80,4 +80,20 @@ test('prilozi dokumenata: vrste, firma, veličina, brojanje i zaštita XML-a', a
   assert.ok(canAttachment(ROLE_DEFAULTS.WAREHOUSE, 'serviceOrder', 'add'));
   assert.ok(!canAttachment(ROLE_DEFAULTS.WAREHOUSE, 'contract', 'view'));
   assert.ok(canAttachment(ROLE_DEFAULTS.ACCOUNTANT, 'expense', 'remove'));
+});
+
+test('prilozi dokumenata s nabavnim cijenama skriveni bez prava costs', async () => {
+  const a = await company('cost');
+  const withCost = ROLE_DEFAULTS.ADMIN;
+  const noCost = { ...ROLE_DEFAULTS.ADMIN, costs: 'none' as const };
+  // obični ulazni račun (npr. usluga) — vidljiv svima s pravom na nabavu
+  assert.equal(await attachmentsHideCost(db, a.c.id, noCost, 'supplierInvoice', a.si.id), false);
+  // račun za robu, narudžbenica i primka — skriveni bez prava
+  await db.supplierInvoice.update({ where: { id: a.si.id }, data: { goodsInvoice: true } });
+  assert.equal(await attachmentsHideCost(db, a.c.id, noCost, 'supplierInvoice', a.si.id), true);
+  assert.equal(await attachmentsHideCost(db, a.c.id, noCost, 'purchaseOrder', 'x'), true);
+  assert.equal(await attachmentsHideCost(db, a.c.id, noCost, 'receipt', 'x'), true);
+  assert.equal(await attachmentsHideCost(db, a.c.id, noCost, 'contract', a.contract.id), false);
+  // s pravom — ništa skriveno
+  assert.equal(await attachmentsHideCost(db, a.c.id, withCost, 'supplierInvoice', a.si.id), false);
 });

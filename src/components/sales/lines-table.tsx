@@ -154,7 +154,7 @@ export function LinesTable({
                       <NumberInput
                         value={l.monthly ?? l.unitPrice}
                         disabled={rent?.locked}
-                        onValue={(v) => set(keys, { monthly: v ?? 0, unitPrice: r2((v ?? 0) * months), agreedPrice: false })}
+                        onValue={(v) => set(keys, { monthly: v ?? 0, unitPrice: r2((v ?? 0) * months), agreedPrice: false, priceEdited: true })}
                         aria-label="Mjesečni najam"
                         title="Mjesečni najam — iznos na računu je mjesečno × broj mjeseci naplate"
                       />
@@ -164,7 +164,7 @@ export function LinesTable({
                     </>
                   ) : (
                     <>
-                      <NumberInput value={l.unitPrice} onValue={(v) => set(keys, { unitPrice: v ?? 0, agreedPrice: false, ...(isRent ? { monthly: v ?? 0 } : {}) })} aria-label="Cijena" />
+                      <NumberInput value={l.unitPrice} onValue={(v) => set(keys, { unitPrice: v ?? 0, agreedPrice: false, priceEdited: true, ...(isRent ? { monthly: v ?? 0 } : {}) })} aria-label="Cijena" />
                       {isRent && <span className="mt-0.5 block text-right text-xs text-fg-3">€/mj</span>}
                     </>
                   )}

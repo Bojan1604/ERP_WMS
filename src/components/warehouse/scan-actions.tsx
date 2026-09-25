@@ -10,6 +10,7 @@ import { Field, Select, type Option } from '@/components/ui/field';
 import { FormError, useAction } from '@/components/ui/action';
 import { cn } from '@/lib/cn';
 import {
+  sumCost,
   AnnounceReturnDialog, BulkEditDialog, MarkOutDialog, StatusDialog, TransferDialog, WriteOffDialog,
   type Perms, type WarehouseOptions,
 } from './dialogs';
@@ -20,7 +21,8 @@ export interface ActionTarget {
   id: string;
   state: StateKind;
   onContract: boolean;
-  cost: number;
+  /** Nabavna vrijednost; null bez prava `costs`. */
+  cost: number | null;
 }
 
 type Which = 'status' | 'out' | 'return' | 'receive' | 'transfer' | 'edit' | 'writeoff' | null;
@@ -54,7 +56,7 @@ export function ScanActions({
   const ids = targets.map((t) => t.id);
   const all = (states: StateKind[]) => targets.every((t) => states.includes(t.state));
   const none = (states: StateKind[]) => targets.every((t) => !states.includes(t.state));
-  const meta = { count: ids.length, onContract: targets.filter((t) => t.onContract).length, cost: targets.reduce((s, t) => s + t.cost, 0) };
+  const meta = { count: ids.length, onContract: targets.filter((t) => t.onContract).length, cost: sumCost(targets) };
   const base = { open: true, onClose: () => setWhich(null), itemIds: ids, onDone };
   const btn = tone === 'dark' ? 'border-0 bg-white/10 text-white hover:bg-white/20' : '';
   const n = ids.length > 1 ? ` (${ids.length})` : '';

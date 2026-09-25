@@ -10,9 +10,11 @@ import { photoBytes, withPhotos, zPhotos } from '@/server/services/attachments';
 import { createReceiveRequest } from '@/server/services/receive-requests';
 import { MAX_RECEIVE } from '@/domain/warehouse';
 import { looksLikeSerial, ocrTokens, ocrVariants } from '@/domain/warehouse-list';
-import { findItemsByCode, scanItemsByIds, type ScanItem, type ScanVia } from '@/server/queries/stocktake';
+import { lookupScanItems, scanItemView, scanItemsByIds, type ScanItemView, type ScanVia } from '@/server/queries/stocktake';
+import { canSeeCost } from '@/domain/permissions';
 
-const toDevice = (i: ScanItem) => plain(i);
+// nabavna cijena samo uz pravo `costs` — odgovor akcije vidi svatko s pravom pregleda skladišta
+const toDevice = (i: ScanItemView) => plain(i);
 export type ScanDevice = ReturnType<typeof toDevice>;
 export type LookupResult = { code: string; via: ScanVia | null; items: ScanDevice[] };
 
@@ -21,7 +23,7 @@ export const lookupScanAction = action(
   { module: 'warehouse', level: 'view' },
   z.object({ code: z.string().trim().min(1, 'Prazan kod').max(500) }),
   async ({ code }, user) => {
-    const r = await findItemsByCode(db, user.companyId, code);
+    const r = await lookupScanItems(db, user.companyId, code, canSeeCost(user.perms));
     const data: LookupResult = { code, via: r.via, items: r.items.map(toDevice) };
     return { data, revalidate: [] };
   },
@@ -48,7 +50,7 @@ export const ocrMatchAction = action({ module: 'warehouse', level: 'view' }, z.o
 /** Svježe stanje skeniranih uređaja (nakon radnje nad njima). */
 export const refreshScanAction = action({ module: 'warehouse', level: 'view' }, z.object({ ids: zIds }), async ({ ids }, user) => {
   const rows = await scanItemsByIds(user.companyId, ids.slice(0, 2000));
-  return { data: rows.map(toDevice), revalidate: [] };
+  return { data: rows.map((i) => toDevice(scanItemView(i, canSeeCost(user.perms)))), revalidate: [] };
 });
 
 /**

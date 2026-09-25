@@ -5,7 +5,7 @@ import { pageAccess } from '@/server/auth';
 import { getCompany, getLookups } from '@/server/queries/lookups';
 import { getSupplierInvoice, recentSupplierReceipts } from '@/server/queries/purchasing';
 import { partnerOptionsByIds } from '@/server/queries/partner-options';
-import { can } from '@/domain/permissions';
+import { can, canSeeCost } from '@/domain/permissions';
 import { toISO } from '@/domain/dates';
 import { num } from '@/domain/money';
 import { Card, Detail, Notice, PageHeader } from '@/components/ui/misc';
@@ -34,21 +34,24 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
     si.status === 'RECEIVED' ? recentSupplierReceipts(user.companyId, si.supplierId, si.issueDate) : 0,
   ]);
   const categories = lookups.expenseCategories.map((c) => c.name);
-  if (si.category && !categories.includes(si.category)) categories.push(si.category);
+  for (const c of [si.category, 'Prijevoz']) if (c && !categories.includes(c)) categories.push(c);
 
   const canEdit = can(user.perms, 'purchasing', 'edit');
+  const costs = canSeeCost(user.perms);
+  // račun za robu otkriva nabavnu vrijednost: bez prava `costs` iznosi (i dokumenti s iznosima) se ne šalju — kao na popisu
+  const hideAmounts = !costs && si.goodsInvoice === true;
   const eInvoice = si.source === 'EINVOICE';
   const rejected = si.status === 'REJECTED';
   // prihvaćen/odbijen eRačun je javljen posredniku — ne briše se
   const canDelete = canEdit && (!eInvoice || si.status === 'RECEIVED');
   // eRačun se plaća tek nakon prihvaćanja (posrednik status „plaćen" prije „prihvaćen" odbija, a plaćeni se ne može odbiti)
   const payLocked = eInvoice && si.status === 'RECEIVED';
-  const xml = si.attachments.find((a) => a.mime === 'application/xml');
-  const pdfs = si.attachments.filter((a) => a.mime === 'application/pdf');
+  const xml = hideAmounts ? undefined : si.attachments.find((a) => a.mime === 'application/xml');
+  const pdfs = hideAmounts ? [] : si.attachments.filter((a) => a.mime === 'application/pdf');
   const fileHref = (attId: string) => `/api/nabava/ulazni/${si.id}/prilog/${attId}`;
-  // račun za robu s primke: roba je knjižena primkom, a račun nema vlastitog troška (drugi računi — prijevoz i sl. — imaju svoj)
-  const bookedByReceipt = si.receiptExpenses > 0 && !si.expense && si.goodsInvoice !== false;
-  // prihvaćen račun bez troška (obrisan stornom primke ili nikad knjižen) — „Knjiži ponovno"
+  // pravilo troška robe skupine: račun za robu u cijelosti pokriven primkama nema vlastitog troška
+  const bookedByReceipt = si.allocation?.mode === 'receipt';
+  // prihvaćen račun bez troška (spremljen bez knjiženja) — „Knjiži ponovno" (roba se nikad ne knjiži dvaput)
   const canRebook = canEdit && si.status === 'ACCEPTED' && !si.expense && !bookedByReceipt;
 
   return (
@@ -79,7 +82,7 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
                 <LinkButton href={`/nabava/narudzbenice/${si.order.id}`}>Narudžbenica {si.order.number}</LinkButton>
               )}
               {si.receipt && <LinkButton href={`/nabava/primke/${si.receipt.id}`}>Primka {si.receipt.number}</LinkButton>}
-              {eInvoice && <ProviderPdfButton id={si.id} action={providerPdfAction} />}
+              {eInvoice && !hideAmounts && <ProviderPdfButton id={si.id} action={providerPdfAction} />}
               {canRebook && (
                 <ActionButton
                   action={rebookSupplierInvoiceAction}
@@ -171,16 +174,16 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
           number: si.number,
           issueDate: toISO(si.issueDate),
           dueDate: si.dueDate ? toISO(si.dueDate) : null,
-          netAmount: num(si.netAmount),
-          vatAmount: num(si.vatAmount),
-          total: num(si.total),
+          netAmount: hideAmounts ? 0 : num(si.netAmount),
+          vatAmount: hideAmounts ? 0 : num(si.vatAmount),
+          total: hideAmounts ? 0 : num(si.total),
           category: si.category,
           note: si.note,
           paidDate: si.paidDate ? toISO(si.paidDate) : null,
-          book: !!si.expense || bookedByReceipt,
+          book: si.bookExpense,
           // spremljena odluka; stariji račun bez nje — bez vlastitog troška uz knjiženu primku = račun za robu, inače pravilo iznosa
           goods: si.goodsInvoice ?? (!si.expense && (bookedByReceipt || si.defaultGoods)),
-          vatPct: si.vatPct === null ? null : num(si.vatPct),
+          vatPct: si.vatPct === null || hideAmounts ? null : num(si.vatPct),
           currency: si.currency,
           orderId: si.orderId,
           receiptId: si.receiptId,
@@ -189,8 +192,15 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
           order: si.order ? { value: si.order.id, label: si.order.number } : null,
           receipt: si.receipt ? { value: si.receipt.id, label: si.receipt.number } : null,
         }}
-        bookedByReceipt={bookedByReceipt}
-        goodsRule={si.goodsInvoice === null ? si.goodsRule : null}
+        expense={
+          si.allocation && {
+            mode: si.allocation.mode,
+            // iznosi pokrića primkama otkrivaju nabavnu vrijednost — samo uz pravo `costs`
+            covered: costs ? si.allocation.covered : null,
+            ownNet: costs ? si.allocation.ownNet : null,
+          }
+        }
+        goodsRule={si.goodsInvoice === null && costs ? si.goodsRule : null}
         supplier={supplier ?? null}
         categories={categories}
         company={{ vatRate: num(company.vatRate), country: company.country }}
@@ -198,12 +208,15 @@ export default async function SupplierInvoicePage({ params }: { params: Promise<
         lockDocument={eInvoice}
         rejected={rejected}
         payLocked={payLocked}
-        readOnly={!canEdit}
+        readOnly={!canEdit || hideAmounts}
+        hideAmounts={hideAmounts}
       />
 
-      <Card title="Prilozi (sken, PDF računa)" className="mt-4">
-        <Attachments entity="supplierInvoice" id={si.id} canEdit={canEdit} initial={si.attachments} />
-      </Card>
+      {!hideAmounts && (
+        <Card title="Prilozi (sken, PDF računa)" className="mt-4">
+          <Attachments entity="supplierInvoice" id={si.id} canEdit={canEdit} initial={si.attachments} />
+        </Card>
+      )}
     </>
   );
 }

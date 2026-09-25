@@ -51,7 +51,7 @@ export function contractWhere(companyId: string, params: Params): Prisma.Contrac
 
 type TermsRow = Pick<
   Prisma.ContractGetPayload<object>,
-  'id' | 'status' | 'startDate' | 'endDate' | 'firstBillingDate' | 'billingDay' | 'billing' | 'billingMode' | 'seasonFrom' | 'seasonTo' | 'closedAt'
+  'id' | 'status' | 'startDate' | 'endDate' | 'firstBillingDate' | 'billingDay' | 'billing' | 'billingMode' | 'seasonFrom' | 'seasonTo' | 'closedAt' | 'pausedSince'
 >;
 
 const termsOf = (c: TermsRow): ContractTerms => ({
@@ -65,6 +65,7 @@ const termsOf = (c: TermsRow): ContractTerms => ({
   seasonFrom: c.seasonFrom,
   seasonTo: c.seasonTo,
   closedAt: c.closedAt ? toISO(c.closedAt) : null,
+  pausedSince: c.pausedSince ? toISO(c.pausedSince) : null,
 });
 
 export interface ContractYear {
@@ -82,6 +83,7 @@ interface DeviceGroup {
   plan: string;
   status: ContractStatus | null;
   paused: string[];
+  pausedSince: Date | null;
   endDate: Date | null;
   returned: boolean;
   n: number;
@@ -98,17 +100,17 @@ async function yearStats(where: Prisma.ContractWhereInput, year: number) {
     where,
     select: {
       id: true, status: true, startDate: true, endDate: true, firstBillingDate: true, billingDay: true, billing: true, billingMode: true,
-      seasonFrom: true, seasonTo: true, closedAt: true,
+      seasonFrom: true, seasonTo: true, closedAt: true, pausedSince: true,
     },
   });
   const ids = contracts.map((c) => c.id);
   const groups = ids.length
     ? await db.$queryRaw<DeviceGroup[]>`
-        SELECT "contractId", monthly::text AS monthly, plan::text AS plan, status, paused, NULL::date AS "endDate", false AS returned, count(*)::int AS n
+        SELECT "contractId", monthly::text AS monthly, plan::text AS plan, status, paused, "pausedSince", NULL::date AS "endDate", false AS returned, count(*)::int AS n
         FROM "ContractItem" WHERE "contractId" = ANY(${ids}::text[])
-        GROUP BY "contractId", monthly, plan::text, status, paused
+        GROUP BY "contractId", monthly, plan::text, status, paused, "pausedSince"
         UNION ALL
-        SELECT "contractId", monthly::text, plan::text, NULL, paused, "endDate", true, count(*)::int
+        SELECT "contractId", monthly::text, plan::text, NULL, paused, NULL::date, "endDate", true, count(*)::int
         FROM "ReturnedContractItem" WHERE "contractId" = ANY(${ids}::text[]) AND "endDate" >= ${fromISO(`${year}-01-01`)}
         GROUP BY "contractId", monthly, plan::text, paused, "endDate"`
     : [];
@@ -124,6 +126,7 @@ async function yearStats(where: Prisma.ContractWhereInput, year: number) {
       plan: (JSON.parse(g.plan) as PlanPeriodInput[]) ?? [],
       status: g.status,
       paused: g.paused,
+      pausedSince: g.pausedSince ? toISO(g.pausedSince) : null,
       endDate: g.endDate ? toISO(g.endDate) : null,
     };
     s.accrual += contractAccrual(t, [d], year).reduce((a, b) => a + b, 0) * g.n;

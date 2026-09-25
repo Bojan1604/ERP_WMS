@@ -21,6 +21,7 @@ import { returnOnCost, SERVICE_STATUS_LABEL } from '@/domain/warehouse';
 import { date, dateTime, eur, pct } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { MdmItemCard } from '@/components/mdm/device-item-card';
+import { countLabel } from '@/domain/plural';
 
 type CardData = NonNullable<Awaited<ReturnType<typeof getItemCard>>>;
 
@@ -90,7 +91,7 @@ export default async function ItemCardPage({ params }: { params: Promise<{ id: s
         subtitle={[modelLabel(item.model), item.category?.name ?? item.model.category?.name, item.dupNote && `napomena: ${item.dupNote}`].filter(Boolean).join(' · ')}
         actions={
           <>
-            <ItemActions itemId={item.id} state={item.state} onContract={!!contract} cost={costs ? cost : 0} options={options} perms={perms} />
+            <ItemActions itemId={item.id} state={item.state} onContract={!!contract} cost={costs ? cost : null} options={options} perms={perms} />
             {perms.canEdit && <DeleteItemButton itemId={item.id} />}
           </>
         }
@@ -277,7 +278,7 @@ export default async function ItemCardPage({ params }: { params: Promise<{ id: s
               </Detail>
               <Detail label="Povrat na nabavnu">{pct(roc)}</Detail>
             </dl>
-            <p className="mt-2 text-xs text-fg-3">Zbroj neto stavki izdanih računa s ovim uređajem (bez storniranih), {card.earnedLines} stavki.</p>
+            <p className="mt-2 text-xs text-fg-3">Zbroj neto stavki izdanih računa s ovim uređajem (bez storniranih), {countLabel(card.earnedLines, 'stavka', 'stavke', 'stavki')}.</p>
           </Card>
           )}
 

@@ -6,8 +6,8 @@ import { useEffect, useState } from 'react';
 import { Loader2, Menu, Warehouse, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/cn';
-import { can, type PermissionMap } from '@/domain/permissions';
-import { NAV } from './nav';
+import type { PermissionMap } from '@/domain/permissions';
+import { NAV, navItemVisible } from './nav';
 
 function Icon({ icon: I, active }: { icon: LucideIcon; active: boolean }) {
   const { pending } = useLinkStatus();
@@ -24,7 +24,7 @@ export function Sidebar({ perms, isAdmin, canDanger = isAdmin, company, badges, 
     window.addEventListener('open-nav', onOpen);
     return () => window.removeEventListener('open-nav', onOpen);
   }, []);
-  const groups = NAV.map((g) => ({ ...g, items: g.items.filter((i) => can(perms, i.module, i.level ?? 'view') && (!i.adminOnly || isAdmin) && (!i.dangerOnly || isAdmin || canDanger)) })).filter((g) => g.items.length);
+  const groups = NAV.map((g) => ({ ...g, items: g.items.filter((i) => navItemVisible(i, { perms, isAdmin, canDanger })) })).filter((g) => g.items.length);
 
   // najdulja poklapajuća putanja je aktivna (/skladiste ne smije biti aktivan na /skladiste/izlaz)
   const all = groups.flatMap((g) => g.items.map((i) => i.href));
@@ -51,7 +51,7 @@ export function Sidebar({ perms, isAdmin, canDanger = isAdmin, company, badges, 
                     <Icon icon={i.icon} active={on} />
                     <span className="flex-1 truncate">{i.label}</span>
                     {!!badges[i.href] && (
-                      <span className={cn('rounded-full px-1.5 text-xs tnum', on ? 'bg-white/25 text-white' : alerts.includes(i.href) ? 'bg-bad-strong text-white' : 'bg-warn text-nav')}>{badges[i.href]}</span>
+                      <span className={cn('rounded-full px-1.5 text-xs tnum', on ? 'bg-black/20 text-white' : alerts.includes(i.href) ? 'bg-bad-strong text-white' : 'bg-warn text-white dark:text-nav')}>{badges[i.href]}</span>
                     )}
                   </Link>
                 </li>

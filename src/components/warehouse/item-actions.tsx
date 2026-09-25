@@ -23,7 +23,8 @@ export function ItemActions({
   itemId: string;
   state: StateKind;
   onContract: boolean;
-  cost: number;
+  /** Nabavna cijena; null bez prava `costs`. */
+  cost: number | null;
   options: WarehouseOptions;
   perms: Perms;
 }) {

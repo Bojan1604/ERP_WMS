@@ -1,10 +1,10 @@
 import 'server-only';
-import { Prisma, type StatusKind } from '@prisma/client';
+import { Prisma, type Billing, type BillingMode, type ContractStatus, type StatusKind } from '@prisma/client';
 import { db } from '../db';
 import { toDevice, toTerms } from '../services/rentals';
-import { planSummary, returnReason } from '@/domain/billing';
+import { planSummary, returnReason, type ContractDevice, type ContractTerms, type PlanPeriodInput } from '@/domain/billing';
 import { num } from '@/domain/money';
-import { today } from '@/domain/dates';
+import { fromISO, toISO, today } from '@/domain/dates';
 import { inOrAll, parseMulti, parseSort, sortOrderBy } from '@/lib/list-params';
 import { ITEM_SORTS, type ItemSort } from '@/domain/warehouse-list';
 import { escapeLike } from '@/lib/like';
@@ -348,52 +348,107 @@ export async function reservedGroups(companyId: string, page: { skip: number; ta
   };
 }
 
-/** Uređaji na ugovorima koji bi se trebali vratiti (istek, raskid, kraj sezone ili plana). */
-export async function returnCandidates(companyId: string) {
-  const contracts = await db.contract.findMany({
-    where: { companyId, status: { in: ['ACTIVE', 'EXPIRED', 'TERMINATED'] }, items: { some: { item: { state: { not: 'RETURNING' } } } } },
-    include: {
-      partner: { select: { id: true, name: true } },
-      items: {
-        where: { item: { state: { not: 'RETURNING' } } },
-        include: { item: { select: { id: true, serial: true, state: true, model: { select: { brand: true, name: true } } } } },
-      },
-    },
-  });
+export interface ReturnCandidate {
+  itemId: string;
+  serial: string;
+  model: string;
+  contractId: string;
+  contractNumber: string;
+  partner: { id: string; name: string };
+  reason: string;
+}
+
+/**
+ * Uređaji na ugovorima koji bi se trebali vratiti (istek, raskid, kraj sezone ili plana).
+ * Baza vraća samo moguće kandidate — razlog i dalje određuje `returnReason`, pa predfiltar
+ * smije biti samo širi od njega: ugovor raskinut/istekao ili s krajem prije sutra, uređaj
+ * raskinut, ugovor sa sezonom ili uređaj s vlastitim planom. Ostali (aktivni ugovor bez
+ * kraja u prošlosti, bez sezone i plana) nikad nemaju razlog za povrat.
+ */
+export async function returnCandidates(companyId: string): Promise<ReturnCandidate[]> {
   const now = today();
-  const out: Array<{
-    itemId: string;
-    serial: string;
-    model: string;
-    contractId: string;
-    contractNumber: string;
-    partner: { id: string; name: string };
-    reason: string;
-  }> = [];
-  for (const c of contracts) {
-    const terms = toTerms(c);
-    for (const ci of c.items) {
-      const reason = returnReason(terms, toDevice(ci), now);
-      if (!reason) continue;
-      out.push({
-        itemId: ci.item.id,
-        serial: ci.item.serial,
-        model: [ci.item.model.brand, ci.item.model.name].filter(Boolean).join(' '),
-        contractId: c.id,
-        contractNumber: c.number,
-        partner: c.partner,
-        reason,
-      });
-    }
+  const rows = await db.$queryRaw<
+    Array<{
+      itemId: string;
+      serial: string;
+      brand: string | null;
+      modelName: string;
+      contractId: string;
+      number: string;
+      partnerId: string;
+      partnerName: string;
+      status: ContractStatus;
+      startDate: Date;
+      endDate: Date | null;
+      firstBillingDate: Date | null;
+      billing: Billing;
+      billingMode: BillingMode;
+      seasonFrom: number | null;
+      seasonTo: number | null;
+      monthly: Prisma.Decimal;
+      plan: unknown;
+      itemStatus: ContractStatus | null;
+    }>
+  >`
+    SELECT ci."itemId", i.serial, m.brand, m.name AS "modelName", c.id AS "contractId", c.number,
+           p.id AS "partnerId", p.name AS "partnerName", c.status::text AS status, c."startDate", c."endDate",
+           c."firstBillingDate", c.billing::text AS billing, c."billingMode"::text AS "billingMode",
+           c."seasonFrom", c."seasonTo", ci.monthly, ci.plan, ci.status::text AS "itemStatus"
+    FROM "ContractItem" ci
+    JOIN "Contract" c ON c.id = ci."contractId"
+    JOIN "Item" i ON i.id = ci."itemId"
+    JOIN "DeviceModel" m ON m.id = i."modelId"
+    JOIN "Partner" p ON p.id = c."partnerId"
+    WHERE c."companyId" = ${companyId} AND c.status IN ('ACTIVE', 'EXPIRED', 'TERMINATED') AND i.state <> 'RETURNING'
+      AND (c.status IN ('EXPIRED', 'TERMINATED') OR c."endDate" <= ${fromISO(now)}::date OR ci.status = 'TERMINATED'
+           OR c."seasonFrom" IS NOT NULL OR ci.plan <> '[]'::jsonb)`;
+  const out: ReturnCandidate[] = [];
+  for (const r of rows) {
+    const terms: ContractTerms = {
+      status: r.status,
+      startDate: toISO(r.startDate),
+      endDate: r.endDate ? toISO(r.endDate) : null,
+      firstBillingDate: r.firstBillingDate ? toISO(r.firstBillingDate) : null,
+      billing: r.billing,
+      billingMode: r.billingMode,
+      seasonFrom: r.seasonFrom,
+      seasonTo: r.seasonTo,
+    };
+    const device: ContractDevice = { itemId: r.itemId, monthly: num(r.monthly), plan: (r.plan as PlanPeriodInput[]) ?? [], status: r.itemStatus };
+    const reason = returnReason(terms, device, now);
+    if (!reason) continue;
+    out.push({
+      itemId: r.itemId,
+      serial: r.serial,
+      model: [r.brand, r.modelName].filter(Boolean).join(' '),
+      contractId: r.contractId,
+      contractNumber: r.number,
+      partner: { id: r.partnerId, name: r.partnerName },
+      reason,
+    });
   }
   return out.sort((a, b) => a.partner.name.localeCompare(b.partner.name, 'hr') || a.serial.localeCompare(b.serial));
 }
 
-/** Uređaji u dolasku (najavljen povrat). */
-export function returningItems(companyId: string) {
+/** Za nadzornu ploču: broj uređaja za povrat, razlozi i ugovori (redom popisa). */
+export async function returnSummary(companyId: string) {
+  const rows = await returnCandidates(companyId);
+  const reasons = new Map<string, number>();
+  for (const r of rows) reasons.set(r.reason, (reasons.get(r.reason) ?? 0) + 1);
+  return {
+    count: rows.length,
+    reasons: [...reasons.entries()].map(([r, c]) => `${c}× ${r}`).join(' · '),
+    contracts: [...new Set(rows.map((r) => r.contractNumber))],
+  };
+}
+
+/** Uređaji u dolasku (najavljen povrat) — jedna stranica; ukupni broj iz `outCounts`. */
+export function returningItems(companyId: string, page: { skip: number; take: number } = { skip: 0, take: 100 }) {
   return db.item.findMany({
     where: { companyId, state: 'RETURNING' },
-    orderBy: [{ updatedAt: 'desc' }],
+    orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }],
+    skip: page.skip,
+    take: page.take,
     select: {
       id: true,
       serial: true,

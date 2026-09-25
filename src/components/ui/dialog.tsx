@@ -35,6 +35,8 @@ export function Dialog({
       onClose={onClose}
       onCancel={(e) => {
         e.preventDefault();
+        // Esc s otvorenim padajućim popisom (Combobox/filtar, portal u dijalogu) zatvara samo popis
+        if (ref.current?.querySelector('[data-popover-open]')) return;
         onClose();
       }}
       className={cn(

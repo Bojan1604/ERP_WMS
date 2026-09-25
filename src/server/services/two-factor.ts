@@ -9,6 +9,7 @@ import { assert } from '../errors';
 import { env } from '../env';
 import { decryptSecret, encryptSecret } from '../fiscal/crypto';
 import type { Actor } from './items';
+import { assertCanManage } from './users';
 
 /**
  * Prijava u dva koraka (TOTP, RFC 6238): tajna je u bazi šifrirana
@@ -126,8 +127,10 @@ export async function disableOwnTotp(tx: Tx, actor: Actor, password: string) {
  * sljedeći put prijavljuje samo lozinkom i može ponovno uključiti 2FA. Sve sesije se odjavljuju.
  */
 export async function resetUserTotp(tx: Tx, actor: Actor, userId: string, companyId: string) {
-  const u = await tx.user.findFirst({ where: { id: userId, OR: [{ companyId }, { companies: { some: { companyId } } }] }, select: { name: true, totpEnabled: true, totpSecret: true } });
+  const u = await tx.user.findFirst({ where: { id: userId, OR: [{ companyId }, { companies: { some: { companyId } } }] }, select: { name: true, totpEnabled: true, totpSecret: true, role: true, permissions: true, canDanger: true } });
   assert(u, 'Korisnik ne postoji.');
+  // ne-administrator ne poništava 2FA korisniku s višim pravima (preuzimanje računa)
+  if (userId !== actor.id) assertCanManage(await tx.user.findUniqueOrThrow({ where: { id: actor.id }, select: { role: true, permissions: true } }), u);
   assert(u.totpEnabled || u.totpSecret, `${u.name} nema uključenu prijavu u dva koraka.`);
   await tx.user.update({ where: { id: userId }, data: { totpEnabled: false, totpSecret: null, totpLastStep: null, backupCodes: [] } });
   await tx.session.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } });

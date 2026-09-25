@@ -39,7 +39,8 @@ export function DonutChart({ data, className }: { data: Array<{ label: string; v
             <title>{`${a.label}: ${integer(a.value)} (${Math.round((a.value / total) * 1000) / 10} %)`}</title>
           </path>
         ))}
-        <text x={C} y={C - 4} textAnchor="middle" className="fill-fg text-[18px] font-semibold tnum">
+        {/* dulji zapis („270,5 tis.") manjim slovima — ne smije dodirivati prsten (unutarnji promjer 88) */}
+        <text x={C} y={C - 4} textAnchor="middle" className={cn('fill-fg font-semibold tnum', compact(total).length <= 5 ? 'text-[18px]' : compact(total).length <= 7 ? 'text-[15px]' : 'text-[12.5px]')}>
           {compact(total)}
         </text>
         <text x={C} y={C + 14} textAnchor="middle" className="fill-fg-3 text-[10px]">

@@ -22,6 +22,7 @@ import { amount, date, eur, integer } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { ExportButtons } from '@/components/ui/export-buttons';
 import { PartnerMultiFilter } from '@/components/partners/partner-combobox';
+import { plural } from '@/domain/plural';
 
 export const metadata = { title: 'Računi' };
 
@@ -102,7 +103,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
 
       {unsent.total > 0 && (
         <Notice tone="warn">
-          <b>Nije poslano posredniku:</b> {unsent.total === 1 ? 'dokument' : `${integer(unsent.total)} dokumenata`} (storno / odobrenje) uz već poslane eRačune:{' '}
+          <b>Nije poslano posredniku:</b> {unsent.total === 1 ? 'dokument' : `${integer(unsent.total)} ${plural(unsent.total, 'dokument', 'dokumenta', 'dokumenata')}`} (storno / odobrenje) uz već poslane eRačune:{' '}
           {unsent.rows.map((r, i) => (
             <span key={r.id}>
               {i > 0 && ', '}
@@ -303,7 +304,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
             <tfoot>
               <tr>
                 <td colSpan={7}>
-                  {integer(list.total)} dokumenata
+                  {integer(list.total)} {plural(list.total, 'dokument', 'dokumenta', 'dokumenata')}
                   {list.totals.overdueCount > 0 && (
                     <span className="ml-3 font-normal text-bad-strong">
                       kasni {integer(list.totals.overdueCount)} · {eur(list.totals.overdue)}

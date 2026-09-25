@@ -15,6 +15,7 @@ import { DocTable, DocTotals, DocumentShell, docDate } from '@/components/doc/do
 import { RECEIPT_STATUS } from '@/components/purchasing/labels';
 import { amount, dateTime, eur } from '@/lib/format';
 import { bookReceiptExpenseAction, cancelReceiptAction } from '../actions';
+import { countLabel, plural } from '@/domain/plural';
 
 export default async function ReceiptPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await pageAccess('purchasing', 'view');
@@ -26,7 +27,7 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
   const costs = canSeeCost(user.perms);
   // ulazni računi povezani s primkom izravno ili preko narudžbenice
   const invoices = [...receipt.supplierInvoices, ...(receipt.order?.supplierInvoices ?? [])].filter((s, i, a) => a.findIndex((x) => x.id === s.id) === i);
-  const invoiceOwn = invoices.find((s) => s.expense);
+  const invoiceOwn = invoices.find((s) => s.expense && s.goodsInvoice);
   const cancelled = receipt.status === 'CANCELLED';
   const st = RECEIPT_STATUS[receipt.status];
 
@@ -61,7 +62,9 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
             </span>
           )}
           {costs && !receipt.expense && !cancelled && (
-            <span className="text-sm text-fg-3">{invoiceOwn ? `Trošak robe knjižen je ulaznim računom ${invoiceOwn.internalNo}.` : 'Trošak nabave nije knjižen.'}</span>
+            <span className="text-sm text-fg-3">{invoiceOwn
+                ? `Trošak nabave primke nije knjižen — robu trenutno nosi ulazni račun ${invoiceOwn.internalNo}; knjiženjem primke račun knjiži samo razliku iznad primki.`
+                : 'Trošak nabave nije knjižen.'}</span>
           )}
         </div>
         <div className="flex gap-2">
@@ -70,7 +73,7 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
               + Ulazni račun
             </Link>
           )}
-          {canEdit && costs && !cancelled && !receipt.expense && !invoiceOwn && num(receipt.total) > 0 && (
+          {canEdit && costs && !cancelled && !receipt.expense && num(receipt.total) > 0 && (
             <ActionButton action={bookReceiptExpenseAction} input={{ id }} confirm={`Knjižiti trošak nabave ${eur(num(receipt.total))} (primka ${receipt.number})?`} confirmLabel="Knjiži trošak">
               Knjiži trošak
             </ActionButton>
@@ -100,7 +103,7 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
 
       {!cancelled && blocked.length > 0 && (
         <Notice tone="info">
-          Primka se ne može stornirati: {blocked.length} uređaja više nije slobodno na skladištu ili je na računu/ugovoru ({blocked.slice(0, 10).join(', ')}
+          Primka se ne može stornirati: {countLabel(blocked.length, 'uređaj', 'uređaja', 'uređaja')} više {plural(blocked.length, 'nije slobodan', 'nisu slobodna', 'nije slobodno')} na skladištu ili je na računu/ugovoru ({blocked.slice(0, 10).join(', ')}
           {blocked.length > 10 ? '…' : ''}).
         </Notice>
       )}

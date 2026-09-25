@@ -8,7 +8,7 @@ import { audit } from '@/server/audit';
 import { AuthError, DomainError } from '@/server/errors';
 import { verifyPassword, type SessionUser } from '@/server/auth';
 import { zBool, zInt, zReq } from '@/server/zod';
-import { canUseDanger } from '@/domain/permissions';
+import { can, canUseDanger } from '@/domain/permissions';
 import { createBackup, deleteBackup, readBackup } from '@/server/jobs/backups';
 import { planFromJson } from '@/server/import/analyze';
 import { runImport } from '@/server/import/run';
@@ -22,6 +22,11 @@ const adminOnly = (u: SessionUser) => {
 };
 const dangerOnly = (u: SessionUser) => {
   if (!canUseDanger({ role: u.role, canDanger: u.canDanger })) throw new AuthError('Nemate pravo na opasnu zonu.', 403);
+};
+// čišćenje dnevnika traži i pravo na dnevnik (ne samo opasnu zonu)
+const dangerAndLog = (u: SessionUser) => {
+  dangerOnly(u);
+  if (!can(u.perms, 'log')) throw new AuthError('Nemate pravo na dnevnik promjena.', 403);
 };
 const zBackupName = z.string().regex(/^kopija-[\d-]+-(auto|rucna)\.json\.gz$/, 'Neispravan naziv kopije');
 const zConfirm = { password: z.string().min(1, 'Upišite lozinku'), companyName: zReq('Naziv firme') };
@@ -121,7 +126,7 @@ export const cleanLogAction = userAction(z.object({ days: z.preprocess(emptyToNu
     return cleanAuditLog(tx, user, input.days);
   });
   return { message: `Obrisano ${n} zapisa iz dnevnika.` };
-}, dangerOnly);
+}, dangerAndLog);
 
 // ---------------------------------------------------------------- održavanje
 

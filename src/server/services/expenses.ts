@@ -6,6 +6,8 @@ import { audit } from '../audit';
 import type { Actor } from './items';
 import { fromISO, today } from '@/domain/dates';
 import { r2 } from '@/domain/money';
+import { COVERING_GOODS_INVOICE } from './goods-expense';
+import { countLabel, plural } from '@/domain/plural';
 
 // =============================================================================
 //  Troškovi: ručni i ponavljajući troškovi, izmjene pojedinih rata, kategorije.
@@ -116,9 +118,8 @@ export async function setExpensesPaid(tx: Tx, actor: Actor, ids: string[], paid:
     const si = await tx.supplierInvoice.findFirst({
       where: {
         companyId: actor.companyId,
-        status: { not: 'REJECTED' },
-        goodsInvoice: true,
-        expense: { is: null },
+        // račun za robu koji troši trošak primki (usklađivanje po narudžbenici, goods-expense.ts)
+        ...COVERING_GOODS_INVOICE,
         OR: [{ receiptId: r.receipt.id }, ...(r.receipt.orderId ? [{ orderId: r.receipt.orderId }] : [])],
       },
       select: { internalNo: true },
@@ -128,7 +129,7 @@ export async function setExpensesPaid(tx: Tx, actor: Actor, ids: string[], paid:
   // već plaćenima se ne mijenja datum plaćanja
   if (paid) await tx.expense.updateMany({ where: { id: { in: ids }, companyId: actor.companyId, paid: false }, data: { paid: true, paidDate: fromISO(today()) } });
   else await tx.expense.updateMany({ where: { id: { in: ids }, companyId: actor.companyId }, data: { paid: false, paidDate: null } });
-  await audit(tx, actor, { entity: 'expense', action: paid ? 'paid' : 'unpaid', summary: `${ids.length} troškova označeno kao ${paid ? 'plaćeno' : 'neplaćeno'}` });
+  await audit(tx, actor, { entity: 'expense', action: paid ? 'paid' : 'unpaid', summary: `${countLabel(ids.length, 'trošak', 'troška', 'troškova')} ${plural(ids.length, 'označen', 'označena', 'označeno')} kao ${paid ? 'plaćeno' : 'neplaćeno'}` });
 }
 
 // ---------------------------------------------------------------- kategorije

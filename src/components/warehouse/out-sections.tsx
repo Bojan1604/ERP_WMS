@@ -109,9 +109,14 @@ export async function ReservedSection({
   );
 }
 
-export async function ReturnSection({ companyId, canOps }: { companyId: string; canOps: boolean }) {
-  const rows = await returnCandidates(companyId);
-  if (!rows.length) return <Empty icon={<Inbox className="size-5" />} title="Nema uređaja za povrat" description="Ovdje se pojavljuju uređaji s isteklih ili raskinutih ugovora, kojima je prošla sezona ili istekao plan naplate." />;
+type Page = { page: number; skip: number; take: number };
+type Params = Record<string, string | string[] | undefined>;
+
+export async function ReturnSection({ companyId, canOps, page, params }: { companyId: string; canOps: boolean; page: Page; params: Params }) {
+  // kandidati se biraju u bazi (predfiltar) i poredaju po klijentu; prikazuje se jedna stranica
+  const all = await returnCandidates(companyId);
+  const rows = all.slice(page.skip, page.skip + page.take);
+  if (!all.length) return <Empty icon={<Inbox className="size-5" />} title="Nema uređaja za povrat" description="Ovdje se pojavljuju uređaji s isteklih ili raskinutih ugovora, kojima je prošla sezona ili istekao plan naplate." />;
   return (
     <SelectionProvider ids={rows.map((r) => r.itemId)}>
       {canOps && <AnnounceBar />}
@@ -147,13 +152,29 @@ export async function ReturnSection({ companyId, canOps }: { companyId: string; 
           </tbody>
         </table>
       </TableWrap>
+      <Pagination page={page.page} pageSize={page.take} total={all.length} params={params} basePath="/skladiste/izlaz" />
     </SelectionProvider>
   );
 }
 
-export async function ReturningSection({ companyId, canOps, warehouses }: { companyId: string; canOps: boolean; warehouses: Option[] }) {
-  const rows = await returningItems(companyId);
-  if (!rows.length) return <Empty icon={<Inbox className="size-5" />} title="Nema uređaja u dolasku" description="Uređaji s najavljenim povratom čekaju ovdje dok ih ne zaprimite na skladište." />;
+export async function ReturningSection({
+  companyId,
+  canOps,
+  warehouses,
+  total,
+  page,
+  params,
+}: {
+  companyId: string;
+  canOps: boolean;
+  warehouses: Option[];
+  /** Ukupno uređaja u dolasku (`outCounts`). */
+  total: number;
+  page: Page;
+  params: Params;
+}) {
+  const rows = await returningItems(companyId, page);
+  if (!total && !rows.length) return <Empty icon={<Inbox className="size-5" />} title="Nema uređaja u dolasku" description="Uređaji s najavljenim povratom čekaju ovdje dok ih ne zaprimite na skladište." />;
   return (
     <SelectionProvider ids={rows.map((r) => r.id)}>
       {canOps && <ReturningBar warehouses={warehouses} />}
@@ -191,6 +212,7 @@ export async function ReturningSection({ companyId, canOps, warehouses }: { comp
           </tbody>
         </table>
       </TableWrap>
+      <Pagination page={page.page} pageSize={page.take} total={total} params={params} basePath="/skladiste/izlaz" />
     </SelectionProvider>
   );
 }

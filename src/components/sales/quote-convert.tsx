@@ -12,6 +12,7 @@ import { today } from '@/domain/dates';
 import { convertQuoteAction, convertQuoteToContractAction } from '@/app/(app)/prodaja/ponude/actions';
 import { DevicePicker } from './device-picker';
 import type { DeviceOpt, ModelOpt, NamedOpt } from './types';
+import { plural } from '@/domain/plural';
 
 export interface ConvertLine {
   id: string;
@@ -228,7 +229,7 @@ export function QuoteConvert({
           count={pickFor.qty}
           rent={pickFor.rent}
           showCost={showCost}
-          title={`${pickFor.description} — odaberite ${pickFor.qty} uređaja`}
+          title={`${pickFor.description} — odaberite ${pickFor.qty} ${plural(pickFor.qty, 'uređaj', 'uređaja', 'uređaja')}`}
         />
       )}
     </>

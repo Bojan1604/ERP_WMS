@@ -11,6 +11,7 @@ import { periodLabel, today } from '@/domain/dates';
 import { r2 } from '@/domain/money';
 import { date, eur } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { plural } from '@/domain/plural';
 import type { PendingRow } from '@/server/queries/rentals';
 import { issueInstallmentsAction, previewInstallmentAction, skipInstallmentAction } from '@/app/(app)/najam/rate/actions';
 
@@ -36,6 +37,8 @@ export function PendingTable({ rows, showContract = true, canIssue, canEdit }: {
   const total = r2(picked.reduce((a, r) => a + r.amount, 0));
   const all = rows.length > 0 && sel.size === rows.length;
   const now = today();
+  // samo pregled (npr. knjigovođa): bez označavanja — nema radnji nad ratama
+  const selectable = canIssue || canEdit;
   const toggle = (k: string) =>
     setSel((p) => {
       const n = new Set(p);
@@ -77,34 +80,39 @@ export function PendingTable({ rows, showContract = true, canIssue, canEdit }: {
           </button>
         </div>
       )}
-      <div className="overflow-x-auto scroll-slim rounded-lg bg-panel shadow-[var(--shadow-panel)]">
-        <table className="data-table">
+      {/* ispis (A4 uspravno): bez kvačica i gumba, sitniji tekst — stupac „Iznos" stane na stranicu */}
+      <div className="overflow-x-auto scroll-slim rounded-lg bg-panel shadow-[var(--shadow-panel)] print:overflow-visible print:shadow-none">
+        <table className="data-table print:text-xs">
           <thead>
             <tr>
-              <th className="w-8">
-                <input
-                  type="checkbox"
-                  aria-label="Označi sve"
-                  checked={all}
-                  onChange={() => setSel(all ? new Set() : new Set(rows.map((r) => r.key)))}
-                  className="size-4 align-middle accent-[var(--color-brand)]"
-                />
-              </th>
+              {selectable && (
+                <th className="w-8 print:hidden">
+                  <input
+                    type="checkbox"
+                    aria-label="Označi sve"
+                    checked={all}
+                    onChange={() => setSel(all ? new Set() : new Set(rows.map((r) => r.key)))}
+                    className="size-4 align-middle accent-[var(--color-brand)]"
+                  />
+                </th>
+              )}
               {showContract && <th>Ugovor</th>}
               {showContract && <th>Klijent</th>}
               <th>Razdoblje</th>
               <th>Datum računa</th>
               <th className="num">Uređaja</th>
               <th className="num">Iznos (neto)</th>
-              <th />
+              <th className="print:hidden" />
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.key} data-selected={sel.has(r.key)}>
-                <td>
-                  <input type="checkbox" aria-label={`Označi ${r.contractNumber} ${r.period}`} checked={sel.has(r.key)} onChange={() => toggle(r.key)} className="size-4 align-middle accent-[var(--color-brand)]" />
-                </td>
+                {selectable && (
+                  <td className="print:hidden">
+                    <input type="checkbox" aria-label={`Označi ${r.contractNumber} ${r.period}`} checked={sel.has(r.key)} onChange={() => toggle(r.key)} className="size-4 align-middle accent-[var(--color-brand)]" />
+                  </td>
+                )}
                 {showContract && (
                   <td>
                     <Link prefetch={false} href={`/najam/ugovori/${r.contractId}`} className="link font-medium">
@@ -112,7 +120,7 @@ export function PendingTable({ rows, showContract = true, canIssue, canEdit }: {
                     </Link>
                   </td>
                 )}
-                {showContract && <td className="max-w-64 truncate">{r.partner?.name}</td>}
+                {showContract && <td className="max-w-64 truncate print:max-w-none print:whitespace-normal">{r.partner?.name}</td>}
                 <td className="capitalize">{periodLabel(r.period)}</td>
                 <td>
                   <span className={cn(r.dueDate < now && 'text-warn')}>{date(r.dueDate)}</span>
@@ -121,7 +129,7 @@ export function PendingTable({ rows, showContract = true, canIssue, canEdit }: {
                 <td className="num font-medium" title={r.draftId ? 'Iznos postojećeg nacrta računa' : undefined}>
                   {eur(r.amount)}
                 </td>
-                <td className="num">
+                <td className="num print:hidden">
                   {r.draftId ? (
                     <Link prefetch={false} href={`/prodaja/racuni/${r.draftId}`} className="inline-flex items-center gap-1 text-sm link">
                       <FilePen className="size-3.5" /> Nacrt postoji
@@ -149,11 +157,13 @@ export function PendingTable({ rows, showContract = true, canIssue, canEdit }: {
           {rows.length > 1 && (
             <tfoot>
               <tr>
-                <td />
-                <td colSpan={showContract ? 4 : 2}>Ukupno {rows.length} rata</td>
+                {selectable && <td className="print:hidden" />}
+                <td colSpan={showContract ? 4 : 2}>
+                  Ukupno {rows.length} {plural(rows.length, 'rata', 'rate', 'rata')}
+                </td>
                 <td className="num">{rows.reduce((a, r) => a + r.itemIds.length, 0)}</td>
                 <td className="num">{eur(r2(rows.reduce((a, r) => a + r.amount, 0)))}</td>
-                <td />
+                <td className="print:hidden" />
               </tr>
             </tfoot>
           )}
@@ -171,19 +181,19 @@ export function PendingTable({ rows, showContract = true, canIssue, canEdit }: {
           <>
             <Button onClick={() => setAsk(null)}>Odustani</Button>
             <Button variant="primary" loading={issue.pending || skip.pending} onClick={confirmRun}>
-              {ask?.kind === 'skip' ? 'Makni s popisa' : `Izdaj ${picked.length} računa`}
+              {ask?.kind === 'skip' ? 'Makni s popisa' : `Izdaj ${picked.length} ${plural(picked.length, 'račun', 'računa', 'računa')}`}
             </Button>
           </>
         }
       >
         {ask?.kind === 'skip' ? (
           <p className="text-base text-fg-2">
-            {picked.length} rata ({eur(total)}) trajno se miče s popisa bez izrade računa — koristite kad su računi izdani izvan programa.
+            {picked.length} {plural(picked.length, 'rata', 'rate', 'rata')} ({eur(total)}) trajno se miče s popisa bez izrade računa — koristite kad su računi izdani izvan programa.
           </p>
         ) : (
           <div className="space-y-2 text-base text-fg-2">
             <p>
-              Izdaje se <b className="text-fg">{picked.length}</b> računa za najam, ukupno <b className="text-fg">{eur(total)}</b> neto (+ PDV), u jednoj
+              Izdaje se <b className="text-fg">{picked.length}</b> {plural(picked.length, 'račun', 'računa', 'računa')} za najam, ukupno <b className="text-fg">{eur(total)}</b> neto (+ PDV), u jednoj
               transakciji i kronološkim redoslijedom brojeva.
             </p>
             {ask?.kind === 'paid' && <p>Svi računi odmah se označavaju kao plaćeni na datum računa.</p>}

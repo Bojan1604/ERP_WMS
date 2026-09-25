@@ -5,6 +5,7 @@ import { audit } from '../audit';
 import { assert } from '../errors';
 import { SYSTEM_STATUSES } from './company';
 import type { Actor } from './items';
+import { goodsExpenseMismatches, reconcileAllGoodsExpenses } from './goods-expense';
 
 /**
  * Održavanje (F12): čišćenje dnevnika, provjera dosljednosti s popravkom gdje
@@ -102,15 +103,27 @@ const CHECKS: Array<{
 
 /** Provjera dosljednosti: broj nalaza i do 8 primjera po provjeri (upiti s LIMIT/COUNT u bazi). */
 export async function integrityCheck(companyId: string): Promise<IntegrityFinding[]> {
-  const out = await Promise.all(
-    CHECKS.map(async (ch) => {
-      const [cnt, rows] = await Promise.all([
-        db.$queryRaw<Array<{ n: number }>>`SELECT COUNT(*)::int AS n FROM (${ch.sql(companyId)}) x`,
-        db.$queryRaw<Sample[]>`SELECT * FROM (${ch.sql(companyId)}) x LIMIT 8`,
-      ]);
-      return { code: ch.code, label: ch.label, count: cnt[0]?.n ?? 0, samples: rows.map((r) => ({ label: String(r.label), href: ch.href(String(r.id)) })), fixable: ch.fixable, hint: ch.hint };
-    }),
-  );
+  const [out, goods] = await Promise.all([
+    Promise.all(
+      CHECKS.map(async (ch): Promise<IntegrityFinding> => {
+        const [cnt, rows] = await Promise.all([
+          db.$queryRaw<Array<{ n: number }>>`SELECT COUNT(*)::int AS n FROM (${ch.sql(companyId)}) x`,
+          db.$queryRaw<Sample[]>`SELECT * FROM (${ch.sql(companyId)}) x LIMIT 8`,
+        ]);
+        return { code: ch.code, label: ch.label, count: cnt[0]?.n ?? 0, samples: rows.map((r) => ({ label: String(r.label), href: ch.href(String(r.id)) })), fixable: ch.fixable, hint: ch.hint };
+      }),
+    ),
+    goodsExpenseMismatches(db, companyId),
+  ]);
+  // trošak robe po narudžbenici: pravilo max(primke, računi za robu) nad stanjem baze (services/goods-expense.ts)
+  out.push({
+    code: 'goods-expense',
+    label: 'Trošak robe po narudžbenici ne odgovara pravilu',
+    count: goods.length,
+    samples: goods.slice(0, 8).map((m) => ({ label: `${m.label}: ${m.booked.toFixed(2).replace('.', ',')} → ${m.expected.toFixed(2).replace('.', ',')} €`, href: m.href })),
+    fixable: true,
+    hint: 'Stari podaci (prije jednog pravila) mogu imati trošak robe knjižen i s primke i s računa. Popravak ponovno usklađuje vlastite troškove ulaznih računa po pravilu max(primke, računi za robu); troškovi primki se ne mijenjaju, a svaka narudžbenica dobiva zapis u dnevniku s prijašnjim iznosima.',
+  });
   return out.filter((f) => f.count > 0);
 }
 
@@ -129,6 +142,7 @@ export async function fixIntegrity(tx: Tx, actor: Actor): Promise<Record<string,
     SELECT ${c}, 'INVOICE'::"Series", i."year", MAX(i."seq") FROM "Invoice" i WHERE i."companyId" = ${c} AND i."seq" IS NOT NULL GROUP BY i."year"
     ON CONFLICT ("companyId", "series", "year") DO UPDATE SET "last" = GREATEST("DocumentCounter"."last", EXCLUDED."last")
     WHERE "DocumentCounter"."last" < EXCLUDED."last"`;
+  fixed['goods-expense'] = await reconcileAllGoodsExpenses(tx, actor);
   const total = Object.values(fixed).reduce((a, b) => a + b, 0);
   await audit(tx, actor, { entity: 'company', entityId: c, action: 'integrity-fix', summary: `Provjera dosljednosti: automatski popravljeno ${total} zapisa`, diff: fixed });
   return fixed;

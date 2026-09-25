@@ -86,7 +86,7 @@ export default async function PartnerDevicesDoc({ params, searchParams }: { para
         party={partner}
         partyLabel="Klijent"
         signatures={['Za ' + company.name, 'Klijent']}
-        footer={<p>Popis je informativan i prikazuje stanje na dan {formatDate(now)}. Molimo da odstupanja javite u roku od 8 dana.</p>}
+        footer={<p>Popis je informativan i prikazuje stanje na dan {formatDate(now)} Molimo da odstupanja javite u roku od 8 dana.</p>}
       >
         <DocTable
           head={['#', 'Serijski broj', 'Kategorija', 'Model', 'Kod klijenta od', 'Ugovor', 'Jamstvo do', shownView === 'prodano' ? 'Cijena' : shownView === 'sve' ? 'Mjesečno / cijena' : 'Mjesečno']}

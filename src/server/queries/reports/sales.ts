@@ -86,10 +86,11 @@ export const salesReports: ReportDef[] = [
     description: 'Kupci po neto prihodu u godini, s udjelom u ukupnom prihodu i otvorenim dugom.',
     filters: ['year', 'range', 'partner', 'type'],
     run: async (companyId, f) => {
-      const rows = await reportSql<Array<{ id: string; name: string; city: string | null; net: Prisma.Decimal; sale: Prisma.Decimal; rent: Prisma.Decimal; cnt: number; share: number | null }>>`
+      const rows = await reportSql<Array<{ id: string; name: string; city: string | null; net: Prisma.Decimal; sale: Prisma.Decimal; rent: Prisma.Decimal; service: Prisma.Decimal; cnt: number; share: number | null }>>`
         SELECT p.id, p.name, p.city, SUM(i."netTotal") AS net,
                SUM(i."netTotal") FILTER (WHERE i."type" = 'SALE') AS sale,
                SUM(i."netTotal") FILTER (WHERE i."type" = 'RENT') AS rent,
+               SUM(i."netTotal") FILTER (WHERE i."type" = 'SERVICE') AS service,
                COUNT(*) FILTER (WHERE i."kind" = 'INVOICE')::int AS cnt,
                (SUM(i."netTotal") / NULLIF(SUM(SUM(i."netTotal")) OVER (), 0) * 100)::float8 AS share
         FROM "Invoice" i JOIN "Partner" p ON p.id = i."partnerId"
@@ -106,6 +107,7 @@ export const salesReports: ReportDef[] = [
         invoices: r.cnt,
         sale: n(r.sale),
         rent: n(r.rent),
+        service: n(r.service),
         net: n(r.net),
         share: r.share,
         open: openBy.get(r.id) ?? 0,
@@ -119,6 +121,8 @@ export const salesReports: ReportDef[] = [
           { key: 'invoices', label: 'Računa', kind: 'int' },
           { key: 'sale', label: 'Prodaja', kind: 'money' },
           { key: 'rent', label: 'Najam', kind: 'money' },
+          // računi usluge (vrsta SERVICE) — Prodaja + Najam + Usluge = Ukupno
+          { key: 'service', label: 'Usluge', kind: 'money' },
           { key: 'net', label: 'Ukupno neto', kind: 'money' },
           { key: 'share', label: 'Udio', kind: 'pct', sum: true },
           { key: 'open', label: 'Otvoreno', kind: 'money' },

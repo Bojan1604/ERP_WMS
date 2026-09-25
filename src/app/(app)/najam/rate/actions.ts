@@ -7,6 +7,7 @@ import { afterIssue } from '@/server/fiscal';
 import { zBool, zId } from '@/server/zod';
 import { issuePending, previewInstallment, skipPending } from '@/server/services/rentals';
 import { installmentSchema } from '../schemas';
+import { plural } from '@/domain/plural';
 
 export const issueInstallmentsAction = action(
   { module: 'sales', level: 'edit' },
@@ -38,7 +39,7 @@ export const skipInstallmentAction = action(
     await transaction(async (tx) => {
       for (const r of rows) await skipPending(tx, user, r.contractId, r.period, r.itemIds);
     });
-    return { message: `Označeno kao izdano izvan programa: ${rows.length} rata.` };
+    return { message: `Označeno kao izdano izvan programa: ${rows.length} ${plural(rows.length, 'rata', 'rate', 'rata')}.` };
   },
 );
 

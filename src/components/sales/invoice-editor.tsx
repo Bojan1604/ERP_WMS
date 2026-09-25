@@ -26,6 +26,7 @@ import { IssueDialog } from './invoice-issue-dialog';
 import { AdvancePicker, type AdvanceChoice } from './invoice-advances';
 import { RentCard, rentMonthsFor, type ContractOpt, type RentNextValue, type RentTermsValue } from './invoice-rent-card';
 import type { DeviceOpt, EditorCharge, EditorLine, PartnerOpt, SalesLookups, ServiceOpt } from './types';
+import { plural } from '@/domain/plural';
 
 export interface InvoiceEditorValue {
   id: string | null;
@@ -112,6 +113,7 @@ export function InvoiceEditor({
   }, [treatment?.category, treatment?.exemptReason, treatment?.rate]);
   const rentUsed = v.type === 'RENT' || v.lines.some((l) => l.lineType === 'RENT');
   const rentMonths = rentMonthsFor(v.contractId ?? null, contracts, v.rent!);
+  const lineCount = editorLineCount(v.lines);
   const totals = useMemo(
     () =>
       documentTotals({
@@ -129,8 +131,9 @@ export function InvoiceEditor({
     if (picked && !partners.some((x) => x.id === picked.id)) setPartners((cur) => [...cur, picked]);
     const p = picked ?? partners.find((x) => x.id === id);
     if (!p) return set({ partnerId: null });
-    // dogovorene cijene prethodnog kupca ne vrijede za novog — stavke dobivaju cijenu novog kupca ili standardnu
-    if (p.id !== v.partnerId && v.lines.some((l) => l.agreedPrice)) void repriceFor(p.id, false);
+    // dogovorene cijene prethodnog kupca ne vrijede za novog — stavke koje nisu ručno mijenjane dobivaju
+    // cijenu novog kupca (i pri povratku na kupca s cjenikom) ili standardnu
+    if (p.id !== v.partnerId && v.lines.some((l) => (l.itemId || l.modelId) && (l.agreedPrice || !l.priceEdited))) void repriceFor(p.id, false);
     const t = customerVat(p, company, vatKind);
     set({
       partnerId: p.id,
@@ -188,11 +191,12 @@ export function InvoiceEditor({
 
   /**
    * Cijene stavki za kupca: `all` — „Primijeni cjenik kupca" (dogovorene cijene na sve stavke,
-   * a stavke s dogovorenom cijenom drugog kupca vraćaju se na standardnu); inače samo stavke
-   * s dogovorenom cijenom (promjena kupca — cijena prethodnog kupca ne ostaje na računu).
+   * a stavke s dogovorenom cijenom drugog kupca vraćaju se na standardnu); inače (promjena kupca)
+   * stavke kojima cijena nije ručno mijenjana — dogovorena cijena novog kupca se primjenjuje
+   * automatski, a cijena prethodnog kupca ne ostaje na računu.
    */
   const repriceFor = async (partnerId: string, all: boolean) => {
-    const withModel = v.lines.filter((l) => (l.itemId || l.modelId) && (all || l.agreedPrice));
+    const withModel = v.lines.filter((l) => (l.itemId || l.modelId) && (all || l.agreedPrice || !l.priceEdited));
     if (!withModel.length) return;
     const r = await prices.run({ partnerId, lines: withModel.map((l) => ({ key: l.key, itemId: l.itemId ?? null, modelId: l.modelId ?? null, lineType: isRentLine(l, v.type) ? 'RENT' : 'SALE' })) });
     if (!r.ok || !r.data) return;
@@ -209,11 +213,11 @@ export function InvoiceEditor({
       // kod najma je cijena mjesečna — iznos se izvodi iz nje
       next.set(
         l.key,
-        isRentLine(l, v.type) ? { ...l, monthly: p.price, unitPrice: r2(p.price * (l.months ?? rentMonths)), agreedPrice: p.agreed } : { ...l, unitPrice: p.price, agreedPrice: p.agreed },
+        isRentLine(l, v.type) ? { ...l, monthly: p.price, unitPrice: r2(p.price * (l.months ?? rentMonths)), agreedPrice: p.agreed, priceEdited: false } : { ...l, unitPrice: p.price, agreedPrice: p.agreed, priceEdited: false },
       );
     }
     setV((cur) => ({ ...cur, lines: cur.lines.map((l) => next.get(l.key) ?? l) }));
-    const msg = [agreed ? `dogovorena cijena na ${agreed} stavki` : null, reset ? `standardna cijena vraćena na ${reset} stavki` : null].filter(Boolean).join(', ');
+    const msg = [agreed ? `dogovorena cijena na ${agreed} ${plural(agreed, 'stavci', 'stavke', 'stavki')}` : null, reset ? `standardna cijena vraćena na ${reset} ${plural(reset, 'stavci', 'stavke', 'stavki')}` : null].filter(Boolean).join(', ');
     if (all || msg) toast(agreed || reset ? 'ok' : 'bad', msg ? `Cjenik kupca: ${msg}.` : 'Kupac nema dogovorenih cijena za ove modele.');
   };
   const applyPriceList = () => (v.partnerId ? repriceFor(v.partnerId, true) : undefined);
@@ -416,7 +420,7 @@ export function InvoiceEditor({
       <div className="no-print sticky bottom-[calc(3.75rem+env(safe-area-inset-bottom))] z-30 -mx-3 mt-4 border-t border-line bg-panel/95 px-3 py-2.5 backdrop-blur sm:-mx-5 sm:px-5 lg:bottom-0 lg:-mb-5">
         <div className="flex flex-wrap items-center justify-end gap-2">
           <span className="mr-auto text-sm text-fg-3 max-sm:w-full">
-            {editorLineCount(v.lines)} stavki · ukupno <b className="text-fg tnum">{eur(totals.total)}</b>
+            {lineCount} {plural(lineCount, 'stavka', 'stavke', 'stavki')} · ukupno <b className="text-fg tnum">{eur(totals.total)}</b>
           </span>
           <Button icon={<Save className="size-4" />} loading={pending} disabled={!v.partnerId} onClick={() => save(false)} className="max-sm:flex-1">
             Spremi nacrt

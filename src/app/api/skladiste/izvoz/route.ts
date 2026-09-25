@@ -10,6 +10,7 @@ import { num } from '@/domain/money';
 import { formatDate, toISO, today } from '@/domain/dates';
 import { suggestedSalePrice } from '@/domain/pricing';
 import { warrantyDaysLeft } from '@/domain/warehouse-list';
+import { countLabel } from '@/domain/plural';
 
 /** Izvoz filtriranih uređaja (CSV / Excel / PDF) — isti filtri i redoslijed kao popis skladišta, svi stupci. */
 export async function GET(req: Request) {
@@ -69,6 +70,6 @@ export async function GET(req: Request) {
     columns.filter((c) => costs || !c.cost),
     `skladiste-${today()}`,
     'Uređaji',
-    { companyName: company.name, landscape: true, subtitle: `${rows.length} uređaja · ${formatDate(today())}` },
+    { companyName: company.name, landscape: true, subtitle: `${countLabel(rows.length, 'uređaj', 'uređaja', 'uređaja')} · ${formatDate(today())}` },
   );
 }

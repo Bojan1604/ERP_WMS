@@ -6,6 +6,7 @@ import { useAction } from '@/components/ui/action';
 import { eur } from '@/lib/format';
 import { formatDate } from '@/domain/dates';
 import { r2 } from '@/domain/money';
+import { clampAdvanceUses } from '@/domain/invoice';
 import { partnerAdvances } from '@/app/(app)/prodaja/racuni/actions';
 import { NumberInput } from './inputs';
 
@@ -57,12 +58,24 @@ export function AdvancePicker({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [partnerId, invoiceId]);
 
+  // promjena stavki (manji iznos računa) ponovno ograničava uračunato na ukupno računa
+  const sum = r2(value.reduce((s, v) => s + v.amount, 0));
+  useEffect(() => {
+    if (sum > Math.max(0, maxTotal) + 0.005) onChange(clampAdvanceUses(value, maxTotal));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sum, maxTotal]);
+
   const chosen = new Map(value.map((v) => [v.advanceId, v.amount]));
   const toggle = (a: AdvanceOpt, on: boolean) => {
     if (!on) return onChange(value.filter((v) => v.advanceId !== a.id));
-    const others = value.reduce((s, v) => s + v.amount, 0);
-    const amount = r2(Math.max(0, Math.min(a.remaining, maxTotal - others)));
-    onChange([...value, { advanceId: a.id, amount: amount || a.remaining }]);
+    const amount = r2(Math.max(0, Math.min(a.remaining, maxTotal - sum)));
+    onChange([...value, { advanceId: a.id, amount }]);
+  };
+  const setAmount = (id: string, x: number) => {
+    const others = r2(value.reduce((s, v) => s + (v.advanceId === id ? 0 : v.amount), 0));
+    const max = list.find((a) => a.id === id)?.remaining ?? x;
+    const amount = r2(Math.max(0, Math.min(x, max, maxTotal - others)));
+    onChange(value.map((v) => (v.advanceId === id ? { ...v, amount } : v)));
   };
 
   return (
@@ -91,7 +104,7 @@ export function AdvancePicker({
                 {on ? (
                   <NumberInput
                     value={chosen.get(a.id) ?? 0}
-                    onValue={(x) => onChange(value.map((v) => (v.advanceId === a.id ? { ...v, amount: r2(x ?? 0) } : v)))}
+                    onValue={(x) => setAmount(a.id, x ?? 0)}
                     aria-label="Uračunati iznos (s PDV-om)"
                   />
                 ) : (
@@ -102,6 +115,9 @@ export function AdvancePicker({
           })}
         </ul>
       )}
+      {value.length > 0 && sum >= Math.max(0, maxTotal) - 0.005 ? (
+        <p className="mt-1 text-xs text-fg-3">Uračunato najviše do iznosa računa ({eur(Math.max(0, maxTotal))}).</p>
+      ) : null}
     </div>
   );
 }

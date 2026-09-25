@@ -5,6 +5,7 @@ import { Badge, Card, Empty, TableWrap } from '@/components/ui/misc';
 import { PackageConvert, PackageDelete, PackageEditor } from '@/components/sales/package-controls';
 import { eur, integer, pct } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { plural } from '@/domain/plural';
 
 /** Marže → Paketi: kartice paketa s nabavnom, cijenom, profitom i maržom; uređivanje i izrada dokumenta za kupca. */
 export async function PackagesView({
@@ -34,7 +35,7 @@ export async function PackagesView({
           title={p.name}
           actions={
             <span className="flex items-center gap-1">
-              <Badge>{integer(p.devices)} uređaja</Badge>
+              <Badge>{integer(p.devices)} {plural(p.devices, 'uređaj', 'uređaja', 'uređaja')}</Badge>
               {edit && (
                 <>
                   <PackageEditor catalog={catalog} initial={{ id: p.id, name: p.name, price: p.ownPrice, note: p.note, items: p.items.filter((i) => i.available) }} />

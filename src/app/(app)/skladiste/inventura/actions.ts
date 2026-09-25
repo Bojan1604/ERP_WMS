@@ -5,11 +5,11 @@ import { action } from '@/server/action';
 import { db, transaction } from '@/server/db';
 import { audit } from '@/server/audit';
 import { plain } from '@/server/plain';
-import { can } from '@/domain/permissions';
+import { can, canSeeCost } from '@/domain/permissions';
 import { assert } from '@/server/errors';
 import { zBool, zId, zOptId, zOptText } from '@/server/zod';
 import { closeStocktake, createStocktake, deleteStocktake, removeScan, scanStocktake } from '@/server/services/stocktake';
-import { stocktakeLiveCounts } from '@/server/queries/stocktake';
+import { stocktakeLiveCounts, stocktakeScanView } from '@/server/queries/stocktake';
 
 export const createStocktakeAction = action(
   { module: 'warehouse', level: 'ops' },
@@ -28,7 +28,8 @@ export const scanStocktakeAction = action(
   z.object({ id: zId, code: z.string().trim().min(1, 'Prazan kod').max(500), itemId: zOptId }),
   async ({ id, code, itemId }, user) => {
     const r = await transaction((tx) => scanStocktake(tx, user, { stocktakeId: id, code, itemId }));
-    return { data: plain(r), revalidate: [] };
+    // nabavna cijena uređaja samo uz pravo `costs`
+    return { data: plain(stocktakeScanView(r, canSeeCost(user.perms))), revalidate: [] };
   },
 );
 

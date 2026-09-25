@@ -60,6 +60,13 @@ test('seed na praznoj bazi: migracije + demo firma, dosljedni podaci, prijava ra
     assert.equal(future, 0, 'izdani račun s budućim datumom');
     const noKpd = await db.invoiceLine.count({ where: { kpd: null, invoice: { status: 'ISSUED', kind: 'INVOICE' } } });
     assert.equal(noKpd, 0, 'stavke izdanih računa bez KPD-a');
+    // stavke rata najma nose KPD najma (Postavke → Firma), ne KPD robe s modela
+    const rentLines = await db.invoiceLine.findMany({ where: { invoice: { companyId: u.companyId, type: 'RENT', contractId: { not: null } }, monthly: { not: null } }, select: { kpd: true }, take: 500 });
+    assert.ok(rentLines.length > 0, 'nema stavki rata najma');
+    assert.deepEqual([...new Set(rentLines.map((l) => l.kpd))], ['77.33.12'], 'KPD na stavkama rata najma');
+    // opis kvartalne (i dulje) rate navodi sve mjesece koje pokriva
+    const multi = await db.invoiceLine.findFirst({ where: { invoice: { companyId: u.companyId, type: 'RENT' }, months: { gt: 1 } }, select: { invoice: { select: { description: true } } } });
+    if (multi) assert.match(multi.invoice.description ?? '', / – /, 'opis višemjesečne rate bez raspona mjeseci');
     assert.ok((await db.contract.count({ where: { companyId: u.companyId } })) > 0);
     assert.ok((await db.item.count({ where: { companyId: u.companyId, state: 'RENTED' } })) > 0);
   } finally {

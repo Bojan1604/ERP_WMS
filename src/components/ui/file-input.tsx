@@ -42,7 +42,7 @@ export function FileInput({
   const shown = n > 1 ? `${n} ${n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'datoteke' : 'datoteka'}` : names[0];
   return (
     <span className={cn('relative flex min-w-0 items-center gap-2', className)}>
-      <button type="button" disabled={disabled} className={buttonClass('secondary', 'sm', 'shrink-0')} onClick={() => input.current?.click()}>
+      <button type="button" disabled={disabled} className={buttonClass('secondary', 'sm', 'relative z-[1] shrink-0')} onClick={() => input.current?.click()}>
         <Paperclip className="size-3.5" />
         {buttonLabel}
       </button>
@@ -54,7 +54,9 @@ export function FileInput({
         ref={setRef}
         type="file"
         disabled={disabled}
-        className="sr-only"
+        tabIndex={-1}
+        // prozirno ispod gumba (ne 1×1 sr-only): poruka provjere preglednika („Odaberite datoteku") stoji uz polje
+        className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
         onChange={(e) => {
           setNames([...(e.target.files ?? [])].map((f) => f.name));
           onChange?.(e);

@@ -1,10 +1,14 @@
 import Link from 'next/link';
+import { redirect, RedirectType } from 'next/navigation';
 import { LinkPending } from './link-pending';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { integer } from '@/lib/format';
 
-/** Straničenje na poslužitelju — poveznice zadržavaju ostale filtre. */
+/**
+ * Straničenje na poslužitelju — poveznice zadržavaju ostale filtre. Stranica iza zadnje
+ * (`?page=99999`, ili nakon brisanja/filtra) preusmjerava na zadnju; prazan popis nema traku.
+ */
 export function Pagination({
   page,
   pageSize,
@@ -26,7 +30,9 @@ export function Pagination({
     const s = q.toString();
     return s ? `${basePath}?${s}` : basePath;
   };
-  const from = total ? (page - 1) * pageSize + 1 : 0;
+  if (page > pages) redirect(href(pages), RedirectType.replace);
+  if (!total) return null;
+  const from = (page - 1) * pageSize + 1;
   const to = Math.min(total, page * pageSize);
   const btn = 'grid size-7 place-items-center rounded-md border border-line-strong bg-panel';
   return (

@@ -14,6 +14,7 @@ import { Pagination, readPage } from '@/components/ui/pagination';
 import { LinkButton, buttonClass } from '@/components/ui/button';
 import { ORDER_STATUS, type OrderStatusCode } from '@/components/purchasing/labels';
 import { date, eur, integer } from '@/lib/format';
+import { countLabel } from '@/domain/plural';
 
 type Params = Record<string, string | string[] | undefined>;
 
@@ -159,7 +160,7 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={5}>Ukupno: {integer(list.total)} narudžbenica</td>
+                <td colSpan={5}>Ukupno: {countLabel(list.total, 'narudžbenica', 'narudžbenice', 'narudžbenica', integer)}</td>
                 {costs && <td className="num">{eur(list.sum)}</td>}
                 <td />
               </tr>

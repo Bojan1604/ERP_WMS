@@ -6,7 +6,7 @@ import { getCompany, getLookups } from '@/server/queries/lookups';
 import { expensesForYear, expenseYears, parseExpenseFilters } from '@/server/queries/expenses';
 import { partnerOptionsByIds } from '@/server/queries/partner-options';
 import { PartnerFilter } from '@/components/partners/partner-combobox';
-import { can } from '@/domain/permissions';
+import { can, canSeeCost } from '@/domain/permissions';
 import { MONTHS_HR } from '@/domain/dates';
 import { num } from '@/domain/money';
 import { Card, PageHeader, Stat, TableWrap } from '@/components/ui/misc';
@@ -31,7 +31,9 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
   const c = user.companyId;
   // tablica po stranicama (zbrojevi i grafovi su preko cijele godine, izvoz sadrži sve)
   const pg = readPage(sp, 100);
-  const [data, years, lookups, company] = await Promise.all([expensesForYear(c, f, pg), expenseYears(c), getLookups(c), getCompany(c)]);
+  // bez prava `costs` troškovi nabave robe (primke, otpisi, računi za robu) ne ulaze ni u popis ni u zbrojeve
+  const costs = canSeeCost(user.perms);
+  const [data, years, lookups, company] = await Promise.all([expensesForYear(c, f, pg, { costs }), expenseYears(c), getLookups(c), getCompany(c)]);
   // partneri: samo oni na prikazanim ručnim troškovima i u filtru — ostali se u odabiru traže pretragom
   const partners = await partnerOptionsByIds(c, [...Object.values(data.manual).map((m) => m.partnerId), f.partnerId]);
   const canEdit = can(user.perms, 'expenses', 'edit');
@@ -85,7 +87,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
         <Stat label="PDV (pretporez)" value={eur(t.vat)} />
         <Stat label="Ukupno s PDV-om" value={eur(Math.round((t.net + t.vat) * 100) / 100)} />
         <Stat label="Nije plaćeno (s PDV-om)" value={eur(t.unpaid)} tone={t.unpaid ? 'warn' : undefined} />
-        <Stat label="Iz nabave (primke)" value={eur(t.purchase)} />
+        {costs && <Stat label="Iz nabave (primke)" value={eur(t.purchase)} />}
         <Stat label="Planirano do kraja godine" value={eur(t.planned)} hint={`Ponavljajući: ${eur(t.recurringMonthly)} mjesečno`} />
       </div>
 
@@ -119,6 +121,9 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
         )}
       </FilterBar>
 
+      {!costs && (
+        <p className="mb-2 text-sm text-fg-3">Troškovi nabave robe (primke, računi za robu) i otpisa nisu prikazani ni zbrojeni — otkrivaju nabavne cijene.</p>
+      )}
       <TableWrap>
         <ExpensesTable rows={data.rows} manual={data.manual} totals={t} options={options} actions={actions} paidAction={expensesPaidAction} canEdit={canEdit} attachments={attachments} count={data.rowCount} />
       </TableWrap>

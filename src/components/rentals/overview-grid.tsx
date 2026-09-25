@@ -8,7 +8,8 @@ import { Badge, COLOR_TONE } from '@/components/ui/misc';
 import { useAction } from '@/components/ui/action';
 import { useToast } from '@/components/ui/toast';
 import { MONTHS_SHORT } from '@/domain/dates';
-import { parseNumber } from '@/domain/money';
+import { parseAmount } from '@/domain/money';
+import { plural } from '@/domain/plural';
 import { amount, date, eur, integer } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import type { OverviewRow, OverviewTotals } from '@/app/(app)/najam/pregled/data';
@@ -16,14 +17,20 @@ import { rentOverrideAction, rentOverridesBulkAction } from '@/app/(app)/najam/p
 
 const key = (itemId: string, m: number) => `${itemId}:${m}`;
 
-/** Iznos iz polja: prazno = null (automatski izračun), inače nenegativan broj — ili poruka greške. */
+/**
+ * Iznos iz polja: prazno = null (automatski izračun), inače nenegativan broj — ili poruka greške.
+ * Strogo: tisućice samo u skupinama po tri znamenke („1.234,56", „1 234"), jedan decimalni znak —
+ * „1.2.3" ili „12x" se odbijaju umjesto da se tiho pročitaju kao 123 ili 12.
+ */
 function readAmount(raw: string): { value: number | null } | { error: string } {
   const v = raw.trim();
   if (!v) return { value: null };
-  if (!/^\d[\d.,\s]*(€|eur)?$/i.test(v.replace(/^\s*€\s*/, ''))) {
-    return { error: v.startsWith('-') ? 'Iznos ne može biti negativan.' : `„${v}" nije ispravan iznos.` };
-  }
-  return { value: parseNumber(v) };
+  const s = v.replace(/^€\s*/, '').replace(/\s*(€|eur)$/i, '').replace(/\s/g, '');
+  const bad = { error: v.startsWith('-') ? 'Iznos ne može biti negativan.' : `„${v}" nije ispravan iznos.` };
+  const strict = /^\d+([.,]\d+)?$/.test(s) || /^\d{1,3}(\.\d{3})+(,\d+)?$/.test(s) || /^\d{1,3}(,\d{3})+(\.\d+)?$/.test(s);
+  if (!strict) return bad;
+  const n = parseAmount(s);
+  return Number.isFinite(n) && n >= 0 ? { value: n } : bad;
 }
 
 /**
@@ -234,7 +241,7 @@ export function OverviewGrid({
           <tfoot>
             <tr>
               <td className="sticky left-0 z-[1] max-sm:static" colSpan={2}>
-                {integer(totals.devices)} uređaja
+                {integer(totals.devices)} {plural(totals.devices, 'uređaj', 'uređaja', 'uređaja')}
               </td>
               <td colSpan={4} />
               <td className="num">{amount(totals.monthly)}</td>

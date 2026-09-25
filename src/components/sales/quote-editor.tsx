@@ -22,6 +22,7 @@ import { TotalsBox } from './totals-box';
 import { lineKey } from './inputs';
 import { ServicePicker } from './service-picker';
 import { modelName, type EditorLine, type PartnerOpt, type SalesLookups, type ServiceOpt } from './types';
+import { plural } from '@/domain/plural';
 
 export interface QuoteEditorValue {
   id: string | null;
@@ -242,7 +243,7 @@ export function QuoteEditor({
       <div className="no-print sticky bottom-[calc(3.75rem+env(safe-area-inset-bottom))] z-30 -mx-3 mt-4 border-t border-line bg-panel/95 px-3 py-2.5 backdrop-blur sm:-mx-5 sm:px-5 lg:bottom-0 lg:-mb-5">
         <div className="flex items-center justify-end gap-2">
           <span className="mr-auto text-sm text-fg-3">
-            {editorLineCount(v.lines)} stavki · ukupno <b className="text-fg tnum">{eur(totals.total)}</b>
+            {editorLineCount(v.lines)} {plural(editorLineCount(v.lines), 'stavka', 'stavke', 'stavki')} · ukupno <b className="text-fg tnum">{eur(totals.total)}</b>
           </span>
           <Button variant="primary" icon={<Save className="size-4" />} loading={pending} disabled={!v.partnerId || !v.lines.length} onClick={save}>
             {v.kind === 'PROFORMA' ? `Spremi — ${(v.title?.trim() || company.proformaTitle || 'Predračun').toLowerCase()}` : 'Spremi ponudu'}

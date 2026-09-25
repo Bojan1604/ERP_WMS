@@ -5,11 +5,9 @@ import { userAction } from '@/server/action';
 import { AuthError } from '@/server/errors';
 import { zOptText } from '@/server/zod';
 import { findPartnerOptions } from '@/server/queries/partner-options';
-import { can, EXTERNAL_ROLES, type Module } from '@/domain/permissions';
+import { can, type PermissionMap, type RoleCode } from '@/domain/permissions';
+import { canSearchPartners } from '@/lib/partner-access';
 import { toPartnerOption } from '@/lib/partner-option';
-
-/** Moduli čiji ekrani biraju partnera (filtri i editori). */
-const PARTNER_MODULES: Module[] = ['partners', 'sales', 'rentals', 'purchasing', 'expenses', 'service', 'warehouse', 'reports', 'mdm', 'costs'];
 
 /** Pretraga partnera za padajuće odabire (prvih 20 ili po upitu) — cijeli popis se nikad ne šalje u preglednik. */
 export const searchPartnerOptions = userAction(
@@ -23,6 +21,6 @@ export const searchPartnerOptions = userAction(
   guardPartnerSearch,
 );
 
-function guardPartnerSearch(user: { role: Parameters<typeof EXTERNAL_ROLES.includes>[0]; perms: Parameters<typeof can>[0] }) {
-  if (EXTERNAL_ROLES.includes(user.role) || !PARTNER_MODULES.some((m) => can(user.perms, m))) throw new AuthError('Nemate pravo na popis partnera.', 403);
+function guardPartnerSearch(user: { role: RoleCode; perms: PermissionMap }) {
+  if (!canSearchPartners(user)) throw new AuthError('Nemate pravo na popis partnera.', 403);
 }

@@ -16,6 +16,7 @@ import { seasonLabel } from '@/domain/plan';
 import { date, eur, integer } from '@/lib/format';
 import { ExportButtons } from '@/components/ui/export-buttons';
 import { parseMulti, queryWithout } from '@/lib/list-params';
+import { plural } from '@/domain/plural';
 
 export const metadata = { title: 'Ugovori o najmu' };
 
@@ -38,7 +39,7 @@ export default async function ContractsPage({ searchParams }: { searchParams: SP
     <>
       <PageHeader
         title="Ugovori o najmu"
-        subtitle={`${integer(total)} ugovora · ${integer(summary.devices)} uređaja · mjesečno (aktivni) ${eur(summary.monthly)}`}
+        subtitle={`${integer(total)} ${plural(total, 'ugovor', 'ugovora', 'ugovora')} · ${integer(summary.devices)} ${plural(summary.devices, 'uređaj', 'uređaja', 'uređaja')} · mjesečno (aktivni) ${eur(summary.monthly)}`}
         actions={
           <>
             <ExportButtons href={`/api/najam/ugovori${qs ? `?${qs}` : ''}`} />
@@ -160,7 +161,9 @@ export default async function ContractsPage({ searchParams }: { searchParams: SP
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={6}>{integer(total)} ugovora</td>
+                <td colSpan={6}>
+                  {integer(total)} {plural(total, 'ugovor', 'ugovora', 'ugovora')}
+                </td>
                 <td className="num">{integer(summary.devices)}</td>
                 <td className="num" title="Zbroj stupca za sve ugovore filtra">
                   {eur(summary.monthlyAll)}

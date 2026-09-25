@@ -9,11 +9,12 @@ import { ActionButton } from '@/components/ui/action';
 import { Undo2 } from 'lucide-react';
 import { unskipAction } from '../actions';
 import { r2 } from '@/domain/money';
-import { toTerms } from '@/server/services/rentals';
+import { toReturnedDevice, toTerms } from '@/server/services/rentals';
 import { coveredPeriods } from '@/server/services/invoices';
 import { db } from '@/server/db';
 import type { PendingRow } from '@/server/queries/rentals';
 import { date, dateTime, eur, integer } from '@/lib/format';
+import { plural } from '@/domain/plural';
 
 export async function OverviewTab({
   contract: c,
@@ -36,10 +37,15 @@ export async function OverviewTab({
   const terms = toTerms(c);
   const now = today();
   // sljedeća NEIZDANA rata (izdana rata za tekuće razdoblje se preskače)
-  const covered = (await coveredPeriods(db, [c.id])).get(c.id);
-  const next = nextBillingDate(terms, devices, now, covered);
   const year = Number(now.slice(0, 4));
-  const accrualYear = r2(contractAccrual(terms, devices, year).reduce((a, b) => a + b, 0));
+  const [coveredAll, returned] = await Promise.all([
+    coveredPeriods(db, [c.id]),
+    // obračun iz istog izvora kao Raspored: i uređaji skinuti s ugovora u godini (do dana skidanja)
+    db.returnedContractItem.findMany({ where: { contractId: c.id, endDate: { gte: new Date(Date.UTC(year, 0, 1)) } } }),
+  ]);
+  const covered = coveredAll.get(c.id);
+  const next = nextBillingDate(terms, devices, now, covered);
+  const accrualYear = r2(contractAccrual(terms, [...devices, ...returned.map(toReturnedDevice)], year).reduce((a, b) => a + b, 0));
   const pendingTotal = r2(pending.reduce((a, p) => a + p.amount, 0));
   // razdoblja označena kao izdana izvan programa (najnovija prva) — „Vrati u izdavanje"
   const skippedBy = new Map<string, number>();
@@ -49,7 +55,7 @@ export async function OverviewTab({
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat label="Mjesečno" value={eur(contractMonthly(devices))} hint={`${integer(devices.length)} uređaja`} />
+        <Stat label="Mjesečno" value={eur(contractMonthly(devices))} hint={`${integer(devices.length)} ${plural(devices.length, 'uređaj', 'uređaja', 'uređaja')}`} />
         <Stat label="Sljedeća naplata" value={next ? date(next) : '—'} hint={billingText(c.billing, c.billingMode)} />
         <Stat label={`Obračun ${year}.`} value={eur(accrualYear)} hint="zbroj mjesečnih iznosa u godini" />
         <Stat label="Rate za izdati" value={integer(pending.length)} hint={pending.length ? eur(pendingTotal) : 'sve je izdano'} tone={pending.length ? 'warn' : undefined} />
@@ -131,7 +137,7 @@ export async function OverviewTab({
                         icon={<Undo2 className="size-3.5" />}
                         action={unskipAction}
                         input={{ contractId: c.id, period }}
-                        confirm={`Rata za ${periodLabel(period)} ponovno će se tražiti u „Rate za izdati" (${n} uređaja).`}
+                        confirm={`Rata za ${periodLabel(period)} ponovno će se tražiti u „Rate za izdati" (${n} ${plural(n, 'uređaj', 'uređaja', 'uređaja')}).`}
                         confirmLabel="Vrati u izdavanje"
                       >
                         Vrati u izdavanje

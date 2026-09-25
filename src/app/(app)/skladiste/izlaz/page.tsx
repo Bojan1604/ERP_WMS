@@ -31,9 +31,16 @@ export default async function OutPage({ searchParams }: { searchParams: Promise<
         ]}
       />
       {tab === 'povrat' ? (
-        <ReturnSection companyId={c} canOps={canOps} />
+        <ReturnSection companyId={c} canOps={canOps} page={readPage(sp, 100)} params={sp} />
       ) : tab === 'dolazak' ? (
-        <ReturningSection companyId={c} canOps={canOps} warehouses={lookups.warehouses.map((w) => ({ value: w.id, label: w.name }))} />
+        <ReturningSection
+          companyId={c}
+          canOps={canOps}
+          warehouses={lookups.warehouses.map((w) => ({ value: w.id, label: w.name }))}
+          total={counts.returning}
+          page={readPage(sp, 100)}
+          params={sp}
+        />
       ) : tab === 'rucni' ? (
         <ManualReturnSection companyId={c} canOps={canOps} q={q} />
       ) : (

@@ -7,6 +7,7 @@ import { ActionButton, useAction, FormError } from '@/components/ui/action';
 import { Dialog } from '@/components/ui/dialog';
 import { Field, Select, Textarea, type Option } from '@/components/ui/field';
 import { ackRequestAction, approveReceiveAction, resolveApprovalAction } from '@/app/(app)/skladiste/odobrenja/actions';
+import { countLabel, plural } from '@/domain/plural';
 
 export function ApprovalButtons({ id, count, onContract, target, targetKind }: { id: string; count: number; onContract: number; target: string; targetKind: string }) {
   const detaches = targetKind !== 'RENTED' && targetKind !== 'RETURNING' ? onContract : 0;
@@ -20,7 +21,7 @@ export function ApprovalButtons({ id, count, onContract, target, targetKind }: {
         confirm={
           <>
             Promijeniti status za {count} kom u „{target}“?
-            {detaches > 0 && <span className="mt-2 block text-warn">{detaches} uređaja je na ugovoru — bit će skinuto s ugovora.</span>}
+            {detaches > 0 && <span className="mt-2 block text-warn">{countLabel(detaches, 'uređaj', 'uređaja', 'uređaja')} {plural(detaches, 'je', 'su', 'je')} na ugovoru — bit će {plural(detaches, 'skinut', 'skinuta', 'skinuto')} s ugovora.</span>}
           </>
         }
         confirmLabel="Odobri"

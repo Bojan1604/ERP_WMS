@@ -22,6 +22,29 @@ export const scanItemSelect = {
 
 export type ScanItem = Prisma.ItemGetPayload<{ select: typeof scanItemSelect }>;
 
+/** Uređaj sa skeniranja kakav ide u preglednik: bez ključa `cost` ako korisnik nema pravo `costs`. */
+export type ScanItemView = Omit<ScanItem, 'cost'> & { cost?: number };
+
+/**
+ * Uređaj sa skeniranja za preglednik: nabavna cijena samo uz pravo `costs` — bez njega ključ
+ * `cost` ne postoji (odgovor server akcije vidi svatko s pravom pregleda skladišta).
+ */
+export function scanItemView(i: ScanItem, costs: boolean): ScanItemView {
+  const { cost, ...rest } = i;
+  return costs ? { ...rest, cost: Number(cost) } : rest;
+}
+
+/** Skeniranje za preglednik: kod → uređaji (nabavna samo uz `costs`). */
+export async function lookupScanItems(client: Tx, companyId: string, code: string, costs: boolean) {
+  const r = await findItemsByCode(client, companyId, code);
+  return { via: r.via, items: r.items.map((i) => scanItemView(i, costs)) };
+}
+
+/** Rezultat skena inventure za preglednik (uređaj i ponuđeni duplikati bez nabavne bez `costs`). */
+export function stocktakeScanView<T extends { item: ScanItem | null; variants: ScanItem[] }>(r: T, costs: boolean) {
+  return { ...r, item: r.item && scanItemView(r.item, costs), variants: r.variants.map((v) => scanItemView(v, costs)) };
+}
+
 /** Kako je kod uparen: točno, preko drugog oblika koda, poveznicom (QR) ili kao dio serijskog. */
 export type ScanVia = 'exact' | 'variant' | 'link' | 'partial';
 

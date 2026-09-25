@@ -83,14 +83,15 @@ function CleanLog({ total, onClose }: { total: number; onClose: () => void }) {
   );
 }
 
-export function Maintenance({ isAdmin, canDanger, auditTotal }: { isAdmin: boolean; canDanger: boolean; auditTotal: number }) {
+/** canCleanLog = opasna zona + pravo na dnevnik promjena. */
+export function Maintenance({ isAdmin, canCleanLog, auditTotal }: { isAdmin: boolean; canCleanLog: boolean; auditTotal: number }) {
   const [clean, setClean] = useState(false);
   return (
     <Card title="Održavanje">
       <div className="space-y-3 text-sm">
         <div className="flex flex-wrap items-center gap-2">
           <span className="min-w-0 flex-1 text-fg-2">Dnevnik promjena: {integer(auditTotal)} zapisa</span>
-          {canDanger && (
+          {canCleanLog && (
             <Button size="sm" icon={<Eraser className="size-3.5" />} onClick={() => setClean(true)}>
               Očisti dnevnik
             </Button>

@@ -6,6 +6,8 @@ import { decryptSecret } from '../fiscal/crypto';
 import { providerFor, type EInvoiceProvider, type ProviderResult } from '../fiscal/einvoice';
 import type { Actor } from './items';
 import { applyInvoiceExpense, setSupplierInvoicesPaid } from './supplier-invoices';
+import { reconcileOrderGoodsExpense } from './goods-expense';
+import type { InvoiceExpenseMode } from '@/domain/purchase-links';
 import { truncate } from '@/domain/fiscal';
 import { parseUbl, ublPdf } from '@/domain/ubl-parse';
 import { sniffMime } from '@/domain/attachments';
@@ -85,26 +87,36 @@ export async function acceptSupplierInvoice(actor: Actor, id: string, opts: { bo
     already = !!r.already;
   }
   const book = opts.book ?? true;
-  await transaction(async (tx) => {
+  const mode = await transaction(async (tx) => {
     const n = await tx.supplierInvoice.updateMany({
       where: { id, companyId: actor.companyId, status: 'RECEIVED' },
       data: { status: 'ACCEPTED', statusAt: new Date(), statusBy: actor.name, ...(provider ? { providerStatus: 'prihvaćen' } : {}) },
     });
     assert(n.count, 'Račun je u međuvremenu promijenjen — osvježite stranicu.');
-    if (book) await bookExpense(tx, actor, si);
+    // odluka „Knjiži kao trošak" se pamti; koliko se knjiži određuje pravilo troška robe (račun za robu uz primku ne knjiži ništa)
+    const mode = await bookExpense(tx, actor, si, book);
     await audit(tx, actor, {
       entity: 'supplierInvoice',
       entityId: id,
       action: 'accept',
-      summary: `Ulazni račun ${si.internalNo} (${si.number}, ${si.supplier.name}) prihvaćen${provider ? (already ? ' — posrednik ga je već imao kao prihvaćen' : ' i javljen posredniku') : ''}${book ? ', knjižen trošak' : ''}`,
+      summary: `Ulazni račun ${si.internalNo} (${si.number}, ${si.supplier.name}) prihvaćen${provider ? (already ? ' — posrednik ga je već imao kao prihvaćen' : ' i javljen posredniku') : ''}${modeNote(mode)}`,
     });
+    return mode;
   });
-  return { already, reported: !!provider };
+  return { already, reported: !!provider, mode };
 }
 
-/** Trošak uz ulazni račun (kao kvačica „Knjiži kao trošak" na obrascu) — po pravilu „roba se knjiži jednom". */
-async function bookExpense(tx: Tx, actor: Actor, si: Awaited<ReturnType<typeof loadInvoice>>) {
-  await applyInvoiceExpense(tx, actor, si.id, true);
+/** Trošak uz ulazni račun (kao kvačica „Knjiži kao trošak" na obrascu) — po pravilu troška robe po narudžbenici. */
+async function bookExpense(tx: Tx, actor: Actor, si: Awaited<ReturnType<typeof loadInvoice>>, book: boolean) {
+  return applyInvoiceExpense(tx, actor, si.id, book);
+}
+
+/** Dopuna zapisa i poruke prihvaćanja prema stvarnom knjiženju. */
+export function modeNote(mode: InvoiceExpenseMode): string {
+  if (mode === 'own') return ', knjižen trošak';
+  if (mode === 'partial') return ', knjižena razlika iznad primke';
+  if (mode === 'receipt') return ' — trošak robe je knjižen primkom';
+  return ' (bez knjiženja troška)';
 }
 
 /**
@@ -143,6 +155,9 @@ export async function rejectSupplierInvoice(actor: Actor, id: string, reason: st
     assert(n.count, 'Račun je u međuvremenu promijenjen — osvježite stranicu.');
     // odbijen račun nije trošak ni obveza
     await tx.expense.deleteMany({ where: { supplierInvoiceId: id, companyId: actor.companyId } });
+    // odbijeni račun ne troši primke — drugi računi iste narudžbenice se usklađuju
+    const links = await tx.supplierInvoice.findUniqueOrThrow({ where: { id }, select: { orderId: true, receiptId: true } });
+    if (links.orderId || links.receiptId) await reconcileOrderGoodsExpense(tx, actor, links);
     await audit(tx, actor, {
       entity: 'supplierInvoice',
       entityId: id,

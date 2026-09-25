@@ -12,6 +12,8 @@ import { buttonClass } from './button';
  */
 export function MoreMenu({ children, label = 'Više' }: { children: ReactNode; label?: string }) {
   const [open, setOpen] = useState(false);
+  // popis se poravnava s onim rubom gumba koji je bliže sredini zaslona — inače izlazi izvan ekrana
+  const [alignRight, setAlignRight] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -23,15 +25,25 @@ export function MoreMenu({ children, label = 'Više' }: { children: ReactNode; l
   }, [open]);
   return (
     <div ref={ref} className="relative sm:contents">
-      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className={buttonClass('secondary', 'md', 'sm:hidden')}>
+      <button
+        type="button"
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          setAlignRight(r.left + r.width / 2 > window.innerWidth / 2);
+          setOpen((v) => !v);
+        }}
+        aria-expanded={open}
+        className={buttonClass('secondary', 'md', 'sm:hidden')}
+      >
         <MoreHorizontal className="size-4" />
         {label}
       </button>
       <div
         className={cn(
           'sm:contents',
+          open && (alignRight ? 'max-sm:right-0' : 'max-sm:left-0'),
           open
-            ? 'max-sm:absolute max-sm:left-0 max-sm:top-full max-sm:z-40 max-sm:mt-1 max-sm:flex max-sm:min-w-52 max-sm:flex-col max-sm:gap-1.5 max-sm:rounded-lg max-sm:bg-panel max-sm:p-2 max-sm:shadow-[var(--shadow-pop)] max-sm:[&>button]:w-full max-sm:[&>button]:justify-start max-sm:[&>a]:w-full max-sm:[&>a]:justify-start'
+            ? 'max-sm:absolute max-sm:top-full max-sm:max-w-[calc(100vw-2rem)] max-sm:z-40 max-sm:mt-1 max-sm:flex max-sm:min-w-52 max-sm:flex-col max-sm:gap-1.5 max-sm:rounded-lg max-sm:bg-panel max-sm:p-2 max-sm:shadow-[var(--shadow-pop)] max-sm:[&>button]:w-full max-sm:[&>button]:justify-start max-sm:[&>a]:w-full max-sm:[&>a]:justify-start'
             : 'max-sm:hidden',
         )}
       >

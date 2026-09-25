@@ -115,34 +115,36 @@ test('narudžbenica: račun dobavljača s narudžbenice postaje povezan ulazni r
   assert.equal(Number(po.supplierInvoiceTotal), 375);
   assert.equal(po.supplierInvoiceCurrency, 'EUR');
 
-  // prva primka → ulazni račun nastaje, povezan s narudžbenicom, trošak ostaje na primci
+  // prva primka (200) → ulazni račun (300) nastaje, povezan s narudžbenicom; primka nosi 200, račun samo razliku 100
   const r = await receive(s, o, ['PO-1', 'PO-2']);
   const si = await db.supplierInvoice.findFirstOrThrow({ where: { companyId: s.companyId, orderId: o.id } });
   assert.equal(si.number, 'DOB-77');
   assert.equal(Number(si.total), 375);
-  assert.equal(await db.expense.count({ where: { supplierInvoiceId: si.id } }), 0);
-  assert.deepEqual(await goodsExpense(s), { net: 200, count: 1 });
+  assert.equal(Number((await db.expense.findFirstOrThrow({ where: { supplierInvoiceId: si.id } })).netAmount), 100);
+  assert.deepEqual(await goodsExpense(s), { net: 300, count: 2 }, 'max(primke 200, račun 300)');
 
-  // druga primka ne stvara drugi ulazni račun
+  // druga primka ne stvara drugi ulazni račun; primke sada nose svu robu — račun bez vlastitog troška
   await receive(s, o, ['PO-3']);
   assert.equal(await db.supplierInvoice.count({ where: { companyId: s.companyId, orderId: o.id } }), 1);
+  assert.equal(await db.expense.count({ where: { supplierInvoiceId: si.id } }), 0);
   assert.deepEqual(await goodsExpense(s), { net: 300, count: 2 });
 
-  // storno primke briše njen trošak; račun sada može „Knjiži ponovno" — ali druga primka još ima trošak → ništa dvaput
+  // storno primke briše njen trošak; račun sam opet knjiži razliku iznad preostale primke (usklađivanje)
   await transaction((tx) => cancelReceipt(tx, s.actor, r.id));
-  assert.equal(await transaction((tx) => rebookSupplierInvoice(tx, s.actor, si.id)), 'receipt');
-  assert.deepEqual(await goodsExpense(s), { net: 100, count: 1 });
+  assert.deepEqual(await goodsExpense(s), { net: 300, count: 2 }, 'max(primka 100, račun 300)');
+  await assert.rejects(transaction((tx) => rebookSupplierInvoice(tx, s.actor, si.id)), /već knjižen/);
 });
 
-test('račun knjižen prije robe: primka po narudžbenici ne knjiži trošak; naknadno knjiženje primke se odbija', async () => {
+test('račun knjižen prije robe: primka knjiži robu, račun se usklađuje (ne dvaput); naknadno knjiženje primke', async () => {
   const s = await setup('first');
   const o = await orderOf(s, 2);
   const si = await invoice(s, null, { orderId: o.id, netAmount: 200, vatAmount: 50 });
   assert.equal(si.mode, 'own', 'nema primke — račun knjiži trošak');
   const r = await receive(s, o, ['F-1', 'F-2']);
-  assert.equal(r.booked, false, 'roba je već knjižena računom');
+  assert.equal(r.booked, true, 'primka knjiži nabavnu vrijednost');
+  assert.equal(await db.expense.count({ where: { supplierInvoiceId: si.id } }), 0, 'račun za robu više nema vlastiti trošak');
   assert.deepEqual(await goodsExpense(s), { net: 200, count: 1 });
-  await assert.rejects(transaction((tx) => bookReceiptExpense(tx, s.actor, r.id)), /ne knjiži dvaput/);
+  await assert.rejects(transaction((tx) => bookReceiptExpense(tx, s.actor, r.id)), /već knjižen/);
 
   // primka bez knjiženja (prekidač) + račun bez veze → „Knjiži trošak" na primci
   const r2 = await receive(s, null, ['F-3'], { bookExpense: false });
@@ -152,17 +154,20 @@ test('račun knjižen prije robe: primka po narudžbenici ne knjiži trošak; na
   await assert.rejects(transaction((tx) => bookReceiptExpense(tx, s.actor, r2.id)), /već knjižen/);
 });
 
-test('„Knjiži ponovno": prihvaćen račun bez troška (storno primke) knjiži vlastiti trošak jednom', async () => {
+test('storno primke: račun za robu sam opet knjiži; „Knjiži ponovno" za neknjižen račun', async () => {
   const s = await setup('rebook');
   const r = await receive(s, null, ['K-1']);
   const si = await invoice(s, null, { receiptId: r.id, netAmount: 100, vatAmount: 25 });
   assert.equal(si.mode, 'receipt');
+  // storno primke: račun (veza ostaje) sam opet knjiži vlastiti trošak — usklađivanje
   await transaction((tx) => cancelReceipt(tx, s.actor, r.id));
-  assert.deepEqual(await goodsExpense(s), { net: 0, count: 0 });
-  // stornirana primka više nije „knjižena primkom" (veza ostaje, primka je stornirana)
-  assert.equal(await transaction((tx) => rebookSupplierInvoice(tx, s.actor, si.id)), 'own');
   assert.deepEqual(await goodsExpense(s), { net: 100, count: 1 });
   await assert.rejects(transaction((tx) => rebookSupplierInvoice(tx, s.actor, si.id)), /već knjižen/);
+  // „Knjiži ponovno" je za račun spremljen bez knjiženja
+  const off = await invoice(s, null, { netAmount: 40, vatAmount: 10, book: false });
+  assert.equal(off.mode, 'none');
+  assert.equal(await transaction((tx) => rebookSupplierInvoice(tx, s.actor, off.id)), 'own');
+  assert.deepEqual(await goodsExpense(s), { net: 140, count: 2 });
 });
 
 test('slobodni unos dobavljača: postojeći po OIB-u, novi partner se otvara, neispravan OIB se odbija', async () => {

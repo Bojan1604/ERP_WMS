@@ -1,11 +1,13 @@
 'use client';
 
-import { Children, isValidElement, useEffect, useRef, useState, useTransition, type ReactNode } from 'react';
+import { Children, isValidElement, useEffect, useId, useRef, useState, useTransition, type KeyboardEvent, type ReactNode } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Check, ChevronDown, Loader2, Search, SlidersHorizontal, X } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { controlClass, type Option } from './field';
 import { joinMulti, splitMulti } from '@/lib/list-params';
+import { fold } from '@/lib/fold';
+import { Popover, focusAfter } from './popover';
 
 /**
  * Filtri žive u URL-u (?q=…&status=…), pa su poveznice djeljive, „natrag"
@@ -201,18 +203,25 @@ export function MultiSelectFilter({
   const { params, set, pending } = useQueryParams();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
-  const [remote, setRemote] = useState<Option[] | null>(null);
+  const [remote, setRemote] = useState<{ q: string; items: Option[] } | null>(null);
+  const [active, setActive] = useState(0);
   const known = useRef(new Map<string, string>());
   const box = useRef<HTMLDivElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const uid = useId();
+  const listId = `${uid}-list`;
+  const optId = (i: number) => `${uid}-o${i}`;
   // zarez unutar vrijednosti (CPU „ARM Cortex-A53, 4 jezgre") je „escapean" — list-params joinMulti/splitMulti
   const selected = splitMulti(params.get(name) ?? '').map((v) => v.trim()).filter(Boolean);
   const chosen = new Set(selected);
-  for (const o of [...options, ...(remote ?? [])]) known.current.set(o.value, o.label);
+  for (const o of [...options, ...(remote?.items ?? [])]) known.current.set(o.value, o.label);
 
   useEffect(() => {
     if (!onSearch || !open) return;
+    // zastarjeli odgovor (upit se u međuvremenu promijenio) se odbacuje
     let live = true;
-    const t = setTimeout(() => onSearch(q).then((r) => live && setRemote(r)), 200);
+    const t = setTimeout(() => onSearch(q).then((items) => live && setRemote({ q, items })), q ? 200 : 0);
     return () => {
       live = false;
       clearTimeout(t);
@@ -221,15 +230,21 @@ export function MultiSelectFilter({
 
   useEffect(() => {
     if (!open) return;
-    const close = (e: MouseEvent) => box.current && !box.current.contains(e.target as Node) && setOpen(false);
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
-    document.addEventListener('mousedown', close);
-    document.addEventListener('keydown', esc);
-    return () => {
-      document.removeEventListener('mousedown', close);
-      document.removeEventListener('keydown', esc);
+    const close = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (box.current?.contains(t) || panel.current?.contains(t)) return;
+      closeList();
     };
+    document.addEventListener('pointerdown', close);
+    return () => document.removeEventListener('pointerdown', close);
   }, [open]);
+
+  function closeList() {
+    setOpen(false);
+    setQ('');
+    setRemote(null);
+    setActive(0);
+  }
 
   const apply = (next: Set<string>) => {
     // redoslijed kao u opcijama — isti odabir daje isti URL
@@ -243,16 +258,17 @@ export function MultiSelectFilter({
     apply(next);
   };
   const withSearch = onSearch ? true : (searchable ?? options.length > 8);
-  const t = q.trim().toLowerCase();
+  const t = fold(q.trim());
   const list = onSearch
     ? [
         // odabrani prvi (i kad nisu među rezultatima pretrage), zatim rezultati
         ...(t ? [] : selected.map((v) => ({ value: v, label: known.current.get(v) ?? v }))),
-        ...(remote ?? []).filter((o) => t || !chosen.has(o.value)),
+        ...(remote?.items ?? []).filter((o) => t || !chosen.has(o.value)),
       ]
     : t
-      ? options.filter((o) => o.label.toLowerCase().includes(t))
+      ? options.filter((o) => fold(o.label).includes(t))
       : options;
+  const loading = !!onSearch && remote?.q !== q;
   const summary =
     selected.length === 0
       ? label
@@ -260,59 +276,108 @@ export function MultiSelectFilter({
         ? `${label}: ${known.current.get(selected[0]) ?? selected[0]}`
         : `${label} (${selected.length})`;
 
+  useEffect(() => {
+    if (open) document.getElementById(optId(active))?.scrollIntoView({ block: 'nearest' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, open]);
+
+  // tipkovnica (na okidaču i u polju za pretragu): strelice, Enter/razmak uključuje/isključuje, Esc/Tab zatvaraju
+  const onKey = (e: KeyboardEvent<HTMLElement>) => {
+    if (!open) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        setOpen(true);
+      }
+      return;
+    }
+    const inInput = e.target instanceof HTMLInputElement;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActive((a) => Math.max(0, Math.min(a + (e.key === 'ArrowDown' ? 1 : -1), list.length - 1)));
+    } else if (e.key === 'Enter' || (e.key === ' ' && !inInput)) {
+      e.preventDefault();
+      // rezultat za upisani upit još nije stigao — ne diraj zastarjeli popis
+      if (loading) return;
+      if (list[active]) toggle(list[active].value);
+    } else if (e.key === 'Escape') {
+      // samo popis — ne i dijalog oko filtra
+      e.preventDefault();
+      e.stopPropagation();
+      closeList();
+      btn.current?.focus();
+    } else if (e.key === 'Tab' && inInput) {
+      e.preventDefault();
+      closeList();
+      if (btn.current) focusAfter(btn.current, e.shiftKey);
+    } else if (e.key === 'Tab') closeList();
+  };
+
   return (
-    <div ref={box} className={cn('relative', className)}>
+    <div ref={box} className={cn('relative', className)} onKeyDown={onKey}>
       <button
+        ref={btn}
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => (open ? closeList() : setOpen(true))}
+        role="combobox"
+        aria-haspopup="listbox"
         aria-expanded={open}
-        className={cn(controlClass, 'flex h-8 w-auto max-w-64 items-center gap-1.5 pr-2 text-left', selected.length > 0 && 'border-brand text-brand')}
+        aria-controls={open ? listId : undefined}
+        aria-label={summary}
+        aria-activedescendant={open && !withSearch && list.length ? optId(active) : undefined}
+        className={cn(controlClass, 'flex h-8 w-auto max-w-64 items-center gap-1.5 pr-2 text-left max-sm:h-10', selected.length > 0 && 'border-brand text-brand')}
       >
         <span className="truncate">{summary}</span>
         {pending ? <Loader2 className="size-3.5 shrink-0 animate-spin" /> : <ChevronDown className="size-3.5 shrink-0 text-fg-3" />}
       </button>
-      {open && (
-        <div className="absolute left-0 z-50 mt-1 w-64 overflow-hidden rounded-lg bg-panel shadow-[var(--shadow-pop)] max-sm:w-[calc(100vw-2rem)]">
-          {withSearch && (
-            <input
-              autoFocus
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Traži…"
-              className="h-9 w-full border-b border-line bg-panel px-3 text-base focus:outline-none"
-            />
-          )}
-          <ul className="max-h-72 overflow-y-auto scroll-slim py-1" role="listbox" aria-multiselectable>
-            {list.map((o) => {
-              const on = chosen.has(o.value);
-              return (
-                <li key={o.value}>
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={on}
-                    onClick={() => toggle(o.value)}
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-muted"
-                  >
-                    <span className={cn('flex size-4 shrink-0 items-center justify-center rounded border', on ? 'border-brand bg-brand text-white' : 'border-line-strong')}>
-                      {on && <Check className="size-3" />}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate">{o.label}</span>
-                  </button>
-                </li>
-              );
-            })}
-            {!list.length && <li className="px-3 py-2 text-sm text-fg-3">Nema rezultata.</li>}
-          </ul>
-          {selected.length > 0 && (
-            <div className="border-t border-line px-3 py-1.5">
-              <button type="button" onClick={() => apply(new Set())} className="text-sm text-brand hover:underline">
-                Očisti odabir
-              </button>
-            </div>
-          )}
-        </div>
-      )}
+      <Popover anchor={btn} open={open} panelRef={panel}>
+        {withSearch && (
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => {
+              setQ(e.target.value);
+              setActive(0);
+            }}
+            placeholder="Traži…"
+            aria-label="Traži"
+            aria-autocomplete="list"
+            aria-controls={listId}
+            aria-activedescendant={list.length ? optId(active) : undefined}
+            autoComplete="off"
+            className="h-9 w-full shrink-0 border-b border-line bg-panel px-3 text-base placeholder:text-fg-3 focus:outline-none max-sm:h-11"
+          />
+        )}
+        <ul id={listId} className={cn('min-h-0 flex-1 overflow-y-auto scroll-slim py-1', loading && remote && 'opacity-60')} role="listbox" aria-multiselectable aria-busy={loading}>
+          {list.map((o, i) => {
+            const on = chosen.has(o.value);
+            return (
+              <li
+                key={o.value}
+                id={optId(i)}
+                role="option"
+                aria-selected={on}
+                onMouseDown={(e) => e.preventDefault()}
+                onMouseEnter={() => setActive(i)}
+                onClick={() => toggle(o.value)}
+                className={cn('flex cursor-pointer items-center gap-2 px-3 py-1.5 max-sm:py-2.5', i === active && 'bg-muted')}
+              >
+                <span className={cn('flex size-4 shrink-0 items-center justify-center rounded border', on ? 'border-brand bg-brand text-white' : 'border-line-strong')}>
+                  {on && <Check className="size-3" />}
+                </span>
+                <span className="min-w-0 flex-1 truncate">{o.label}</span>
+              </li>
+            );
+          })}
+          {!list.length && <li className="px-3 py-2 text-sm text-fg-3">{loading ? 'Traženje…' : 'Nema rezultata.'}</li>}
+        </ul>
+        {selected.length > 0 && (
+          <div className="shrink-0 border-t border-line px-3 py-1.5">
+            <button type="button" onClick={() => apply(new Set())} className="text-sm text-brand hover:underline">
+              Očisti odabir
+            </button>
+          </div>
+        )}
+      </Popover>
     </div>
   );
 }

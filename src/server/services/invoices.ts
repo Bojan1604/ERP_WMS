@@ -15,7 +15,7 @@ import { billingFromMonths, defaultKpd, effectiveLineType, hasRentLines, invoice
 import { fiscalRoute } from '@/domain/fiscal';
 import { alignInvoiceVat, mixedSupplyError, supplyKindOf } from '@/domain/tax';
 import { eur } from '@/lib/format';
-import { assertAdvanceNotUsed, checkAdvancesAtIssue, setAdvanceUses, type AdvanceUseInput } from './invoice-advances';
+import { assertAdvanceNotUsed, assertAdvancesWithinTotal, checkAdvancesAtIssue, setAdvanceUses, type AdvanceUseInput } from './invoice-advances';
 
 // ---------------------------------------------------------------- ulazni oblici
 
@@ -252,6 +252,7 @@ export async function createDraft(tx: Tx, actor: Actor, input: InvoiceInput) {
   await writeLines(tx, actor, inv.id, input.type, input.lines);
   await setAdvanceUses(tx, actor, { id: inv.id, partnerId: input.partnerId, kind: input.kind ?? 'INVOICE' }, input.advances ?? []);
   await recalcInvoice(tx, inv.id);
+  await assertAdvancesWithinTotal(tx, inv.id);
   await audit(tx, actor, { entity: 'invoice', entityId: inv.id, action: 'create', summary: `Nacrt računa za ${partner.name}` });
   return inv;
 }
@@ -268,6 +269,7 @@ export async function updateDraft(tx: Tx, actor: Actor, id: string, input: Invoi
   await writeLines(tx, actor, id, input.type, input.lines);
   await setAdvanceUses(tx, actor, { id, partnerId: input.partnerId, kind: input.kind ?? 'INVOICE' }, input.advances ?? []);
   await recalcInvoice(tx, id);
+  await assertAdvancesWithinTotal(tx, id);
   await audit(tx, actor, { entity: 'invoice', entityId: id, action: 'update', summary: 'Nacrt računa izmijenjen' });
 }
 
@@ -359,7 +361,12 @@ export async function issueInvoice(tx: Tx, actor: Actor, id: string) {
   }
 
   // uračunati predujmovi: ostatak se provjerava ponovno pod zaključavanjem (istodobni računi)
-  if (inv.kind === 'INVOICE') await checkAdvancesAtIssue(tx, actor, inv);
+  if (inv.kind === 'INVOICE') {
+    await checkAdvancesAtIssue(tx, actor, inv);
+    // nacrt spremljen prije provjere: zbroj uračunatog najviše iznos računa
+    await recalcInvoice(tx, id);
+    await assertAdvancesWithinTotal(tx, id);
+  }
 
   const seq = await nextSeq(tx, actor.companyId, 'INVOICE', year);
   const number = formatInvoiceNumber(seq, inv.company.invoicePremises, inv.company.invoiceDevice, inv.company.invoiceSeparator);

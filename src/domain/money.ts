@@ -27,8 +27,9 @@ export function sum<T>(rows: readonly T[], pick: (row: T) => number): number {
 }
 
 /**
- * Čita broj kako ga ljudi upisuju: „1.500,00" → 1500, „220.85" → 220.85,
- * „1.500.000" → 1500000, „12,5" → 12.5.
+ * Čita broj kako ga ljudi upisuju (hrvatski zapis ima prednost): „1.500,00" → 1500,
+ * „1.500" → 1500 (jedna točka i točno tri znamenke = tisućice), „1.5" → 1.5,
+ * „220.85" → 220.85, „1.500,5" → 1500.5, „1.500.000" → 1500000, „12,5" → 12.5.
  */
 export function parseNumber(input: string): number {
   const n = Number.parseFloat(normalizeNumber(input));
@@ -45,7 +46,11 @@ export function parseAmount(input: string): number {
   return /^[+-]?(\d+(\.\d*)?|\.\d+)$/.test(s) ? Number(s) : Number.NaN;
 }
 
-/** Hrvatski/engleski zapis broja → „1234.56" (bez razmaka, valute i tisućica). */
+/**
+ * Hrvatski/engleski zapis broja → „1234.56" (bez razmaka, valute i tisućica). Točka i zarez
+ * zajedno: zadnji je decimalni. Samo zarez: decimalni. Samo točka: više točaka ili jedna točka
+ * s točno tri znamenke iza (npr. „1.500", „12.345") su tisućice, inače decimalna točka („1.5", „0.500").
+ */
 function normalizeNumber(input: string): string {
   let s = String(input).trim().replace(/\s|€|eur|%/gi, '');
   if (!s) return '';
@@ -58,6 +63,9 @@ function normalizeNumber(input: string): string {
     s = s.replace(/\./g, '').replace(',', '.');
   } else if ((s.match(/\./g) ?? []).length > 1) {
     s = s.replace(/\./g, '');
+  } else if (/^[+-]?[1-9]\d{0,2}\.\d{3}$/.test(s)) {
+    // jedna točka i točno tri znamenke iza nje (a ispred 1–3 bez vodeće nule) = tisućice: „1.500" → 1500
+    s = s.replace('.', '');
   }
   return s;
 }

@@ -6,7 +6,7 @@ import { can, canSeeCost } from '@/domain/permissions';
 import { getCompany } from '@/server/queries/lookups';
 import { getInvoice, getSalesLookups, type InvoiceDetail } from '@/server/queries/sales';
 import { INVOICE_KIND_LABEL, paymentState, type ChargeInput } from '@/domain/invoice';
-import { toISO } from '@/domain/dates';
+import { formatDate, toISO } from '@/domain/dates';
 import { num } from '@/domain/money';
 import { PageHeader, Card, Badge } from '@/components/ui/misc';
 import { buttonClass, LinkButton } from '@/components/ui/button';
@@ -22,7 +22,7 @@ import { date, eur } from '@/lib/format';
 import { FiscalCard, type FiscalCardData } from '@/components/sales/fiscal-card';
 import { Attachments } from '@/components/ui/attachments';
 import { ClientSheetButton } from '@/components/partners/client-sheet-link';
-import type { EInvoiceStatusCode } from '@/domain/sales-lines';
+import { invoiceRentMonths, rentPeriodRange, type EInvoiceStatusCode } from '@/domain/sales-lines';
 import type { BillingCode } from '@/domain/billing';
 import { isDomesticBusiness } from '@/domain/fiscal';
 import { readMeta } from '@/server/fiscal/issue';
@@ -133,6 +133,8 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
     refSent: !!inv.refInvoice?.eInvoiceStatus,
   };
   const devices = inv.lines.filter((l) => l.item);
+  // razdoblje najma od–do prema broju mjeseci naplate na stavkama (kvartalna rata: 3 mjeseca)
+  const rentRange = rentPeriodRange(inv.period, invoiceRentMonths(inv.lines));
   const receivable = inv.kind === 'INVOICE' || inv.kind === 'ADVANCE';
 
   return (
@@ -145,7 +147,7 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
             <PayBadge state={st} />
           </span>
         }
-        subtitle={`${TYPE_LABEL[inv.type]}${inv.type !== 'RENT' && inv.lines.some((l) => l.lineType === 'RENT') ? ' + najam' : ''} · ${inv.partner.name} · ${date(inv.date)}${inv.period ? ` · razdoblje ${inv.period}` : ''}`}
+        subtitle={`${TYPE_LABEL[inv.type]}${inv.type !== 'RENT' && inv.lines.some((l) => l.lineType === 'RENT') ? ' + najam' : ''} · ${inv.partner.name} · ${date(inv.date)}${rentRange ? ` · razdoblje ${formatDate(rentRange.from)} – ${formatDate(rentRange.to)}` : ''}`}
         back={back}
         actions={
           <>

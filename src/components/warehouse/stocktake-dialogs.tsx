@@ -9,6 +9,7 @@ import { Notice } from '@/components/ui/misc';
 import { FormError, useAction } from '@/components/ui/action';
 import { integer } from '@/lib/format';
 import { closeStocktakeAction, createStocktakeAction } from '@/app/(app)/skladiste/inventura/actions';
+import { countLabel, plural } from '@/domain/plural';
 
 /** „Nova inventura": skladište (ili sva) i napomena. */
 export function NewStocktakeButton({ warehouses }: { warehouses: Option[] }) {
@@ -118,7 +119,7 @@ export function CloseStocktakeButton({
             <Checkbox
               checked={move}
               onChange={(e) => setMove(e.target.checked)}
-              label={<>Premjesti {integer(wrongWarehouse)} uređaja pronađenih ovdje, a vođenih u drugom skladištu, u ovo skladište (međuskladišnica)</>}
+              label={<>Premjesti {countLabel(wrongWarehouse, 'uređaj', 'uređaja', 'uređaja', integer)} {plural(wrongWarehouse, 'pronađen', 'pronađena', 'pronađenih')} ovdje, a {plural(wrongWarehouse, 'vođen', 'vođena', 'vođenih')} u drugom skladištu, u ovo skladište (međuskladišnica)</>}
             />
           )}
           {canEdit && counts.missing > 0 && (
@@ -152,7 +153,7 @@ export function CloseStocktakeButton({
                   checked={confirmed}
                   onChange={(e) => setConfirmed(e.target.checked)}
                   className="font-medium text-bad-strong"
-                  label={<>Potvrđujem promjenu za {integer(counts.missing)} uređaja koji nisu pronađeni</>}
+                  label={<>Potvrđujem promjenu za {countLabel(counts.missing, 'uređaj', 'uređaja', 'uređaja', integer)} {plural(counts.missing, 'koji nije pronađen', 'koji nisu pronađeni', 'koji nisu pronađeni')}</>}
                 />
               )}
             </fieldset>

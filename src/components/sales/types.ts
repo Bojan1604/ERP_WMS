@@ -18,6 +18,8 @@ export interface EditorLine {
   discountPct: number;
   warrantyMonths: number | null;
   agreedPrice: boolean;
+  /** Cijenu je korisnik ručno promijenio — promjena kupca je ne mijenja (samo u editoru, ne sprema se). */
+  priceEdited?: boolean;
   /** Najam: mjesečna cijena i broj mjeseci (samo se čuva). */
   monthly?: number | null;
   months?: number | null;

@@ -1,31 +1,104 @@
 /**
- * Veza ulaznog računa s narudžbenicom i primkom — pravilo „trošak robe se knjiži
- * jednom". Primka knjiži trošak „Nabava robe" (nabavna vrijednost uređaja), a
- * ulazni račun iste robe je samo isprava za knjigovođu: njegov vlastiti trošak
- * nastaje samo kad roba nije (još) knjižena primkom.
+ * Trošak robe po narudžbenici — JEDNO pravilo (usklađivanje: `reconcileOrderGoodsExpense`
+ * u server/services/goods-expense.ts; opis i u docs/RAZVOJ.md → „Trošak robe u nabavi").
  *
- *   • „račun za robu s primke" (jedan po narudžbenici/primci) povezan s primkom
- *     koja ima trošak → račun NE knjiži svoj trošak (postojeći se briše)
- *   • drugi računi iste narudžbenice (prijevoz, dodatni troškovi, drugi račun)
- *     knjiže se zasebno — zadano je račun za robu samo onaj čiji iznos odgovara
- *     vrijednosti primki ili narudžbenice (±1 % ili 1 €) i nijedan drugi povezani
- *     račun već nije račun za tu robu; korisnik to može izričito promijeniti
- *   • primka po narudžbenici čiji ulazni račun već ima vlastiti trošak → primka
- *     NE knjiži trošak (račun je stigao i knjižen prije robe)
- *   • zaprimljeni (neprihvaćeni) eRačun i odbijeni račun ne knjiže ništa
- *   • storno primke briše njen trošak; račun tada može „Knjiži ponovno"
+ *   Ukupni knjiženi trošak robe skupine = max(R, I), nikad R + I, gdje je
+ *     R = zbroj troškova „Nabava robe" proknjiženih primki skupine (primka s kvačicom
+ *         „Knjiži nabavu u troškove"; stornirana primka nema trošak),
+ *     I = zbroj osnovica računa za robu skupine koji se knjiže (prihvaćeni, „Knjiži kao trošak").
+ *
+ *   Skupina = narudžbenica (sve njene primke i svi računi povezani s njom); primka bez
+ *   narudžbenice je skupina sama za sebe (računi povezani samo s njom); nepovezani račun
+ *   je sam svoja skupina (R = 0).
+ *
+ *   Kako se to postiže: primka UVIJEK knjiži svoju nabavnu vrijednost (ako je korisnik to
+ *   odabrao) — usklađivanje nikad ne mijenja trošak primke. Računi za robu, redom po datumu
+ *   računa (pa po upisu), „troše" R: dio osnovice koji pokrivaju primke ne knjiže, a knjiže samo
+ *   razliku iznad primki (vlastiti trošak = osnovica − pokriveno, PDV razmjerno). Zato je
+ *   R + Σ vlastitih = R + max(0, I − R) = max(R, I).
+ *
+ *   • račun koji NIJE račun za robu (prijevoz, usluga, dodatni trošak) uvijek knjiži cijelu
+ *     osnovicu kao zaseban trošak i ne troši R
+ *   • zaprimljeni (neprihvaćeni) eRačun, odbijeni račun i račun s isključenim „Knjiži kao
+ *     trošak" ne knjiže ništa i ne troše R
+ *   • usklađivanje se ponavlja nakon SVAKE promjene skupine (primka, storno primke, knjiženje
+ *     troška primke, spremanje/brisanje/povezivanje/prihvat/odbijanje računa, podaci računa na
+ *     narudžbenici, „Knjiži ponovno"), pa rezultat ne ovisi o redoslijedu radnji
+ *
+ * Zadano „račun za robu" (dok korisnik ne odluči kvačicom): račun skupine kategorije
+ * „Nabava robe" čija osnovica stane u još nefakturiranu vrijednost robe (djelomični računi),
+ * ili — kao prije — prvi povezani račun bez druge kategorije čija osnovica odgovara vrijednosti
+ * primki ili narudžbenice (±1 % ili 1 €). Druga kategorija (npr. „Prijevoz") nije roba.
  */
 
-export type InvoiceExpenseMode = 'own' | 'receipt' | 'none';
+import { r2 } from './money';
+
+/** Kategorija troška robe (trošak primke i zadana kategorija računa s narudžbenice). */
+export const PURCHASE_CATEGORY = 'Nabava robe';
 
 /**
- * Kako ulazni račun stoji s troškom: `own` = knjiži vlastiti trošak,
- * `receipt` = trošak robe je već knjižen primkom (samo račun za robu), `none` = ne knjiži se.
+ * Kako ulazni račun stoji s troškom: `own` = knjiži cijelu osnovicu, `partial` = knjiži samo
+ * razliku iznad primki, `receipt` = trošak robe u cijelosti nose primke, `none` = ne knjiži se.
  */
-export function invoiceExpenseMode(a: { book: boolean; rejected: boolean; pending?: boolean; receiptExpenses: number; goods: boolean }): InvoiceExpenseMode {
-  if (a.rejected || a.pending) return 'none';
-  if (a.goods && a.receiptExpenses > 0) return 'receipt';
-  return a.book ? 'own' : 'none';
+export type InvoiceExpenseMode = 'own' | 'partial' | 'receipt' | 'none';
+
+/** Račun skupine kako ga vidi pravilo (redoslijed = redoslijed trošenja R). */
+export interface GoodsInvoiceRow {
+  id: string;
+  net: number;
+  vat: number;
+  /** Račun za robu (troši trošak primki). */
+  goods: boolean;
+  /** Knjiži se: prihvaćen (ne zaprimljeni eRačun, ne odbijen) i „Knjiži kao trošak". */
+  books: boolean;
+}
+
+export interface GoodsAllocation {
+  id: string;
+  /** Dio osnovice koji pokrivaju troškovi primki. */
+  covered: number;
+  /** Vlastiti trošak računa (osnovica i PDV); 0 = račun nema troška. */
+  ownNet: number;
+  ownVat: number;
+  mode: InvoiceExpenseMode;
+}
+
+/**
+ * Pravilo troška robe skupine: `receiptsBooked` = R (zbroj troškova primki), računi redom.
+ * Vraća vlastiti trošak svakog računa tako da je R + Σ ownNet (računa za robu) = max(R, I).
+ */
+export function allocateGoodsExpense(receiptsBooked: number, invoices: GoodsInvoiceRow[]): GoodsAllocation[] {
+  let pool = Math.max(0, r2(receiptsBooked));
+  return invoices.map((i) => {
+    if (!i.books) return { id: i.id, covered: 0, ownNet: 0, ownVat: 0, mode: 'none' as const };
+    // odobrenje (negativna osnovica) i račun koji nije za robu ne troše primke
+    const covered = i.goods && i.net > 0 ? Math.min(r2(i.net), pool) : 0;
+    pool = r2(pool - covered);
+    const ownNet = r2(i.net - covered);
+    const ownVat = covered === 0 ? r2(i.vat) : r2((i.vat * ownNet) / i.net);
+    const mode: InvoiceExpenseMode = ownNet === 0 ? 'receipt' : covered === 0 ? 'own' : 'partial';
+    return { id: i.id, covered: r2(covered), ownNet, ownVat, mode };
+  });
+}
+
+/** Vlastiti troškovi računa za robu (bez računa koji nisu roba). */
+function goodsOwn(receiptsBooked: number, invoices: GoodsInvoiceRow[]) {
+  return r2(allocateGoodsExpense(receiptsBooked, invoices).reduce((a, x, k) => a + (invoices[k].goods ? x.ownNet : 0), 0));
+}
+
+/** Ukupni trošak robe skupine po pravilu: R + vlastiti troškovi računa za robu = max(R, I). */
+export function goodsExpenseTotal(receiptsBooked: number, invoices: GoodsInvoiceRow[]): number {
+  return r2(receiptsBooked + goodsOwn(receiptsBooked, invoices));
+}
+
+/**
+ * Što nova primka vrijednosti `value` radi s troškom robe skupine (dijalog zaprimanja) —
+ * izvedeno iz istog pravila: primka knjiži `value`, računi za robu se umanjuju za `invoiceReduced`.
+ */
+export function receiptEffect(receiptsBooked: number, invoices: GoodsInvoiceRow[], value: number) {
+  const v = Math.max(0, value);
+  const invoiceReduced = r2(goodsOwn(receiptsBooked, invoices) - goodsOwn(receiptsBooked + v, invoices));
+  return { invoiceReduced, totalIncrease: r2(v - invoiceReduced) };
 }
 
 /** Odgovara li osnovica računa vrijednosti robe (primki ili narudžbenice): razlika do 1 % ili 1 €. */
@@ -34,16 +107,23 @@ export function matchesGoodsAmount(net: number, refs: number[]): boolean {
 }
 
 /**
- * Zadana odluka „ovo je račun za robu s primke": iznos odgovara vrijednosti robe i
- * nijedan drugi povezani račun već nije račun za tu robu (prvi povezani račun).
+ * Zadana odluka „račun za robu" (vidi opis gore). `refs` = [vrijednost primki, vrijednost
+ * narudžbenice]; `otherGoodsNet` / `otherGoodsInvoices` = zbroj osnovica / broj drugih
+ * (neodbijenih) računa za robu iste skupine.
  */
-export function defaultGoodsInvoice(a: { net: number; refs: number[]; otherGoodsInvoices: number }): boolean {
-  return a.otherGoodsInvoices === 0 && matchesGoodsAmount(a.net, a.refs);
+export function defaultGoodsInvoice(a: { net: number; category?: string | null; refs: number[]; otherGoodsNet?: number; otherGoodsInvoices: number }): boolean {
+  if (!(a.net > 0)) return false;
+  // izričito druga kategorija (prijevoz, usluga…) nije roba
+  if (a.category && a.category !== PURCHASE_CATEGORY) return false;
+  if (a.otherGoodsInvoices === 0 && matchesGoodsAmount(a.net, a.refs)) return true;
+  if (a.category !== PURCHASE_CATEGORY) return false;
+  const value = Math.max(0, ...a.refs);
+  return value > 0 && a.net <= value - (a.otherGoodsNet ?? 0) + Math.max(1, value * 0.01) + 1e-9;
 }
 
-/** Knjiži li primka trošak nabave. */
-export function receiptBooksExpense(a: { bookExpense: boolean; total: number; invoiceOwnExpenses: number }): boolean {
-  return a.bookExpense && a.total > 0 && a.invoiceOwnExpenses === 0;
+/** Knjiži li primka trošak nabave: uvijek kad je odabrano i ima vrijednost (računi za robu se usklađuju). */
+export function receiptBooksExpense(a: { bookExpense: boolean; total: number }): boolean {
+  return a.bookExpense && a.total > 0;
 }
 
 /** Stopa PDV-a iz iznosa (za stupac „PDV %" kad stopa nije upisana). */

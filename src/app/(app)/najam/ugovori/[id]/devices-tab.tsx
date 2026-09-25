@@ -14,6 +14,7 @@ import { deviceCandidates, hideCostSource, type contractItems } from '@/server/q
 import { eur, integer } from '@/lib/format';
 import { SearchFilter } from '@/components/ui/filters';
 import { Pagination } from '@/components/ui/pagination';
+import { plural } from '@/domain/plural';
 
 /** Iznad toga uređaji se prikazuju po stranicama (tablica s tisuću redaka je spora u pregledniku). */
 const PAGE = 250;
@@ -144,7 +145,7 @@ export async function DevicesTab({
             <tfoot>
               <tr>
                 {canEdit && <td />}
-                <td colSpan={3}>{integer(items.length)} uređaja{q ? ` (pronađeno ${integer(found.length)})` : ''}</td>
+                <td colSpan={3}>{integer(items.length)} {plural(items.length, 'uređaj', 'uređaja', 'uređaja')}{q ? ` (pronađeno ${integer(found.length)})` : ''}</td>
                 <td className="num">{eur(total)}</td>
                 <td colSpan={3} />
               </tr>

@@ -9,7 +9,8 @@ import { eur } from '@/lib/format';
 /**
  * Uračunati predujmovi: konačni račun navodi račune za predujam (i iznos s PDV-om
  * koji uračunava). Iznos po predujmu ne smije premašiti neiskorišteni ostatak —
- * zbroj uračunatog na izdanim, nestorniranim konačnim računima. Zbroj uračunatog
+ * zbroj uračunatog na izdanim, nestorniranim konačnim računima — a ukupno uračunato
+ * ne smije premašiti iznos računa (`assertAdvancesWithinTotal`). Zbroj uračunatog
  * na konačnom računu je `Invoice.advanceAmount` (PrepaidAmount i BillingReference u eRačunu).
  */
 
@@ -113,6 +114,22 @@ export async function checkAdvancesAtIssue(tx: Tx, actor: Actor, inv: { id: stri
   if (!uses.length) return;
   for (const u of uses) await tx.$queryRaw`SELECT id FROM "Invoice" WHERE id = ${u.advanceId} FOR UPDATE`;
   await checkUses(tx, actor, inv, uses.map((u) => ({ advanceId: u.advanceId, amount: num(u.amount) })));
+}
+
+/**
+ * Zbroj uračunatih predujmova ne smije prijeći ukupni iznos računa (s PDV-om) —
+ * inače bi „za platiti" bio negativan, a eRačun kršio BR-CO-16. Poziva se nakon
+ * `recalcInvoice` (spremanje nacrta) i pri izdavanju.
+ */
+export async function assertAdvancesWithinTotal(tx: Tx, invoiceId: string) {
+  const inv = await tx.invoice.findUniqueOrThrow({ where: { id: invoiceId }, select: { kind: true, grandTotal: true, advanceAmount: true } });
+  const advance = num(inv.advanceAmount);
+  if (inv.kind !== 'INVOICE' || advance <= 0) return;
+  const total = num(inv.grandTotal);
+  assert(
+    advance <= total + 0.005,
+    `Uračunati predujam (${eur(advance)}) veći je od iznosa računa (${eur(total)}) — smanjite uračunati iznos na najviše ${eur(Math.max(0, total))}.`,
+  );
 }
 
 /** Storno računa za predujam: ne smije biti uračunat u važeći konačni račun. */

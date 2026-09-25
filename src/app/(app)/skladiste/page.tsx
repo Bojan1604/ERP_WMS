@@ -79,7 +79,7 @@ export default async function WarehousePage({ searchParams }: { searchParams: Pr
     models: lookups.models.map((m) => ({ value: m.id, label: modelLabel(m) })),
   };
   const rowMeta: Record<string, RowMeta> = Object.fromEntries(
-    list.rows.map((r) => [r.id, { state: r.state, onContract: !!r.contractItem, cost: costs ? num(r.cost) : 0 }]),
+    list.rows.map((r) => [r.id, { state: r.state, onContract: !!r.contractItem, cost: costs ? num(r.cost) : null }]),
   );
   const exportQs = new URLSearchParams();
   for (const k of [...FILTER_KEYS, 'sort', 'dir']) if (typeof sp[k] === 'string' && sp[k]) exportQs.set(k, sp[k] as string);

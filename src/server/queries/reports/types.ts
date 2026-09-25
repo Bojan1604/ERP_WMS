@@ -137,7 +137,8 @@ export const revenueSql = (companyId: string) =>
  * "lineKind", qty, cost, net, "isCredit".
  *
  * - `net` je stavka NAKON popusta na cijeli račun (popust se raspoređuje razmjerno, kao
- *   `lineShareOfNet`), pa zbroj stavki računa = osnovica računa (netTotal).
+ *   `lineShareOfNet`, u centima metodom najvećeg ostatka), pa je zbroj stavki računa TOČNO osnovica
+ *   računa (netTotal) — izvještaji po stavkama se slažu s „Prihod po mjesecima" do centa.
  * - Knjižna odobrenja ulaze kao negativni iznosi raspoređeni na stavke izvornog računa
  *   (razmjerno), s datumom i partnerom odobrenja; količina i nabavna 0.
  * - `withStorno`: računi i storna (negativni) kao u „Prihod po mjesecima" — zbroj po razdoblju
@@ -156,7 +157,15 @@ export function revenueLinesSql(
     ${opts.deviceOnly ? Prisma.sql`AND ${Prisma.raw(line)}."kind" = 'DEVICE'` : Prisma.empty}
     ${opts.withItem ? Prisma.sql`AND ${Prisma.raw(line)}."itemId" IS NOT NULL` : Prisma.empty}
     ${opts.docType ? Prisma.sql`AND ${Prisma.raw(doc)}."type" = ${opts.docType}::"InvoiceType"` : Prisma.empty}`;
-  const linesNet = (doc: string) => Prisma.sql`(SELECT SUM(x."netAmount") FROM "InvoiceLine" x WHERE x."invoiceId" = ${Prisma.raw(doc)}.id)`;
+  // udio stavke u osnovici `total` dokumenta `doc` u centima, metodom najvećeg ostatka: zbroj stavki
+  // dokumenta je TOČNO `total` (bez razlike od 0,01 zbog zaokruživanja). Računa se samo za dokumente
+  // s popustom (CASE), nad svim stavkama dokumenta, pa suženje izvana ne mijenja raspodjelu.
+  const alloc = (total: Prisma.Sql, doc: string, line: string) => Prisma.sql`(SELECT z.c FROM (
+      SELECT y.id, (y.fl + CASE WHEN ROW_NUMBER() OVER (ORDER BY y.raw - y.fl DESC, y.id) <= ROUND(${total} * 100) - SUM(y.fl) OVER () THEN 1 ELSE 0 END) / 100.0 AS c
+      FROM (SELECT w.id, w.raw, FLOOR(w.raw) AS fl FROM (
+        SELECT x.id, x."netAmount" * ${total} * 100 / NULLIF(SUM(x."netAmount") OVER (), 0) AS raw FROM "InvoiceLine" x WHERE x."invoiceId" = ${Prisma.raw(doc)}.id
+      ) w) y
+    ) z WHERE z.id = ${Prisma.raw(line)}.id)`;
   const docs = opts.withStorno
     ? Prisma.sql`i."kind" IN ('INVOICE','STORNO') AND NOT (i."kind" = 'STORNO' AND EXISTS (SELECT 1 FROM "Invoice" r WHERE r.id = i."refInvoiceId" AND r."kind" = 'ADVANCE'))`
     : Prisma.sql`i."kind" = 'INVOICE' AND i."stornoed" = false`;
@@ -164,13 +173,13 @@ export function revenueLinesSql(
     SELECT i.id AS "invoiceId", i."partnerId", i."date", i."kind"::text AS "docKind", l."modelId", l."itemId", COALESCE(l."lineType", i."type")::text AS "type",
            l."kind"::text AS "lineKind", l."qty", l."cost", false AS "isCredit",
            CASE WHEN i."discountPct" = 0 AND i."discountAmount" = 0 THEN l."netAmount"
-                ELSE COALESCE(l."netAmount" * i."netTotal" / NULLIF(${linesNet('i')}, 0), 0) END AS net
+                ELSE COALESCE(${alloc(Prisma.sql`i."netTotal"`, 'i', 'l')}, 0) END AS net
     FROM "InvoiceLine" l JOIN "Invoice" i ON i.id = l."invoiceId" JOIN "Partner" p ON p.id = i."partnerId"
     WHERE i."companyId" = ${companyId} AND i."status" = 'ISSUED' AND ${docs} AND p."excluded" = false
       ${periodSql('i."date"', f)} ${inIds('i."partnerId"', f.partnerIds)} ${narrow('l', 'i', 'i')}
     UNION ALL
     SELECT c.id, c."partnerId", c."date", 'CREDIT_NOTE', l."modelId", l."itemId", COALESCE(l."lineType", r."type")::text,
-           l."kind"::text, 0, 0, true, COALESCE(c."netTotal" * l."netAmount" / NULLIF(${linesNet('r')}, 0), 0)
+           l."kind"::text, 0, 0, true, COALESCE(${alloc(Prisma.sql`c."netTotal"`, 'r', 'l')}, 0)
     FROM "Invoice" c JOIN "Partner" p ON p.id = c."partnerId" JOIN "Invoice" r ON r.id = c."refInvoiceId" JOIN "InvoiceLine" l ON l."invoiceId" = r.id
     WHERE c."companyId" = ${companyId} AND c."status" = 'ISSUED' AND c."kind" = 'CREDIT_NOTE' AND p."excluded" = false
       ${periodSql('c."date"', f)} ${inIds('c."partnerId"', f.partnerIds)} ${narrow('l', 'c', 'r')}`;

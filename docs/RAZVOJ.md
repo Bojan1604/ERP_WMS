@@ -57,6 +57,48 @@ klijentu na portalu samo uz `Attachment.public` (fotografije s prijave kvara aut
 - Automatsko izdavanje rata (`src/server/jobs/auto-issue.ts`): samo rate s dospijećem od `Company.autoIssueSince`
   (dan uključivanja), bez zaostataka.
 
+- eRačun — kategorije PDV-a K i G (`ublTreatment`, `src/domain/ubl.ts`): **namjerno** se šalju kao `E`
+  (oslobođeno) s razlogom oslobođenja iz računa, kao u starom programu, jer ih posrednik tako prihvaća. U XML-u je to E; na ispisu
+  i u bazi račun zadržava K/G (i razlog oslobođenja). Zakonska osnova koja ide u `TaxExemptionReason`:
+  isporuka dobara unutar EU → čl. 41. st. 1. Zakona o PDV-u (NN 73/13 i izmj.); izvoz → čl. 45. st. 1. istog zakona.
+  EN 16931 predviđa kodove `K` (intra-community supply, uz PDV ID kupca, BR-IC-*) i `G` (izvoz, BR-G-*) — ako
+  knjigovođa ili posrednik zatraže točne kodove, promjena je jedan redak u `ublTreatment` (uz testove u
+  `tests/ubl.test.ts`). **Knjigovođa treba potvrditi** da je E s navedenim razlogom prihvatljiv za PDV-S/ZP obrazac.
+- Uračunati predujam na konačnom računu: najviše do ukupnog iznosa računa (`assertAdvancesWithinTotal`,
+  `clampAdvanceUses`); u UBL-u `PayableAmount = TaxInclusiveAmount − PrepaidAmount ≥ 0` (BR-CO-16).
+- E-pošta izdanog računa: predložak po vrsti i stanju (`invoiceMailTemplate`, `src/domain/mail.ts`) — račun
+  (otvoreni iznos), plaćeni račun, račun za predujam, odobrenje, storno; predračun i ponuda imaju svoje.
+
+## Trošak robe u nabavi (narudžbenica, primka, ulazni račun)
+
+Jedno pravilo po **narudžbenici** (skupini): ukupni knjiženi trošak robe = **max(R, I)**, nikad R + I.
+
+- **R** = zbroj troškova „Nabava robe" proknjiženih primki skupine (primka s kvačicom „Knjiži nabavu u troškove";
+  storno briše trošak primke).
+- **I** = zbroj osnovica **računa za robu** skupine koji se knjiže (prihvaćeni — ne zaprimljeni eRačun, ne odbijeni —
+  s uključenim „Knjiži kao trošak", `SupplierInvoice.bookExpense`).
+- Skupina: narudžbenica (sve njene primke i računi); primka bez narudžbenice je sama svoja skupina; nepovezani račun
+  je sam svoja skupina (R = 0).
+- Primka **uvijek** knjiži svoju nabavnu vrijednost (usklađivanje nikad ne mijenja trošak primke). Računi za robu,
+  redom po datumu računa pa upisu, „troše" R: pokriveni dio ne knjiže, knjiže samo razliku iznad primki
+  (način `own` / `partial` / `receipt` / `none`, PDV razmjerno). Zato je R + Σ vlastitih = max(R, I).
+- Računi koji **nisu roba** (prijevoz, usluge, dodatni troškovi) uvijek knjiže cijelu osnovicu zasebno i ne troše R.
+- Zadano „račun za robu" (dok korisnik ne odluči kvačicom; odluka se pamti u `goodsInvoice`): račun skupine
+  kategorije „Nabava robe" čija osnovica stane u još nefakturiranu vrijednost robe (i djelomični računi), ili prvi
+  povezani račun bez druge kategorije čija osnovica odgovara vrijednosti primki/narudžbenice (±1 % ili 1 €).
+  Druga kategorija (npr. „Prijevoz") nije roba. Obrazac računa isto pravilo računa i pri promjeni veze (`goodsRuleAction`).
+- Pravilo: `src/domain/purchase-links.ts` (`allocateGoodsExpense`, `defaultGoodsInvoice`, `receiptEffect` za dijalog
+  zaprimanja). Zapis: `reconcileOrderGoodsExpense` (`src/server/services/goods-expense.ts`) iz stanja baze ponovno
+  zapiše vlastiti trošak svih računa skupine; zove se nakon **svake** promjene — primka, storno primke, naknadno
+  knjiženje troška primke, spremanje / (pre)povezivanje / brisanje računa (i stara skupina), prihvaćanje i odbijanje
+  eRačuna, „Knjiži ponovno", podaci računa na narudžbenici. Rezultat ne ovisi o redoslijedu radnji — matrica
+  redoslijeda u `tests/integration/b-goods-expense.test.ts`.
+- Podaci računa na narudžbenici stvaraju račun za robu samo ako stane u nefakturiranu vrijednost robe (inače greška —
+  već postoji račun za istu robu).
+- Plaćenost računa za robu koji troši primke prelazi na troškove primki (`mirrorReceiptPaid`, `COVERING_GOODS_INVOICE`).
+- Bez prava `costs` troškovi primki, otpisa i računa za robu nisu na `/troskovi` (ni u zbrojevima ni izvozu), a iznosi
+  računa za robu na `/nabava/ulazni` su skriveni.
+
 ## Sigurnost i sustav
 
 - Prava: `src/domain/permissions.ts` (moduli, razine, `canSeeCost`, `canUseDanger`); stranica `pageAccess`, akcija `action({ module, level })`.

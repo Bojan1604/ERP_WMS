@@ -88,8 +88,8 @@ export function Backups({
       padded={false}
       actions={
         isAdmin ? (
-          <div className="flex gap-2">
-            <a href="/api/postavke/izvoz" className="inline-flex h-8 items-center gap-1.5 rounded-md border border-line px-2.5 text-sm hover:bg-muted">
+          <div className="flex flex-wrap justify-end gap-2">
+            <a href="/api/postavke/izvoz" className="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-line px-2.5 text-sm hover:bg-muted">
               <HardDriveDownload className="size-4" /> Preuzmi odmah
             </a>
             <ActionButton action={backupNowAction} input={{}} size="sm" variant="primary" icon={<Save className="size-4" />}>
@@ -142,10 +142,10 @@ export function Backups({
                   <td className="whitespace-nowrap tnum">{dateTime(r.at)}</td>
                   <td>{r.kind === 'auto' ? <Badge>automatska</Badge> : <Badge tone="info">ručna</Badge>}</td>
                   <td className="num">{size(r.size)}</td>
-                  <td className="whitespace-nowrap text-right">
+                  <td className="min-w-max whitespace-nowrap text-right">
                     {isAdmin && (
-                      <span className="inline-flex gap-1">
-                        <a href={`/api/postavke/kopije/${r.name}`} className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-sm text-brand hover:bg-muted">
+                      <span className="inline-flex flex-wrap justify-end gap-1">
+                        <a href={`/api/postavke/kopije/${r.name}`} className="inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 text-sm text-brand hover:bg-muted">
                           <Download className="size-3.5" /> Preuzmi
                         </a>
                         {canDanger && (

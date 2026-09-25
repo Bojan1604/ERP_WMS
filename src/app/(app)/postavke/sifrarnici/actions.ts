@@ -22,6 +22,7 @@ const schemas = {
     code: zOptText,
     categoryId: zOptId,
     kpd: zOptText,
+    kpdRent: zOptText,
     salePrice: zOptMoney,
     rentPrice: zOptMoney,
     marginPct: zOptMoney,

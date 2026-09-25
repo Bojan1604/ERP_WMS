@@ -11,6 +11,7 @@ import { AssignProfileButton, MoveDevicesButton } from '@/components/mdm/device-
 import { DeviceErpCard } from '@/components/mdm/device-erp';
 import { Ago, AlertBadges, Battery, mb, orgPath, uptime } from '@/components/mdm/common';
 import { dateTime } from '@/lib/format';
+import { extraLabel, extraValue } from '@/components/mdm/extra-labels';
 
 export const metadata = { title: 'MDM uređaj' };
 
@@ -118,8 +119,8 @@ export default async function DeviceOverviewPage({ params }: { params: Promise<{
             <Card title="Dodatni podaci s uređaja">
               <dl>
                 {extraRows.map(([k, v]) => (
-                  <Detail key={k} label={k}>
-                    <span className="break-all text-sm">{String(v)}</span>
+                  <Detail key={k} label={extraLabel(k)}>
+                    <span className="break-all text-sm">{extraValue(k, v)}</span>
                   </Detail>
                 ))}
               </dl>

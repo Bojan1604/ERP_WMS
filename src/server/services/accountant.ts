@@ -4,6 +4,7 @@ import { audit } from '../audit';
 import { assert } from '../errors';
 import type { Actor } from './items';
 import { ACCOUNTANT_ROW_CAP, parseKeys } from '@/domain/accountant';
+import { countLabel, plural } from '@/domain/plural';
 
 /**
  * Oznaka „poslano knjigovođi" na izlaznim (izdanim) i ulaznim računima.
@@ -26,8 +27,8 @@ export async function markAccountantSent(tx: Tx, actor: Actor, keys: string[], s
     entity: 'accountant',
     action: sent ? 'sent' : 'unsent',
     summary: sent
-      ? `${n} dokumenata označeno kao poslano knjigovođi (izlaznih ${ids.out.length}, ulaznih ${ids.in.length})`
-      : `${n} dokumenata vraćeno u „nije poslano knjigovođi"`,
+      ? `${countLabel(n, 'dokument', 'dokumenta', 'dokumenata')} ${plural(n, 'označen', 'označena', 'označeno')} kao poslano knjigovođi (izlaznih ${ids.out.length}, ulaznih ${ids.in.length})`
+      : `${countLabel(n, 'dokument', 'dokumenta', 'dokumenata')} ${plural(n, 'vraćen', 'vraćena', 'vraćeno')} u „nije poslano knjigovođi"`,
     diff: { out: ids.out, in: ids.in },
   });
   return { out: ids.out.length, in: ids.in.length };

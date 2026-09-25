@@ -1386,6 +1386,9 @@ model SupplierInvoice {
   /// „Ovo je račun za robu s primke" (trošak robe nosi primka): true/false = odluka (izričita ili
   /// po pravilu iznosa pri spremanju), null = račun nije povezan s nabavom.
   goodsInvoice     Boolean?
+  /// „Knjiži kao trošak" — odluka korisnika (kvačica obrasca, prihvaćanje eRačuna, „Knjiži ponovno").
+  /// Koliko se stvarno knjiži određuje usklađivanje po narudžbenici (reconcileOrderGoodsExpense).
+  bookExpense      Boolean               @default(true)
   createdAt        DateTime              @default(now())
   updatedAt        DateTime              @updatedAt
 

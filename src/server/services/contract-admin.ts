@@ -5,6 +5,7 @@ import { audit } from '../audit';
 import { changeItemStatus, itemEvents, type Actor } from './items';
 import { periodLabel } from '@/domain/dates';
 import { r2 } from '@/domain/money';
+import { plural } from '@/domain/plural';
 
 // =============================================================================
 //  Ugovori — brisanje, vraćanje preskočene rate, skupni ručni iznosi najma
@@ -41,13 +42,13 @@ export async function deleteContract(tx: Tx, actor: Actor, id: string, opts: { w
       data: { warehouseId: wh.id },
       event: { type: 'CONTRACT', message: `Vraćen na skladište ${wh.name} — ugovor ${c.number} obrisan`, refType: 'contract', refId: id },
     });
-    moved = ` — ${rented.length + returning.length} uređaja vraćeno na skladište ${wh.name}`;
+    moved = ` — ${rented.length + returning.length} ${plural(rented.length + returning.length, 'uređaj', 'uređaja', 'uređaja')} vraćeno na skladište ${wh.name}`;
   } else if (rented.length) {
     await changeItemStatus(tx, actor, rented, {
       kind: 'RETURNING',
       event: { type: 'RETURNING', message: `Najavljen povrat — ugovor ${c.number} obrisan`, refType: 'contract', refId: id },
     });
-    moved = ` — ${rented.length} uređaja najavljeno za povrat`;
+    moved = ` — ${rented.length} ${plural(rented.length, 'uređaj', 'uređaja', 'uređaja')} najavljeno za povrat`;
   }
   if (returning.length && !opts.warehouseId) {
     await itemEvents(tx, actor, returning, { type: 'CONTRACT', message: `Ugovor ${c.number} obrisan — povrat se zaprima na skladištu`, refType: 'contract', refId: id });
@@ -107,7 +108,7 @@ export async function unskipInstallment(tx: Tx, actor: Actor, contractId: string
     entity: 'contract',
     entityId: c.id,
     action: 'unskip',
-    summary: `Ugovor ${c.number}: rata za ${periodLabel(period)} vraćena u izdavanje (${n} uređaja)`,
+    summary: `Ugovor ${c.number}: rata za ${periodLabel(period)} vraćena u izdavanje (${n} ${plural(n, 'uređaj', 'uređaja', 'uređaja')})`,
   });
   return n;
 }
@@ -154,7 +155,7 @@ export async function setRentOverrides(
     entity: 'rent',
     entityId: String(input.year),
     action: 'rent-override',
-    summary: `Pregled najma ${input.year}: ${uniq.length} polja postavljeno na ${amount.toFixed(2).replace('.', ',')} € (${ids.length} uređaja)`,
+    summary: `Pregled najma ${input.year}: ${uniq.length} polja postavljeno na ${amount.toFixed(2).replace('.', ',')} € (${ids.length} ${plural(ids.length, 'uređaj', 'uređaja', 'uređaja')})`,
   });
   return uniq.length;
 }

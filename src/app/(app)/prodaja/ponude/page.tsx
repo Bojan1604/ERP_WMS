@@ -15,6 +15,7 @@ import { PartnerFilter } from '@/components/partners/partner-combobox';
 import { Pagination, readPage } from '@/components/ui/pagination';
 import { QuoteBadge, quoteStatus } from '@/components/sales/quote-status';
 import { amount, date, integer, pct } from '@/lib/format';
+import { plural } from '@/domain/plural';
 
 export const metadata = { title: 'Ponude' };
 
@@ -152,7 +153,7 @@ export default async function QuotesPage({ searchParams }: { searchParams: Promi
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={6}>{integer(list.total)} dokumenata</td>
+                <td colSpan={6}>{integer(list.total)} {plural(list.total, 'dokument', 'dokumenta', 'dokumenata')}</td>
                 <td className="num">{amount(list.stats.net)}</td>
                 <td className="num">{amount(list.stats.gross)}</td>
                 <td colSpan={2} />

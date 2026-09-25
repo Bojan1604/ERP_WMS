@@ -8,6 +8,7 @@ import { Badge, Card, COLOR_TONE, Empty, PageHeader } from '@/components/ui/misc
 import { AckButton, ApprovalButtons, ReceiveApprovalButtons, RejectButton } from '@/components/warehouse/approval-buttons';
 import { AttachmentGallery } from '@/components/warehouse/attachments';
 import { dateTime } from '@/lib/format';
+import { countLabel, plural } from '@/domain/plural';
 
 type Option = { value: string; label: string };
 
@@ -72,7 +73,6 @@ export default async function ApprovalsPage() {
   );
 }
 
-const plural = (n: number, one: string, many: string) => (n % 10 === 1 && n % 100 !== 11 ? one : many);
 
 function RequestCard({ r, actions }: { r: ApprovalRow; actions?: React.ReactNode }) {
   return (
@@ -88,7 +88,7 @@ function RequestCard({ r, actions }: { r: ApprovalRow; actions?: React.ReactNode
               {r.serials.length > 0 && (
                 <>
                   {' '}
-                  <b>{r.serials.length}</b> {plural(r.serials.length, 'novi uređaj', 'novih uređaja')}
+                  <b>{r.serials.length}</b> {plural(r.serials.length, 'novi uređaj', 'nova uređaja', 'novih uređaja')}
                 </>
               )}
               {r.serials.length > 0 && r.items.length > 0 && ' i'}
@@ -108,7 +108,7 @@ function RequestCard({ r, actions }: { r: ApprovalRow; actions?: React.ReactNode
           )}
           <p className="text-xs text-fg-3">
             {dateTime(r.createdAt)}
-            {r.missing > 0 && ` · ${r.missing} uređaja više ne postoji`}
+            {r.missing > 0 && ` · ${countLabel(r.missing, 'uređaj', 'uređaja', 'uređaja')} više ne ${plural(r.missing, 'postoji', 'postoje', 'postoji')}`}
             {r.kind === 'RECEIVE' && r.photos.length > 0 && ` · slika: ${r.photos.length}`}
           </p>
           {r.note && <p className="text-sm text-fg-2">Napomena: {r.note}</p>}

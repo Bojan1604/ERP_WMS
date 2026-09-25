@@ -2,7 +2,7 @@ import Link from 'next/link';
 import type { Contract } from '@prisma/client';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { TableWrap } from '@/components/ui/misc';
-import { contractAccrual, contractBilling, scheduledCharges } from '@/domain/billing';
+import { contractAccrual, historyCharges } from '@/domain/billing';
 import { MONTHS_SHORT, toISO, today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import { toDevice, toReturnedDevice, toTerms } from '@/server/services/rentals';
@@ -11,6 +11,7 @@ import { amount, date, eur } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { db } from '@/server/db';
 import { coveredPeriods } from '@/server/services/invoices';
+import { invoicedAmounts } from '@/server/services/contract-items';
 import { PauseGrid } from '@/components/rentals/pause-cell';
 import { Pagination } from '@/components/ui/pagination';
 
@@ -50,25 +51,40 @@ export async function ScheduleTab({
     ...returned.map((r) => ({ id: r.id, serial: r.item.serial, itemId: r.item.id, monthly: num(r.monthly), device: toReturnedDevice(r), returnedAt: toISO(r.endDate) })),
   ];
   const devices = list.map((x) => x.device);
-  const covered = (await coveredPeriods(db, [c.id])).get(c.id) ?? new Set<string>();
-  // ćelija = rata u mjesecu naplate; pauzirane se prikazuju precrtane i ne ulaze u zbroj
+  const [coveredAll, invoiced] = await Promise.all([coveredPeriods(db, [c.id]), invoicedAmounts(db, { contractIds: [c.id] }, year)]);
+  const covered = coveredAll.get(c.id) ?? new Set<string>();
+  // ćelija = rata u prvom mjesecu razdoblja koje naplaćuje; pauzirane se prikazuju precrtane i ne ulaze u zbroj.
+  // Pauza ugovora/uređaja vrijedi od svog početka (rate prije ostaju), a fakturirano razdoblje pokazuje iznos s računa.
   const rows = list.map((i) => {
     const d = i.device;
     const paused = new Set(d.paused ?? []);
     const cells = Array.from({ length: 12 }, () => ({ v: 0, period: '', paused: false, invoiced: false }));
-    for (const ch of scheduledCharges(terms, d, `${year}-01`, `${year}-12`)) {
+    for (const ch of historyCharges(terms, d, `${year}-01`, `${year}-12`)) {
       const cell = cells[Number(ch.period.slice(5, 7)) - 1];
       cell.v = r2(cell.v + ch.amount);
       cell.period = ch.period;
       cell.paused = paused.has(ch.period);
-      cell.invoiced = covered.has(`${d.itemId}|${ch.period}`);
     }
+    cells.forEach((cell, m) => {
+      const p = `${year}-${String(m + 1).padStart(2, '0')}`;
+      if (!covered.has(`${d.itemId}|${p}`)) return;
+      cell.period = p;
+      cell.invoiced = true;
+      cell.paused = false;
+      // isti uređaj vraćen pa ponovno dodan: iznos računa samo jednom (na prvom retku)
+      const inv = invoiced.get(`${d.itemId}|${p}`);
+      if (inv !== undefined) {
+        cell.v = r2(inv);
+        invoiced.delete(`${d.itemId}|${p}`);
+      } else if (list.some((x) => x !== i && x.itemId === i.itemId)) cell.v = 0;
+    });
     const total = r2(cells.reduce((a, x) => a + (x.paused ? 0 : x.v), 0));
     return { id: i.id, serial: i.serial, itemId: i.itemId, monthly: i.monthly, returnedAt: i.returnedAt, cells, total };
   }).filter((r) => !r.returnedAt || r.cells.some((x) => x.v));
   const page = Math.min(Math.max(1, Number(params.page) || 1), Math.max(1, Math.ceil(rows.length / PAGE)));
   const shown = rows.length > PAGE ? rows.slice((page - 1) * PAGE, page * PAGE) : rows;
-  const billing = contractBilling(terms, devices, year);
+  // naplata = zbroj ćelija (fakturirano s računa, ostalo po planu, bez pauziranih)
+  const billing = Array.from({ length: 12 }, (_, m) => r2(rows.reduce((a, r) => a + (r.cells[m].paused ? 0 : r.cells[m].v), 0)));
   const accrual = contractAccrual(terms, devices, year);
   const sum = (a: number[]) => r2(a.reduce((x, v) => x + v, 0));
   const base = `/najam/ugovori/${c.id}?tab=raspored&godina=`;
@@ -87,7 +103,9 @@ export async function ScheduleTab({
           </Link>
         </div>
         <p className="text-sm text-fg-3">
-          U ćelijama je <b>iznos rate</b> u mjesecu naplate. Obračun je mjesečni iznos uređaja koji su taj mjesec u najmu.
+          U ćelijama je <b>iznos rate</b> u prvom mjesecu razdoblja koje rata naplaćuje
+          {c.billingMode === 'IN_ARREARS' ? ' (naplata unatrag: račun se izdaje mjesec kasnije)' : ''}; fakturirane rate prikazuju iznos s računa.
+          Obračun je mjesečni iznos uređaja koji su taj mjesec u najmu.
           {canEdit && <> Klik na iznos <b>pauzira naplatu</b> tog uređaja u tom mjesecu (precrtano = ne naplaćuje se); podebljano = fakturirano.</>}
         </p>
       </div>

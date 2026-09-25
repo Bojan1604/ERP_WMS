@@ -166,7 +166,7 @@ const COST_KEY_RE = /cost|margin|profit|nabav|marz|marž/i;
 /** Vrste zapisa (entity) čiji su iznosi nabavni — njihovi iznosi su također osjetljivi. */
 export const COST_ENTITIES: readonly string[] = ['receipt', 'purchaseOrder', 'order', 'supplierInvoice'];
 /** Radnje čiji opis sadrži nabavni iznos ili maržu. */
-const COST_ACTIONS: readonly string[] = ['book', 'margin', 'writeOff'];
+export const COST_ACTIONS: readonly string[] = ['book', 'margin', 'writeOff'];
 const AMOUNT_KEY_RE = /total|amount|price|net|vat|sum|iznos/i;
 
 /** Otkriva li ključ nabavnu cijenu/maržu (`costs` je naziv prava, ne iznos). */

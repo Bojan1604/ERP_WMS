@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { Trash2 } from 'lucide-react';
 import { pageAccess } from '@/server/auth';
 import { can, canSeeCost } from '@/domain/permissions';
 import { contractItems, contractPending, getContract } from '@/server/queries/rentals';
@@ -35,12 +36,14 @@ export default async function ContractPage({ params, searchParams }: Props) {
   const items = await contractItems(c.id);
   const devices = items.map(toDevice);
   const canEdit = can(user.perms, 'rentals', 'edit');
-  const [pending, files, lookups, returnedSkipped] = await Promise.all([
+  const [pending, files, lookups, returnedSkipped, drafts] = await Promise.all([
     contractPending(c, devices),
     listAttachments(db, user.companyId, 'contract', [c.id]),
     canEdit && !c._count.invoices ? getLookups(user.companyId) : null,
     // preskočena razdoblja skinutih uređaja — i njih „Vrati u izdavanje" vraća
     db.returnedContractItem.findMany({ where: { contractId: c.id, skipped: { isEmpty: false } }, select: { skipped: true } }),
+    // zašto nema „Obriši": samo nacrti (obrišu se u Prodaji) ili izdani računi
+    canEdit && c._count.invoices ? db.invoice.count({ where: { companyId: user.companyId, contractId: c.id, status: 'DRAFT' } }) : 0,
   ]);
   const editable = c.status === 'ACTIVE' || c.status === 'PAUSED';
   const base = `/najam/ugovori/${c.id}`;
@@ -82,6 +85,19 @@ export default async function ContractPage({ params, searchParams }: Props) {
                 pendingAmount={pending.reduce((a, r) => a + r.amount, 0)}
                 warehouses={lookups.warehouses.map((w) => ({ value: w.id, label: w.name }))}
               />
+            )}
+            {canEdit && c._count.invoices > 0 && (
+              <span
+                className="inline-flex items-center gap-1.5 text-sm text-fg-3"
+                title={
+                  drafts === c._count.invoices
+                    ? 'Ugovor ima samo nacrt računa — obrišite nacrt u Prodaji → Računi, zatim se ugovor može obrisati.'
+                    : 'Ugovor s izdanim računima ne može se obrisati — otkažite ga ili ga označite kao istekao.'
+                }
+              >
+                <Trash2 className="size-4" aria-hidden />
+                {drafts === c._count.invoices ? 'Brisanje: prvo obrišite nacrt računa' : 'Ne može se obrisati (ima račune)'}
+              </span>
             )}
           </>
         }

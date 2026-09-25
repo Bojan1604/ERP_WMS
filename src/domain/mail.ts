@@ -4,7 +4,9 @@
  * (server/mail), postavke (/postavke/posta) i dijalog slanja.
  */
 
-export const MAIL_TEMPLATE_KINDS = ['invoice', 'quote', 'proforma', 'delivery', 'service', 'accountant', 'reminder'] as const;
+import { r2 } from './money';
+
+export const MAIL_TEMPLATE_KINDS = ['invoice', 'invoicePaid', 'advance', 'creditNote', 'storno', 'quote', 'proforma', 'delivery', 'service', 'accountant', 'reminder'] as const;
 export type MailTemplateKind = (typeof MAIL_TEMPLATE_KINDS)[number];
 
 export interface MailTemplate {
@@ -15,6 +17,10 @@ export type MailTemplates = Record<MailTemplateKind, MailTemplate>;
 
 export const MAIL_TEMPLATE_LABEL: Record<MailTemplateKind, string> = {
   invoice: 'Račun',
+  invoicePaid: 'Plaćeni račun',
+  advance: 'Račun za predujam',
+  creditNote: 'Odobrenje',
+  storno: 'Storno računa',
   quote: 'Ponuda',
   proforma: 'Predračun',
   delivery: 'Otpremnica',
@@ -26,6 +32,10 @@ export const MAIL_TEMPLATE_LABEL: Record<MailTemplateKind, string> = {
 /** Varijable koje predložak smije koristiti (po vrsti) — za pomoć u postavkama. */
 export const MAIL_VARIABLES: Record<MailTemplateKind, string[]> = {
   invoice: ['broj', 'kupac', 'iznos', 'datum', 'dospijece', 'firma'],
+  invoicePaid: ['broj', 'kupac', 'iznos', 'datum', 'firma'],
+  advance: ['broj', 'kupac', 'iznos', 'datum', 'firma'],
+  creditNote: ['broj', 'kupac', 'iznos', 'datum', 'veza', 'firma'],
+  storno: ['broj', 'kupac', 'iznos', 'datum', 'veza', 'firma'],
   quote: ['broj', 'kupac', 'iznos', 'datum', 'vrijedi', 'firma'],
   proforma: ['broj', 'kupac', 'iznos', 'datum', 'vrijedi', 'naslov', 'firma'],
   delivery: ['broj', 'kupac', 'datum', 'firma'],
@@ -39,6 +49,22 @@ export const MAIL_DEFAULTS: MailTemplates = {
   invoice: {
     subject: 'Račun {broj}',
     body: 'Poštovani,\n\nu prilogu šaljemo račun {broj} od {datum}, s rokom plaćanja {dospijece}.\nIznos za platiti: {iznos}.\n\nLijep pozdrav,\n{firma}',
+  },
+  invoicePaid: {
+    subject: 'Račun {broj}',
+    body: 'Poštovani,\n\nu prilogu šaljemo račun {broj} od {datum} na iznos {iznos}.\nRačun je plaćen — hvala na uplati.\n\nLijep pozdrav,\n{firma}',
+  },
+  advance: {
+    subject: 'Račun za predujam {broj}',
+    body: 'Poštovani,\n\nu prilogu šaljemo račun za predujam {broj} od {datum} na iznos {iznos}.\nPredujam će biti uračunat u konačni račun.\n\nLijep pozdrav,\n{firma}',
+  },
+  creditNote: {
+    subject: 'Knjižno odobrenje {broj}',
+    body: 'Poštovani,\n\nu prilogu šaljemo knjižno odobrenje {broj} od {datum} uz račun {veza}.\nIznos odobrenja: {iznos}.\n\nLijep pozdrav,\n{firma}',
+  },
+  storno: {
+    subject: 'Storno računa {veza}',
+    body: 'Poštovani,\n\nu prilogu šaljemo storno {broj} od {datum} kojim se poništava račun {veza}.\nIznos storna: {iznos}.\n\nLijep pozdrav,\n{firma}',
   },
   quote: {
     subject: 'Ponuda {broj}',
@@ -65,6 +91,26 @@ export const MAIL_DEFAULTS: MailTemplates = {
     body: 'Poštovani,\n\nprema našoj evidenciji račun {broj} od {datum}, s dospijećem {dospijece}, još nije plaćen.\nOtvoreni iznos: {iznos}.\n\nMolimo uplatu ili javite ako je račun već plaćen.\n\nLijep pozdrav,\n{firma}',
   },
 };
+
+/**
+ * Predložak i iznos za slanje izdanog računa prema vrsti i stanju: odobrenje i storno
+ * imaju svoje predloške (iznos bez predznaka), račun za predujam svoj, plaćeni račun
+ * zahvaljuje na uplati, a otvoreni račun navodi otvoreni iznos (ne ukupni).
+ */
+export function invoiceMailTemplate(inv: {
+  kind: 'INVOICE' | 'ADVANCE' | 'STORNO' | 'CREDIT_NOTE';
+  stornoed: boolean;
+  total: number;
+  advance: number;
+  open: number;
+}): { template: MailTemplateKind; amount: number } {
+  if (inv.kind === 'CREDIT_NOTE') return { template: 'creditNote', amount: Math.abs(inv.total) };
+  if (inv.kind === 'STORNO') return { template: 'storno', amount: Math.abs(inv.total) };
+  if (inv.kind === 'ADVANCE') return { template: 'advance', amount: inv.total };
+  if (inv.open > 0.005 || inv.stornoed) return { template: 'invoice', amount: inv.open };
+  // otvoreno 0: plaćen (ili podmiren predujmom/odobrenjem) — iznos računa umanjen za predujam
+  return { template: 'invoicePaid', amount: Math.max(0, r2(inv.total - inv.advance)) };
+}
 
 /** Spremljeni predlošci (JSON iz Company.mailTemplates) + zadani za ono što nedostaje ili je prazno. */
 export function readTemplates(stored: unknown): MailTemplates {

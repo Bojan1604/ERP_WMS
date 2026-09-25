@@ -1,20 +1,23 @@
 import 'server-only';
 import type { Contract, ContractItem, ContractStatus, Prisma } from '@prisma/client';
 import type { Tx } from '../db';
-import { assert } from '../errors';
+import { DomainError, assert } from '../errors';
 import { audit, diff } from '../audit';
 import { nextDocNumber } from '../numbering';
 import { changeItemStatus, itemEvents, type Actor } from './items';
 import { createDraft, issueInvoice, markPaid, type LineInput } from './invoices';
 import { addPausedPeriods, billingItems, coveredPeriods, toDevice, toReturnedDevice, toTerms, type PauseRow } from './contract-items';
 import {
-  pendingInstallments, installmentDate, planSummary, scheduledCharges, BILLING_LABEL,
+  pendingInstallments, installmentDate, overbilledAfter, planSummary, scheduledCharges, BILLING_LABEL,
   type BillingCode, type BillingModeCode, type ContractDevice, type PendingInstallment, type PlanPeriodInput,
 } from '@/domain/billing';
-import { addMonths, formatDate, fromISO, periodLabel, toISO, today } from '@/domain/dates';
+import { addMonths, formatDate, fromISO, periodLabel, periodSpanLabel, toISO, today } from '@/domain/dates';
 import { num, r2 } from '@/domain/money';
 import { applyBulkTerms, BULK_SEASON_OPTIONS, pastPeriods, rebasePlan, validatePlan, type BulkSeason } from '@/domain/plan';
 import { customerVat } from '@/domain/tax';
+import { fiscalRoute } from '@/domain/fiscal';
+import { kpdValid } from '@/domain/sales-lines';
+import { plural } from '@/domain/plural';
 
 export { toDevice, toReturnedDevice, toTerms } from './contract-items';
 
@@ -164,7 +167,8 @@ export async function draftInstallment(tx: Tx, actor: Actor, contractId: string,
     taxExemptReason: vat.exemptReason ?? null,
     contractId: c.id,
     period,
-    description: `Najam za ${periodLabel(period)} — ugovor ${c.number}`,
+    // opis rate prema mjesecima koje pokriva (kvartalna: rujan – studeni 2026.)
+    description: `Najam za ${periodSpanLabel(period, Math.max(1, ...lines.map((l) => l.months ?? 1)))} — ugovor ${c.number}`,
     lines,
   });
 }
@@ -337,6 +341,8 @@ export async function updateContractTerms(tx: Tx, actor: Actor, id: string, inpu
   const number = await manualNumber(tx, actor.companyId, input.number, id);
   const data = { ...termsData(input), ...(number && number !== c.number ? { number } : {}) };
   const changes = diff(c as unknown as Record<string, unknown>, data as unknown as Record<string, unknown>);
+  // raniji kraj ugovora: fakturirane rate koje pokrivaju mjesece nakon kraja → odobrenje za višak (prije izmjene planova)
+  const credit = input.endDate && (!c.endDate || input.endDate < toISO(c.endDate)) ? await overbilled(tx, c, input.endDate) : null;
   await tx.contract.update({ where: { id }, data });
   // nova naplata ne otvara fakturirana ni prošla razdoblja: uređaji zadržavaju stare uvjete do prve neizdane rate
   const next = await tx.contract.findUniqueOrThrow({ where: { id } });
@@ -364,11 +370,30 @@ export async function updateContractTerms(tx: Tx, actor: Actor, id: string, inpu
   if (Object.keys(changes).length) {
     await audit(tx, actor, {
       entity: 'contract', entityId: id, action: 'update',
-      summary: `Uvjeti ugovora ${c.number} izmijenjeni (${Object.keys(changes).map((k) => TERM_LABEL[k] ?? k).join(', ')})${what.length ? ` — ${what[0]}, ranija razdoblja po starim uvjetima (${res.filter((r) => r.cut).length} uređaja)` : ''}`,
+      summary: `Uvjeti ugovora ${c.number} izmijenjeni (${Object.keys(changes).map((k) => TERM_LABEL[k] ?? k).join(', ')})${what.length ? ` — ${what[0]}, ranija razdoblja po starim uvjetima (${res.filter((r) => r.cut).length} ${plural(res.filter((r) => r.cut).length, 'uređaj', 'uređaja', 'uređaja')})` : ''}`,
       diff: changes as unknown as Prisma.InputJsonValue,
     });
   }
-  return { from: res.map((r) => r.cut).filter((x): x is string => !!x).sort()[0] ?? null };
+  return { from: res.map((r) => r.cut).filter((x): x is string => !!x).sort()[0] ?? null, credit };
+}
+
+/** Višak fakturiranja nakon `end` (vidi `overbilledAfter`) za sve uređaje ugovora, i skinute; null = nema. */
+async function overbilled(tx: Tx, c: Contract, end: string) {
+  const [items, returned, covered] = await Promise.all([
+    tx.contractItem.findMany({ where: { contractId: c.id } }),
+    tx.returnedContractItem.findMany({ where: { contractId: c.id, endDate: { gt: fromISO(end) } } }),
+    coveredPeriods(tx, [c.id]).then((m) => m.get(c.id) ?? new Set<string>()),
+  ]);
+  if (!covered.size) return null;
+  const r = overbilledAfter(toTerms(c), [...items.map(toDevice), ...returned.map(toReturnedDevice)], covered, end);
+  return r.amount > 0 ? r : null;
+}
+
+/** Napomena uz raniji kraj ugovora: koliko je fakturirano unaprijed nakon kraja (odobrenje). */
+export function creditNote(credit: { months: number; amount: number } | null | undefined) {
+  if (!credit) return '';
+  const amount = credit.amount.toFixed(2).replace('.', ',');
+  return ` Već fakturirane rate pokrivaju i razdoblje nakon kraja ugovora (${credit.months} ${plural(credit.months, 'mjesec', 'mjeseca', 'mjeseci')} uređaja, ${amount} € neto) — za višak klijentu izdajte odobrenje.`;
 }
 
 const TERM_LABEL: Record<string, string> = {
@@ -449,6 +474,7 @@ export async function terminateContract(tx: Tx, actor: Actor, id: string, opts: 
   assert(editable(c.status), 'Ugovor je već raskinut ili istekao.');
   const t = today();
   const end = c.endDate && toISO(c.endDate) < t ? c.endDate : fromISO(t);
+  const credit = await overbilled(tx, c, toISO(end));
   // neizdane rate do kraja ugovora i dalje se traže (closedAt); stara pauza bez početka — ne
   const legacyPause = c.status === 'PAUSED' && !c.pausedSince;
   await closePauses(tx, c, t);
@@ -467,9 +493,9 @@ export async function terminateContract(tx: Tx, actor: Actor, id: string, opts: 
   }
   await audit(tx, actor, {
     entity: 'contract', entityId: id, action: 'terminate',
-    summary: `Ugovor ${c.number} otkazan ${formatDate(t)}${returned ? ` — ${returned} uređaja najavljeno za povrat` : ''}`,
+    summary: `Ugovor ${c.number} otkazan ${formatDate(t)}${returned ? ` — za povrat najavljeno: ${returned} ${plural(returned, 'uređaj', 'uređaja', 'uređaja')}` : ''}${credit ? ` — fakturirano nakon kraja ${credit.amount.toFixed(2).replace('.', ',')} € (odobrenje)` : ''}`,
   });
-  return { returned };
+  return { returned, credit };
 }
 
 async function ownItems(tx: Tx, contractId: string, ids: string[]) {
@@ -559,15 +585,17 @@ export async function updateContractItems(
     if (patch.season) what.push(`sezona: ${BULK_SEASON_OPTIONS.find((o) => o.value === patch.season)?.label.toLowerCase()}`);
   }
   assert(what.length, 'Nema promjene.');
-  if (bulkPlan || patch.plan !== undefined) {
-    // novi plan tek od prve neizdane rate — prošla, fakturirana i pauzirana razdoblja ostaju (rebasePlan)
+  if (bulkPlan || patch.plan !== undefined || data.monthly !== undefined) {
+    // novi plan (i nova cijena) tek od prve neizdane rate — prošla, fakturirana i pauzirana razdoblja
+    // ostaju po starim uvjetima i staroj cijeni (rebasePlan); cijena se nikad ne mijenja unatrag
     const terms = toTerms(c);
     const base = terms.firstBillingDate || terms.startDate;
+    const nextMonthly = data.monthly as number | undefined;
     const [cur, coveredBy] = await Promise.all([tx.contractItem.findMany({ where: { contractId, id: { in: ids } } }), coveredByItem(tx, contractId)]);
     const res = cur.map((r) => {
       const old = (r.plan as unknown as PlanPeriodInput[]) ?? [];
-      const next = patch.plan ?? applyBulkTerms(old, base, { billing: patch.billing, season: patch.season });
-      return { id: r.id, ...rebasePlan({ terms, device: toDevice(r), next, covered: coveredBy.get(r.itemId) ?? new Set(), now: today() }) };
+      const next = patch.plan ?? (bulkPlan ? applyBulkTerms(old, base, { billing: patch.billing, season: patch.season }) : old);
+      return { id: r.id, ...rebasePlan({ terms, device: toDevice(r), next, nextMonthly, covered: coveredBy.get(r.itemId) ?? new Set(), now: today() }) };
     });
     await writePlans(tx, res);
     whenCut(what, res);
@@ -588,7 +616,7 @@ export async function updateContractItems(
   await itemEvents(tx, actor, rows.map((r) => r.itemId), { type: 'CONTRACT', message: `Ugovor ${c.number}: ${what.join(', ')}`, refType: 'contract', refId: contractId });
   await audit(tx, actor, {
     entity: 'contract', entityId: contractId, action: 'items',
-    summary: `${rows.length} uređaja (${serials(rows)}): ${what.join(', ')}`,
+    summary: `${rows.length} ${plural(rows.length, 'uređaj', 'uređaja', 'uređaja')} (${serials(rows)}): ${what.join(', ')}`,
   });
   return { from };
 }
@@ -606,7 +634,7 @@ export async function removeFromContract(tx: Tx, actor: Actor, contractId: strin
     kind: 'RETURNING',
     event: { type: 'RETURNING', message: `Najavljen povrat — uklonjen s ugovora ${c.number}`, refType: 'contract', refId: contractId },
   });
-  await audit(tx, actor, { entity: 'contract', entityId: contractId, action: 'remove', summary: `Najavljen povrat ${rented.length} uređaja: ${serials(rented)}` });
+  await audit(tx, actor, { entity: 'contract', entityId: contractId, action: 'remove', summary: `Najavljen povrat ${rented.length} ${plural(rented.length, 'uređaj', 'uređaja', 'uređaja')}: ${serials(rented)}` });
   return rented.length;
 }
 
@@ -638,7 +666,7 @@ export async function addDevices(
   await audit(tx, actor, {
     entity: 'contract', entityId: contractId, action: 'add',
     summary:
-      `Dodano ${rows.length} uređaja: ${serials(items.map((i) => ({ item: i })))}` +
+      `Dodano ${rows.length} ${plural(rows.length, 'uređaj', 'uređaja', 'uređaja')}: ${serials(items.map((i) => ({ item: i })))}` +
       (rows.some((r) => r.plan.length) ? ' — s vlastitim planom naplate' : '') +
       (skippedCount ? ` — prošla razdoblja označena kao izdana (${skippedCount})` : ''),
   });
@@ -722,6 +750,8 @@ export async function issuePending(tx: Tx, actor: Actor, rows: Array<{ contractI
   drafts.sort((a, b) => (a.period ?? '').localeCompare(b.period ?? '') || a.createdAt.getTime() - b.createdAt.getTime());
   const numbers: string[] = [];
   const ids: string[] = [];
+  // eRačun (B2B) bez KPD-a na stavkama najma: jasna poruka što postaviti prije izdavanja (inače bi izdavanje palo općenito)
+  for (const d of drafts) await assertRentKpd(tx, actor, d.id);
   for (const d of drafts) {
     // datum izdavanja je danas (i nacrt otvoren ranije) — ne raniji od zadnjeg izdanog računa (redni broj prati datum)
     const date = await notBeforeLastIssued(tx, actor.companyId, opts.date ?? today());
@@ -738,12 +768,40 @@ export async function issuePending(tx: Tx, actor: Actor, rows: Array<{ contractI
   return { numbers, ids };
 }
 
+/**
+ * Rata koja ide kao eRačun (B2B) mora na svakoj stavci imati KPD 2025. Stavka rate
+ * dobiva KPD najma s modela (Šifrarnici → Modeli → „KPD za najam") ili iz postavki
+ * firme (KPD za najam) — bez njih izdavanje se zaustavlja s porukom što postaviti.
+ */
+async function assertRentKpd(tx: Tx, actor: Actor, invoiceId: string) {
+  const inv = await tx.invoice.findFirst({
+    where: { id: invoiceId, companyId: actor.companyId },
+    select: {
+      paymentMethod: true,
+      period: true,
+      contract: { select: { number: true } },
+      company: { select: { fiscalEnabled: true, eInvoiceProvider: true, country: true } },
+      partner: { select: { name: true, oib: true, country: true } },
+      lines: { select: { kpd: true, description: true, model: { select: { brand: true, name: true } } } },
+    },
+  });
+  if (!inv || fiscalRoute({ paymentMethod: inv.paymentMethod, company: inv.company, partner: inv.partner }) !== 'EINVOICE') return;
+  const missing = inv.lines.filter((l) => !kpdValid(l.kpd));
+  if (!missing.length) return;
+  const models = [...new Set(missing.map((l) => (l.model ? [l.model.brand, l.model.name].filter(Boolean).join(' ') : l.description)))];
+  throw new DomainError(
+    `Rata ${inv.contract?.number ?? ''} za ${periodLabel(inv.period ?? '')} (${inv.partner.name}) ide kao eRačun, a ${plural(missing.length, 'stavka nema', 'stavke nemaju', 'stavki nema')} KPD 2025 šifru ` +
+      `(${models.slice(0, 5).join(', ')}${models.length > 5 ? '…' : ''}). Postavite „KPD za najam" na modelu (Postavke → Šifrarnici → Modeli) ` +
+      'ili zadani KPD za najam firme (Postavke → Zadane KPD šifre → Najam), zatim obrišite postojeći nacrt rate ako ga ima i izdajte ponovno.',
+  );
+}
+
 /** „Ne izdaji — već izdano" za uređaje rate, uz zapis u dnevnik. */
 export async function skipPending(tx: Tx, actor: Actor, contractId: string, period: string, itemIds: string[]) {
   const c = await ownContract(tx, actor, contractId);
   await skipInstallment(tx, actor, contractId, period, itemIds);
   await audit(tx, actor, {
     entity: 'contract', entityId: c.id, action: 'skip',
-    summary: `Rata za ${periodLabel(period)} označena kao izdana izvan programa (${itemIds.length} uređaja)`,
+    summary: `Rata za ${periodLabel(period)} označena kao izdana izvan programa (${itemIds.length} ${plural(itemIds.length, 'uređaj', 'uređaja', 'uređaja')})`,
   });
 }

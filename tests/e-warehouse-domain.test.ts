@@ -8,7 +8,9 @@ import {
   availableColumns, deleteBlockedMessage, deleteBlocker, looksLikeSerial, ocrTokens, ocrVariants, visibleColumns, warrantyDaysLeft,
 } from '../src/domain/warehouse-list';
 import { csvSafeText, toCsv } from '../src/lib/csv';
-import { defaultGoodsInvoice, invoiceExpenseMode, matchesGoodsAmount, receiptBooksExpense, vatPctOf } from '../src/domain/purchase-links';
+import {
+  PURCHASE_CATEGORY, allocateGoodsExpense, defaultGoodsInvoice, goodsExpenseTotal, matchesGoodsAmount, receiptBooksExpense, receiptEffect, vatPctOf, type GoodsInvoiceRow,
+} from '../src/domain/purchase-links';
 import { planReceiveRows } from '../src/domain/receive-request';
 import { accountantEInvoiceLabel } from '../src/domain/accountant';
 
@@ -53,25 +55,48 @@ test('OCR: tokeni s naljepnice, prefiks SN, varijante slovo/znamenka', () => {
   assert.ok(!looksLikeSerial('ABCDEFGH'));
 });
 
-test('trošak robe se knjiži jednom', () => {
-  assert.equal(invoiceExpenseMode({ book: true, rejected: false, receiptExpenses: 0, goods: true }), 'own');
-  assert.equal(invoiceExpenseMode({ book: true, rejected: false, receiptExpenses: 2, goods: true }), 'receipt');
-  assert.equal(invoiceExpenseMode({ book: false, rejected: false, receiptExpenses: 0, goods: true }), 'none');
-  assert.equal(invoiceExpenseMode({ book: true, rejected: true, receiptExpenses: 1, goods: true }), 'none');
-  // drugi račun iste narudžbenice (prijevoz) knjiži se zasebno; zaprimljeni eRačun ne knjiži ništa
-  assert.equal(invoiceExpenseMode({ book: true, rejected: false, receiptExpenses: 2, goods: false }), 'own');
-  assert.equal(invoiceExpenseMode({ book: true, rejected: false, pending: true, receiptExpenses: 0, goods: false }), 'none');
+test('trošak robe: max(primke, računi za robu), nikad zbroj', () => {
+  const inv = (id: string, net: number, over: Partial<GoodsInvoiceRow> = {}): GoodsInvoiceRow => ({ id, net, vat: net * 0.25, goods: true, books: true, ...over });
+  // račun za robu u cijelosti pokriven primkom
+  assert.deepEqual(allocateGoodsExpense(200, [inv('a', 200)]), [{ id: 'a', covered: 200, ownNet: 0, ownVat: 0, mode: 'receipt' }]);
+  // bez primke račun knjiži cijelu osnovicu
+  assert.equal(allocateGoodsExpense(0, [inv('a', 200)])[0].mode, 'own');
+  // dva djelomična računa (100 + 100) i primka 200 → 200, ne 400
+  assert.equal(goodsExpenseTotal(200, [inv('a', 100), inv('b', 100)]), 200);
+  // račun viši od primke knjiži samo razliku (PDV razmjerno)
+  assert.deepEqual(allocateGoodsExpense(200, [inv('a', 250)])[0], { id: 'a', covered: 200, ownNet: 50, ownVat: 12.5, mode: 'partial' });
+  assert.equal(goodsExpenseTotal(200, [inv('a', 250)]), 250);
+  // primka viša od računa: trošak = primka
+  assert.equal(goodsExpenseTotal(300, [inv('a', 100)]), 300);
+  // prijevoz (nije roba) uvijek zaseban trošak i ne troši primku
+  const freight = inv('f', 25, { goods: false });
+  const al = allocateGoodsExpense(200, [freight, inv('a', 200)]);
+  assert.deepEqual(al.map((x) => [x.mode, x.ownNet]), [['own', 25], ['receipt', 0]]);
+  // neknjiženi / zaprimljeni / odbijeni račun ne knjiži i ne troši primku
+  assert.deepEqual(allocateGoodsExpense(100, [inv('x', 100, { books: false }), inv('a', 150)]).map((x) => x.ownNet), [0, 50]);
+  // odobrenje (negativna osnovica) ne troši primku
+  assert.equal(allocateGoodsExpense(100, [inv('c', -50)])[0].ownNet, -50);
+  // dijalog zaprimanja: primka 200 uz račun za robu 200 bez primke → račun se umanjuje za 200, ukupno ne raste
+  assert.deepEqual(receiptEffect(0, [inv('a', 200)], 200), { invoiceReduced: 200, totalIncrease: 0 });
+  assert.deepEqual(receiptEffect(0, [inv('a', 100)], 200), { invoiceReduced: 100, totalIncrease: 100 });
+  assert.deepEqual(receiptEffect(0, [], 200), { invoiceReduced: 0, totalIncrease: 200 });
+
   assert.equal(matchesGoodsAmount(1000, [1009, 0]), true);
   assert.equal(matchesGoodsAmount(1000, [1011]), false);
   assert.equal(matchesGoodsAmount(50, [50.9]), true, 'do 1 € razlike kod malih iznosa');
   assert.equal(matchesGoodsAmount(60, [0, 0]), false);
   assert.equal(defaultGoodsInvoice({ net: 200, refs: [200, 500], otherGoodsInvoices: 0 }), true);
-  assert.equal(defaultGoodsInvoice({ net: 200, refs: [200], otherGoodsInvoices: 1 }), false, 'drugi račun nije zadano račun za robu');
-  assert.equal(defaultGoodsInvoice({ net: 30, refs: [200, 500], otherGoodsInvoices: 0 }), false, 'prijevoz');
-  assert.equal(receiptBooksExpense({ bookExpense: true, total: 100, invoiceOwnExpenses: 0 }), true);
-  assert.equal(receiptBooksExpense({ bookExpense: true, total: 100, invoiceOwnExpenses: 1 }), false);
-  assert.equal(receiptBooksExpense({ bookExpense: false, total: 100, invoiceOwnExpenses: 0 }), false);
-  assert.equal(receiptBooksExpense({ bookExpense: true, total: 0, invoiceOwnExpenses: 0 }), false);
+  assert.equal(defaultGoodsInvoice({ net: 200, refs: [200], otherGoodsInvoices: 1 }), false, 'drugi račun bez kategorije nije zadano račun za robu');
+  assert.equal(defaultGoodsInvoice({ net: 30, refs: [200, 500], otherGoodsInvoices: 0 }), false, 'prijevoz bez kategorije');
+  // djelomični računi kategorije „Nabava robe" do nefakturirane vrijednosti
+  assert.equal(defaultGoodsInvoice({ net: 100, category: PURCHASE_CATEGORY, refs: [0, 200], otherGoodsInvoices: 0 }), true);
+  assert.equal(defaultGoodsInvoice({ net: 100, category: PURCHASE_CATEGORY, refs: [0, 200], otherGoodsNet: 100, otherGoodsInvoices: 1 }), true);
+  assert.equal(defaultGoodsInvoice({ net: 100, category: PURCHASE_CATEGORY, refs: [200, 200], otherGoodsNet: 200, otherGoodsInvoices: 1 }), false, 'roba je već fakturirana');
+  assert.equal(defaultGoodsInvoice({ net: 200, category: 'Prijevoz', refs: [200, 200], otherGoodsInvoices: 0 }), false, 'druga kategorija nije roba');
+  assert.equal(defaultGoodsInvoice({ net: 0, category: PURCHASE_CATEGORY, refs: [200], otherGoodsInvoices: 0 }), false);
+  assert.equal(receiptBooksExpense({ bookExpense: true, total: 100 }), true);
+  assert.equal(receiptBooksExpense({ bookExpense: false, total: 100 }), false);
+  assert.equal(receiptBooksExpense({ bookExpense: true, total: 0 }), false);
   assert.equal(vatPctOf(200, 50), 25);
   assert.equal(vatPctOf(0, 0), null);
 });

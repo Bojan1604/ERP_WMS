@@ -8,11 +8,12 @@ import { cancelReceipt } from '@/server/services/purchasing';
 import { bookReceiptExpense } from '@/server/services/supplier-invoices';
 import { canSeeCost } from '@/domain/permissions';
 import { DomainError } from '@/server/errors';
+import { countLabel, plural } from '@/domain/plural';
 
 export const cancelReceiptAction = action({ module: 'purchasing', level: 'edit' }, z.object({ id: zId, reason: zOptText }), async ({ id, reason }, user) =>
   transaction(async (tx) => {
     const r = await cancelReceipt(tx, user, id, reason);
-    return { message: `Primka je stornirana — obrisano ${r.count} uređaja i knjiženi trošak.` };
+    return { message: `Primka je stornirana — ${plural(r.count, 'obrisan', 'obrisana', 'obrisano')} ${countLabel(r.count, 'uređaj', 'uređaja', 'uređaja')} i knjiženi trošak.` };
   }),
 );
 

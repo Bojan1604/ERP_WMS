@@ -122,15 +122,16 @@ test('#2 eRačun: „račun za robu" se pamti i poštuje pri prihvaćanju i „K
   );
   assert.equal(saved.mode, 'none', 'zaprimljeni eRačun ne knjiži ništa');
   assert.equal((await db.supplierInvoice.findUniqueOrThrow({ where: { id: si.id } })).goodsInvoice, true, 'odluka je spremljena');
-  await acceptSupplierInvoice(s.actor, si.id);
+  const acc = await acceptSupplierInvoice(s.actor, si.id);
+  assert.equal(acc.mode, 'partial', 'račun za robu (740) uz primku (720) knjiži samo razliku');
   const after1 = await db.supplierInvoice.findUniqueOrThrow({ where: { id: si.id }, include: { expense: true } });
   assert.equal(after1.status, 'ACCEPTED');
-  assert.equal(after1.expense, null, 'roba je knjižena primkom (720), račun ne knjiži 740');
-  const exp = await db.expense.findMany({ where: { companyId: s.companyId } });
-  assert.deepEqual(exp.map((e) => Number(e.netAmount)), [720]);
-  // „Knjiži ponovno" poštuje odluku
-  assert.equal(await transaction((tx) => rebookSupplierInvoice(tx, s.actor, si.id)), 'receipt');
-  assert.equal(await db.expense.count({ where: { companyId: s.companyId } }), 1);
+  assert.equal(Number(after1.expense?.netAmount), 20, 'roba je knjižena primkom (720), račun knjiži samo 20 iznad nje');
+  const exp = await db.expense.findMany({ where: { companyId: s.companyId }, orderBy: { netAmount: 'desc' } });
+  assert.deepEqual(exp.map((e) => Number(e.netAmount)), [720, 20], 'ukupno max(720, 740) = 740');
+  // „Knjiži ponovno" ne knjiži dvaput
+  await assert.rejects(transaction((tx) => rebookSupplierInvoice(tx, s.actor, si.id)), /već knjižen/);
+  assert.equal(await db.expense.count({ where: { companyId: s.companyId } }), 2);
   // #10 plaćenost: trošak primke se ne plaća ručno — prelazi s računa
   const re = await db.expense.findFirstOrThrow({ where: { receiptId: r.id } });
   await assert.rejects(transaction((tx) => setExpensesPaid(tx, s.actor, [re.id], true)), /preko ulaznog računa/);

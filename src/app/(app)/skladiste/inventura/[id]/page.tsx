@@ -19,6 +19,7 @@ import { CloseStocktakeButton } from '@/components/warehouse/stocktake-dialogs';
 import { deleteStocktakeAction } from '../actions';
 import { dateTime, integer } from '@/lib/format';
 import { ExportButtons } from '@/components/ui/export-buttons';
+import { countLabel, plural } from '@/domain/plural';
 
 type Params = Record<string, string | string[] | undefined>;
 
@@ -126,7 +127,7 @@ export default async function StocktakePage({ params, searchParams }: { params: 
         <Notice tone="info">
           Pri zatvaranju:{' '}
           {[
-            summary.actions.moved > 0 && `premješteno ${integer(summary.actions.moved)} uređaja (${summary.actions.transfers.join(', ')})`,
+            summary.actions.moved > 0 && `${plural(summary.actions.moved, 'premješten', 'premještena', 'premješteno')} ${countLabel(summary.actions.moved, 'uređaj', 'uređaja', 'uređaja', integer)} (${summary.actions.transfers.join(', ')})`,
             summary.actions.missingChanged > 0 && `${integer(summary.actions.missingChanged)} nedostajućih → ${summary.actions.missingAction}`,
           ]
             .filter(Boolean)

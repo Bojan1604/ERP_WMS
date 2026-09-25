@@ -32,6 +32,8 @@ export default async function FiscalSettingsPage({ searchParams }: { searchParam
         fiscalCertInfo: true,
         eInvoiceApiKey: true,
         fiscalCertPassword: true,
+        operatorOib: true,
+        operatorName: true,
       },
     }),
     db.user.findMany({ where: { companyId: user.companyId, active: true }, select: { name: true, oib: true, role: true, permissions: true }, orderBy: { name: 'asc' } }),
@@ -60,6 +62,8 @@ export default async function FiscalSettingsPage({ searchParams }: { searchParam
       eInvoiceProvider: c.eInvoiceProvider,
       hasApiKey: !!c.eInvoiceApiKey,
       cert,
+      operatorOib: c.operatorOib,
+      operatorName: c.operatorName,
     },
     operators,
   });

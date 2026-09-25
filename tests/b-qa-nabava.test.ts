@@ -14,6 +14,10 @@ test('#6 parseAmount: hrvatski i engleski zapis, neispravno = NaN (ne 0)', () =>
   assert.equal(parseAmount('12,5'), 12.5);
   assert.equal(parseAmount(' 1 500 € '), 1500);
   assert.equal(parseAmount('-5'), -5);
+  assert.equal(parseAmount('1.500'), 1500, 'hr: tisućice');
+  assert.equal(parseAmount('1.5'), 1.5);
+  assert.equal(parseAmount('1.500,5'), 1500.5);
+  assert.equal(parseAmount('220.85'), 220.85);
   assert.equal(parseAmount('0'), 0);
   assert.equal(parseAmount('25 %'), 25);
   for (const bad of ['abc', '12x', '1,2,3x', '€', '--1', '']) assert.ok(Number.isNaN(parseAmount(bad)), bad);

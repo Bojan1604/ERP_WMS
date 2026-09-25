@@ -5,7 +5,7 @@ import { can, canSeeCost, type PermissionMap } from '@/domain/permissions';
 import { addDays, daysBetween, fromISO, today, toISO } from '@/domain/dates';
 import { num } from '@/domain/money';
 import { pendingRentSummary } from './pending-rent';
-import { returnCandidates } from './warehouse';
+import { returnSummary } from './warehouse';
 import { expensesByMonth } from './reports/costs';
 import { readReceivePayload } from '@/domain/receive-request';
 import { portalNewCount } from '../portal/count';
@@ -139,7 +139,7 @@ export async function dashboardData(companyId: string, perms: PermissionMap) {
         ORDER BY since, i.serial LIMIT 6`,
     ),
     skip(service, () => db.serviceOrder.count({ where: { companyId, status: { in: [...OPEN_SERVICE] } } })),
-    skip(wh || rentals, () => returnCandidates(companyId)),
+    skip(wh || rentals, () => returnSummary(companyId)),
     skip(whEdit, () => db.approvalRequest.findMany({ where: { companyId, status: 'PENDING', kind: 'RECEIVE' }, orderBy: { createdAt: 'asc' }, take: 20, select: { id: true, requestedBy: true, payload: true } })),
     // troškovi uključuju nabavu robe (nabavne cijene) — samo uz pravo na troškove I na nabavne cijene
     skip(expensesOn && costs, () => expensesByMonth(companyId, year).then((e) => e.total.reduce((a, b) => a + b, 0))),
@@ -163,9 +163,6 @@ export async function dashboardData(companyId: string, perms: PermissionMap) {
     months[r.m - 1][r.type as 'SALE' | 'RENT' | 'SERVICE'] += num(r.net);
     months[r.m - 1].cost += num(r.cost);
   }
-  // povrat s terena: razlozi i ugovori
-  const reasons = new Map<string, number>();
-  for (const r of returns ?? []) reasons.set(r.reason, (reasons.get(r.reason) ?? 0) + 1);
   const receiveCodes = (receive ?? []).reduce((a, r) => a + readReceivePayload(r.payload).serials.length, 0);
   const backupDue =
     backup && backup.backupReminderDays > 0 && (!backup.lastBackupAt || daysBetween(toISO(backup.lastBackupAt), now) >= backup.backupReminderDays)
@@ -192,9 +189,8 @@ export async function dashboardData(companyId: string, perms: PermissionMap) {
     months: money ? months.map((m) => ({ ...m, profit: costs ? m.SALE + m.RENT + m.SERVICE - m.cost : null })) : null,
     byStatus,
     stale: stale ? { count: stale[0]?.total ?? 0, value: costs ? num(stale[0]?.value) : null, rows: stale.map((r) => ({ id: r.id, serial: r.serial, model: r.model, since: toISO(r.since), cost: costs ? num(r.cost) : null })) } : null,
-    returns: returns
-      ? { count: returns.length, reasons: [...reasons.entries()].map(([r, c]) => `${c}× ${r}`).join(' · '), contracts: [...new Set(returns.map((r) => r.contractNumber))] }
-      : null,
+    // povrat s terena: broj, razlozi i ugovori
+    returns,
     receive: receive ? { count: receive.length, codes: receiveCodes, by: [...new Set(receive.map((r) => r.requestedBy))] } : null,
     backupDue,
     portal: portal ? { count: portal[0], rows: portal[1].map((r) => ({ id: r.id, serial: r.serial, partner: r.partner?.name ?? null })) } : null,

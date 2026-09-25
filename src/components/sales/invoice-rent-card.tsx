@@ -9,6 +9,7 @@ import { BILLING_LABEL, type BillingCode } from '@/domain/billing';
 import { formatDate, periodLabel } from '@/domain/dates';
 import { partnerContracts } from '@/app/(app)/prodaja/racuni/actions';
 import { monthsOfBilling } from '@/domain/sales-lines';
+import { plural } from '@/domain/plural';
 
 export interface RentTermsValue {
   startDate: string;
@@ -136,7 +137,7 @@ export function RentCard({
             }}
             options={[
               { value: '', label: partnerId ? '— odaberite ugovor —' : 'Prvo odaberite kupca' },
-              ...list.map((c) => ({ value: c.id, label: `${c.number} · ${BILLING_LABEL[c.billing]} · ${c.devices} uređaja${c.status === 'PAUSED' ? ' · pauziran' : ''}` })),
+              ...list.map((c) => ({ value: c.id, label: `${c.number} · ${BILLING_LABEL[c.billing]} · ${c.devices} ${plural(c.devices, 'uređaj', 'uređaja', 'uređaja')}${c.status === 'PAUSED' ? ' · pauziran' : ''}` })),
               { value: 'new', label: '+ Novi ugovor za ovog kupca' },
             ]}
           />

@@ -6,7 +6,7 @@ import { transaction } from '@/server/db';
 import { assert } from '@/server/errors';
 import { zId, zOptId } from '@/server/zod';
 import {
-  addDevices, createContract, removeFromContract, setContractStatus, setPausedPeriod, terminateContract, updateContractItems, updateContractTerms,
+  addDevices, createContract, creditNote, removeFromContract, setContractStatus, setPausedPeriod, terminateContract, updateContractItems, updateContractTerms,
 } from '@/server/services/rentals';
 import { deleteContract, unskipInstallment } from '@/server/services/contract-admin';
 import { deviceCandidates, hideCostSource, type Candidate } from '@/server/queries/rentals';
@@ -15,6 +15,7 @@ import { validatePlan } from '@/domain/plan';
 import { formatDate } from '@/domain/dates';
 import type { PlanPeriodInput } from '@/domain/billing';
 import { addSchema, createSchema, itemsPatchSchema, termsSchema } from '../schemas';
+import { plural } from '@/domain/plural';
 
 const cleanPlan = (plan: z.infer<typeof addSchema>['plan']): PlanPeriodInput[] => {
   const out = plan.map((p) => {
@@ -43,7 +44,7 @@ export const createContractAction = action({ module: 'rentals', level: 'edit' },
 
 export const updateTermsAction = action({ module: 'rentals', level: 'edit' }, termsSchema.extend({ id: zId }), async ({ id, ...terms }, user) => {
   const r = await transaction((tx) => updateContractTerms(tx, user, id, terms));
-  return { message: `Uvjeti ugovora spremljeni.${r.from ? ` Nova naplata vrijedi od ${formatDate(r.from)} — izdana i prošla razdoblja ostaju po starim uvjetima.` : ''}` };
+  return { message: `Uvjeti ugovora spremljeni.${r.from ? ` Nova naplata vrijedi od ${formatDate(r.from)} — izdana i prošla razdoblja ostaju po starim uvjetima.` : ''}${creditNote(r.credit)}` };
 });
 
 export const contractStatusAction = action(
@@ -60,7 +61,7 @@ export const terminateAction = action(
   z.object({ id: zId, returnNow: z.boolean() }),
   async ({ id, returnNow }, user) => {
     const r = await transaction((tx) => terminateContract(tx, user, id, { returnNow }));
-    return { message: r.returned ? `Ugovor otkazan, ${r.returned} uređaja najavljeno za povrat.` : 'Ugovor otkazan.' };
+    return { message: (r.returned ? `Ugovor otkazan, za povrat najavljeno: ${r.returned} ${plural(r.returned, 'uređaj', 'uređaja', 'uređaja')}.` : 'Ugovor otkazan.') + creditNote(r.credit) };
   },
 );
 
@@ -90,7 +91,7 @@ export const removeItemsAction = action(
   z.object({ contractId: zId, ids: z.array(zId).min(1) }),
   async ({ contractId, ids }, user) => {
     const n = await transaction((tx) => removeFromContract(tx, user, contractId, ids));
-    return { message: `Najavljen povrat ${n} uređaja — ostaju na ugovoru do zaprimanja u skladištu.` };
+    return { message: `Najavljen povrat: ${n} ${plural(n, 'uređaj', 'uređaja', 'uređaja')} — ostaju na ugovoru do zaprimanja u skladištu.` };
   },
 );
 
@@ -127,6 +128,6 @@ export const unskipAction = action(
   z.object({ contractId: zId, period: z.string().regex(/^\d{4}-\d{2}$/, 'Neispravno razdoblje') }),
   async ({ contractId, period }, user) => {
     const n = await transaction((tx) => unskipInstallment(tx, user, contractId, period));
-    return { message: `Rata vraćena u izdavanje (${n} uređaja).` };
+    return { message: `Rata vraćena u izdavanje (${n} ${plural(n, 'uređaj', 'uređaja', 'uređaja')}).` };
   },
 );

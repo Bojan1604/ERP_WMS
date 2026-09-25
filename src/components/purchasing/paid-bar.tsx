@@ -7,6 +7,7 @@ import { Field, Input } from '@/components/ui/field';
 import { SelectionBar } from '@/components/ui/selection';
 import { ActionButton, useAction, type ServerAction } from '@/components/ui/action';
 import { useToast } from '@/components/ui/toast';
+import { countLabel } from '@/domain/plural';
 
 /** Skupno označavanje plaćenosti označenih redaka (ulazni računi). */
 export function PaidBar({
@@ -55,7 +56,7 @@ export function PaidBar({
                   variant="danger"
                   action={remove}
                   input={{ ids }}
-                  confirm={`Obrisati ${ids.length} ulaznih računa i njihove knjižene troškove? Prihvaćeni i odbijeni eRačuni se ne brišu (javljeni su posredniku) — tada se ne briše ništa.`}
+                  confirm={`Obrisati ${countLabel(ids.length, 'ulazni račun', 'ulazna računa', 'ulaznih računa')} i njihove knjižene troškove? Prihvaćeni i odbijeni eRačuni se ne brišu (javljeni su posredniku) — tada se ne briše ništa.`}
                   confirmLabel="Obriši"
                   onSuccess={clear}
                 >
@@ -69,7 +70,7 @@ export function PaidBar({
       <Dialog
         open={!!ask}
         onClose={() => setAsk(null)}
-        title={`Plaćeno — ${ask?.ids.length ?? 0} računa`}
+        title={`Plaćeno — ${countLabel(ask?.ids.length ?? 0, 'račun', 'računa', 'računa')}`}
         size="sm"
         footer={
           <>

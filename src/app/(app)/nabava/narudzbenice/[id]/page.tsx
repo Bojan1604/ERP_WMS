@@ -9,6 +9,7 @@ import { num, r2 } from '@/domain/money';
 import { toISO, today } from '@/domain/dates';
 import { db } from '@/server/db';
 import { listAttachments } from '@/server/services/attachments';
+import { goodsExpensePlan } from '@/server/services/goods-expense';
 import { Attachments } from '@/components/ui/attachments';
 import { OrderInvoiceForm } from '@/components/purchasing/order-invoice-form';
 import { SupplierInvoiceStatusBadge } from '@/components/purchasing/supplier-invoice-badges';
@@ -28,8 +29,9 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
   if (!order) notFound();
   const canEdit = can(user.perms, 'purchasing', 'edit');
   const costs = canSeeCost(user.perms);
-  // ulazni račun narudžbenice s vlastitim troškom — primka tada ne knjiži trošak ponovno
-  const invoiceBooked = order.supplierInvoices.some((s) => s.expense);
+  // stanje troška robe (pravilo max(primke, računi za robu)) za dijalog zaprimanja — samo uz pravo `costs`
+  const plan = costs ? await goodsExpensePlan(db, user.companyId, { orderId: id }) : null;
+  const goodsPlan = plan ? { receiptsBooked: plan.receiptsBooked, invoices: plan.rows } : null;
   const st = ORDER_STATUS[order.status];
   const receivable = order.status === 'ORDERED' || order.status === 'PARTIAL';
   const editable = order.status !== 'RECEIVED' && order.status !== 'CANCELLED';
@@ -140,7 +142,7 @@ export default async function OrderPage({ params }: { params: Promise<{ id: stri
                             warehouses={warehouses}
                             today={today()}
                             action={receiveLineAction}
-                            invoiceBooked={invoiceBooked}
+                            goodsPlan={goodsPlan}
                             canSeeCost={costs}
                           />
                         )}
